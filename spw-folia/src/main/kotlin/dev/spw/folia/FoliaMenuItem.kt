@@ -92,8 +92,11 @@ private val hostPaletteColorMethod: Method? by lazy {
 private fun hostFlyoutContentColor(): Color? {
     val readPalette = hostThemePaletteMethod ?: return null
     val readColor = hostPaletteColorMethod ?: return null
+    // `currentComposer` is a @Composable read, so it must happen outside runCatching
+    // (the Compose compiler rejects composable calls inside it).
+    val composer = currentComposer
     return runCatching {
-        val palette = readPalette.invoke(null, currentComposer) ?: return null
+        val palette = readPalette.invoke(null, composer) ?: return null
         Color((readColor.invoke(palette) as Long).toULong())
     }.getOrNull()
 }
