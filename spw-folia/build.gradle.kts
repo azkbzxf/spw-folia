@@ -71,7 +71,9 @@ spmod {
     PluginDescription = "Folia fullscreen lyric mode for Salt Player for Windows"
     PluginVersion = "0.4.0"
     PluginProvider = "azkbzxf"
-    PluginHasConfig = false
+    // v0.4.0: preference_config.json declares the plugin's 配置 page (SPW 模组管理 → 配置),
+    // which carries the 打开过渡动画 switch read by FoliaPlugin via ConfigManager.
+    PluginHasConfig = true
     PluginOpenSourceUrl = "https://github.com/azkbzxf/spw-folia"
     // v0.3.2: KEY_BINDINGS backs the user-configurable open/close shortcut (SPW 快捷键管理).
     PluginPermissions = listOf(
@@ -101,9 +103,38 @@ val devWebDir = File(repoRoot, "poc/webview/dist/dist")
 val devSettingsDir = File(repoRoot, "poc/settings-ui/dist")
 val devDefaultSettings = File(repoRoot, "packaging/testdata/default-settings.json")
 
+// Local installs must ship the same web layout as the release package. A raw copy of
+// poc/webview/dist/dist keeps the PWA service worker (its NavigationRoute answers any navigation,
+// including /preview.html, with index.html) and has no generated preview.html / _host/preview-shim.js,
+// so the settings-UI live preview iframe landed on the OBS page and stayed at 正在连接 Folia.
+// Reuse the production stager instead of duplicating its index.html patching and preview generation.
+val stageDevWeb by tasks.registering(Exec::class) {
+    description = "Stages the Folia web bundle for local plugin installs (same layout as packaging/web)."
+    group = "spw-folia"
+    val stageRoot = layout.buildDirectory.dir("web-stage").get().asFile
+    val stageWeb = stageRoot.resolve("web")
+    val stageReport = stageRoot.resolve("report.json")
+    workingDir = repoRoot
+    inputs.dir(devWebDir)
+    inputs.dir(devSettingsDir)
+    inputs.file(File(repoRoot, "poc/webview/host/PreviewShim.js"))
+    inputs.file(File(repoRoot, "poc/webview/host/Shim.js"))
+    inputs.file(File(repoRoot, "poc/webview/host/Overlay.js"))
+    outputs.dir(stageWeb)
+    outputs.file(stageReport)
+    commandLine(
+        "node",
+        File(repoRoot, "packaging/tools/stage-web.mjs").absolutePath,
+        "--dist", devWebDir.absolutePath,
+        "--out", stageWeb.absolutePath,
+        "--report", stageReport.absolutePath
+    )
+}
+
 val syncDevAssets by tasks.registering(Sync::class) {
     description = "Stages the native helper + Folia web bundle for local plugin installs."
     group = "spw-folia"
+    dependsOn(stageDevWeb)
     into(layout.buildDirectory.dir("plugin-root"))
     from(hostSrcDir) {
         include(
@@ -115,11 +146,7 @@ val syncDevAssets by tasks.registering(Sync::class) {
         )
         into("host")
     }
-    from(devWebDir) { into("web") }
-    from(devSettingsDir) {
-        include("settings-ui.js", "assets/**", "thumbs/**")
-        into("web/settings")
-    }
+    from(layout.buildDirectory.dir("web-stage/web").get().asFile) { into("web") }
     from(devDefaultSettings) { into("web") }
     onlyIf { hostSrcDir.isDirectory && devWebDir.isDirectory }
 }

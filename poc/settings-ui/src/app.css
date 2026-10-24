@@ -119,6 +119,12 @@ body.spw-injected {
     outline-offset: 2px;
 }
 
+/* v0.4.0: close button on the opaque player page — the exact mirror of the settings gear. */
+.spw-chrome-btn--exit {
+    left: 24px;
+    right: auto;
+}
+
 /* Big style preview: incoming frame fades in over the outgoing one (m03519). */
 @keyframes spw-preview-in {
     from {

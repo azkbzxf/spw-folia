@@ -9,6 +9,7 @@ import com.xuncorp.spw.workshop.api.hook.MethodHook
 import com.xuncorp.spw.workshop.api.hook.MethodHookParam
 import java.lang.reflect.Constructor
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * "Folia" entry in SPW's tray (minimised-icon) right-click menu, in the same section as 桌面歌词.
@@ -57,13 +58,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - there is **no static mutable state**: the only write-once state is the per-instance
  *   `@Volatile plainItemCtor` plus two `AtomicBoolean`s, and none of them retains an op;
  * - the injected `Function0` is created fresh per call ([foliaClickAction]); it captures this
- *   manager and the `openFolia` lambda, both long-lived and stateless, so sharing it is safe;
+ *   manager and the `toggleFolia` lambda, both long-lived and stateless, so sharing it is safe;
  * - the hook body is a single `try/catch (Throwable)` (see `install`), so a failure inside
  *   [inject] can never propagate into the host's tray composition.
  */
 internal class FoliaTrayMenu(
     private val log: (String) -> Unit,
-    private val openFolia: () -> Unit,
+    private val toggleFolia: () -> Unit,
 ) {
 
     private var handle: HookHandle? = null
@@ -77,6 +78,17 @@ internal class FoliaTrayMenu(
 
     /** One-shot latch: the success line is written once per process, not once per tray-menu open. */
     private val loggedInjection = AtomicBoolean(false)
+
+    /**
+     * Compose-level injection is not always enough: SPW's `AppTray` hands a *remembered* lambda to
+     * `Tray(...)`, so after a skipped recomposition the rewritten op list never becomes new native
+     * items. [FoliaTrayNative] patches the native side deterministically (builder hook + forced
+     * `WindowsTrayManager.update`). Created lazily so a broken host build cannot fail plugin start.
+     */
+    private val nativePatch by lazy { FoliaTrayNative(log, foliaClickAction()) }
+
+    /** Diagnostic budget for the recorded-scope dump (the log is a file; keep it bounded). */
+    private val injectLogLines = AtomicInteger(0)
 
     /**
      * Installs the tray hook. Returns true when the hook is live.
@@ -118,6 +130,13 @@ internal class FoliaTrayMenu(
                     "tray hook installed: $SCOPE_CLASS.$SNAPSHOT_METHOD() -> " +
                         "MenuOp\$PlainItem(\"Folia\") after the 桌面歌词 checkable ($it)"
                 )
+                val nativeInstalled = runCatching { nativePatch.install() }
+                    .onFailure { error -> log("tray native: install failed: ${error::class.java.name}: ${error.message}") }
+                    .getOrDefault(false)
+                log(
+                    "tray patch ready: compose=on " +
+                        "native=${if (nativeInstalled) "on" else "off"}"
+                )
                 true
             },
             onFailure = {
@@ -129,6 +148,7 @@ internal class FoliaTrayMenu(
 
     fun uninstall() {
         runCatching { handle?.unhook() }.onFailure { log("tray unhook failed: $it") }
+        runCatching { nativePatch.uninstall() }.onFailure { log("tray native unhook failed: $it") }
         handle = null
         installed.set(false)
         loggedInjection.set(false)
@@ -187,6 +207,12 @@ internal class FoliaTrayMenu(
         val ctor = plainItemCtor ?: return
         val ops = call.result as? List<*> ?: return
         if (ops.isEmpty()) return
+        if (injectLogLines.getAndIncrement() < 5) {
+            log(
+                "tray: recorded scope ops=${ops.size} labels=${ops.map { labelOf(it) }} " +
+                    "thread=${Thread.currentThread().name}"
+            )
+        }
 
         // Nested submenu scopes are recorded by the very same class; never touch them.
         if (ops.any { isSubMenu(it) }) return
@@ -218,14 +244,15 @@ internal class FoliaTrayMenu(
     }
 
     /**
-     * The click callback handed to the native menu. The tray menu runs on the Win32 message-loop
-     * thread, and opening Folia spawns the WebView2 helper (blocking), so hop to our own thread.
+     * The click callback handed to the native menu: toggles the Folia window (open when closed,
+     * close the running one), matching the 呼出 / 关闭 shortcut. The tray menu runs on the Win32
+     * message-loop thread and spawning/stopping the WebView2 helper blocks, so hop to our own thread.
      */
     private fun foliaClickAction(): () -> Unit = {
         log("tray: Folia item clicked")
         val worker = Thread({
             try {
-                openFolia()
+                toggleFolia()
             } catch (t: Throwable) {
                 log("tray: Folia click failed: ${t::class.java.name}: ${t.message}")
             }
@@ -235,9 +262,13 @@ internal class FoliaTrayMenu(
     }
 
     private fun isFolia(op: Any?): Boolean =
-        op != null && op.javaClass.name == "$MENU_OP_CLASS\$PlainItem" && runCatching {
-            op.javaClass.getMethod("getLabel").invoke(op) as? String
-        }.getOrNull() == FOLIA_LABEL
+        op != null && op.javaClass.name == "$MENU_OP_CLASS\$PlainItem" && labelOf(op) == FOLIA_LABEL
+
+    /** `MenuOp.PlainItem.label` (used only for diagnostics / duplicate detection). */
+    private fun labelOf(op: Any?): String? {
+        if (op == null) return null
+        return runCatching { op.javaClass.getMethod("getLabel").invoke(op) as? String }.getOrNull()
+    }
 
     private fun isCheckable(op: Any?): Boolean =
         op != null && op.javaClass.name in CHECKABLE_OPS

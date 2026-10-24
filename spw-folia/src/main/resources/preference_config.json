@@ -1,0 +1,17 @@
+{
+  "configs": [
+    {
+      "title": "播放页",
+      "config": "config.json",
+      "preferences": [
+        {
+          "type": "switch",
+          "key": "transitionAnimation",
+          "title": "打开过渡动画",
+          "summary": "打开 Folia 时显示一段封面取色的淡入动画（0.8 秒），遮住加载和透明切换的瞬间，减少闪烁。",
+          "default_value": false
+        }
+      ]
+    }
+  ]
+}

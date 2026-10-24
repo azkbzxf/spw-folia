@@ -102,6 +102,7 @@ const Stage: React.FC<StageProps> = ({ t, visualizerMode, onVisualizerModeChange
                             config={config}
                             loopDuration={placeholder.loopDuration}
                             startOffset={startOffset}
+                            uploadedFonts={settingsState.uploadedFonts}
                             onError={() => setLiveFailed(true)}
                         />
                     )}

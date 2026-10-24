@@ -7,7 +7,10 @@
 // (release-artifact bug found by task-13). We therefore copy every dist file except the
 // service-worker/PWA trio (not shipped) and local backup files.
 //
-// Usage: node packaging/tools/stage-web.mjs [--dist <dir>] [--out <dir>]  (--report is optional/ignored)
+// Usage: node packaging/tools/stage-web.mjs [--dist <dir>] [--out <dir>] [--report <file>]
+//
+// --report defaults to packaging/web-stage-report.json (the release pipeline reads it); local plugin
+// staging passes a build/ path so a dev run cannot overwrite the production staging report.
 import { existsSync, mkdirSync, copyFileSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -164,5 +167,7 @@ const summary = {
   indexHtmlPatched: html !== before,
   files: copiedList,
 };
-writeFileSync(resolve(ROOT, 'packaging/web-stage-report.json'), JSON.stringify(summary, null, 2));
+const reportFile = resolve(ROOT, opt('report', 'packaging/web-stage-report.json'));
+mkdirSync(dirname(reportFile), { recursive: true });
+writeFileSync(reportFile, JSON.stringify(summary, null, 2));
 console.log(JSON.stringify({ webFiles: copied, webBytes: bytes, settingsFiles, settingsBytes, totalBytes: bytes + settingsBytes, missing: missing.length, indexHtmlPatched: summary.indexHtmlPatched, previewShimCopied, previewHtml, previewCovers }, null, 2));

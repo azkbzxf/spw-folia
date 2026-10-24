@@ -2,7 +2,7 @@
  * the POC's configuration store (model/settings.ts) instead of Folia's persisted app store. */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Settings } from 'lucide-react';
+import { Settings, X } from 'lucide-react';
 import StudioWindow from '@/components/shared/StudioWindow';
 import VisPlaygroundSettingsPanel from '@/components/visualizer/window/VisPlaygroundSettingsPanel';
 import type { FontChoice } from '@/components/visualizer/window/FontTiles';
@@ -32,6 +32,7 @@ import {
 } from '~/model/theme';
 import {
     forceEmitSettings,
+    getBridge,
     registerSettingsUiController,
     reportHitRegions,
     setSettingsUiOpenState,
@@ -322,6 +323,24 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 compat={styleCompat}
                 compatNote={compatNote}
             />
+            {/* v0.4.0: with the player page opaque the chrome otherwise offers no way out of the
+             *  fullscreen window (ESC / the host hotkey work, but they are not discoverable), so the
+             *  close button mirrors the gear at the top-left. It is only rendered while the player
+             *  page is NOT transparent: with transparency on the chrome stays pinned for
+             *  click-through pages and the transparent session has its own exit affordances. */}
+            {!state.transparentPlayerBackground && (
+                <button
+                    type="button"
+                    className="spw-chrome-btn spw-chrome-btn--exit"
+                    data-spw-chrome="exit"
+                    data-visible={chromeVisible && !open ? 'true' : 'false'}
+                    aria-label={t('options.closePlayer')}
+                    title={t('options.closePlayer')}
+                    onClick={() => getBridge().requestClose?.()}
+                >
+                    <X size={20} strokeWidth={1.75} />
+                </button>
+            )}
             <button
                 type="button"
                 className="spw-chrome-btn"

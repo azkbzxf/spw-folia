@@ -133,6 +133,47 @@ namespace SpwFolia
         // v0.2.2: while a button is held down inside an interactive rectangle the catcher region is
         // dropped for the whole window so a drag cannot slip out of the page's hands.
         private bool catcherDragActive;
+        // v0.4.0: `TransparencyKey` is a WinForms property, and toggling it calls UpdateStyles(),
+        // which may recreate the window handle. A freshly created handle paints BackColor (the key
+        // magenta) for a frame before the layered colour key is in force — the fullscreen pink-purple
+        // flash users saw when Folia opened straight into transparent + mouse passthrough. The key is
+        // now driven straight through the layered-window API, so nothing is presented un-keyed.
+        private bool transparencyVisualApplied;
+        private bool pendingTransparencyApply;
+        // v0.4.0: elegant intro veil that covers the open transition. It fades in from transparent to
+        // opaque over `curtainFadeInMs` (0.3-2.0 s from the 配置 page) in cover-derived colours, then
+        // reveals once the page has painted, or after a fallback timeout; SPW_FOLIA_CURTAIN=0 disables
+        // it for A/B measurement.
+        private IntroCurtain introCurtain;
+        private bool introCurtainShown;
+        private bool introCurtainRevealed;
+        private long introCurtainShownAt;
+        private long firstPageFrameAt;
+        private int curtainFadeInMs = 800;
+        private const long CurtainFallbackMs = 3400;
+        private const long CurtainFrameGraceMs = 450;
+
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const int LWA_COLORKEY = 0x1;
+        private const int LWA_ALPHA = 0x2;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_FRAMECHANGED = 0x0020;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hWnd, int crKey, byte bAlpha, int dwFlags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -308,34 +349,191 @@ namespace SpwFolia
 
         private void SetTransparency(bool on)
         {
-            if (on == transparencyActive) return;
+            if (on == transparencyActive && transparencyVisualApplied) return;
+            if (!IsHandleCreated)
+            {
+                // Constructor path: the persisted settings ask for transparency before the host window
+                // exists. Remember it and key the window in the same message that creates the handle,
+                // so the very first presented frame is already colour-keyed (no magenta frame).
+                pendingTransparencyApply = true;
+                transparencyTarget = on;
+                return;
+            }
             try
             {
-                if (on)
-                {
-                    TransparencyKey = Color.Empty;
-                    BackColor = TransparencyKeyColor;
-                    TransparencyKey = TransparencyKeyColor;
-                    webView.DefaultBackgroundColor = Color.Transparent;
-                }
-                else
-                {
-                    // Clear the key first, otherwise the window flashes magenta while going opaque.
-                    BackColor = Color.Black;
-                    TransparencyKey = Color.Empty;
-                    webView.DefaultBackgroundColor = Color.Black;
-                }
+                ApplyTransparencyVisual(on);
                 transparencyActive = on;
                 transparencyTarget = on;
                 EnsureTransparencyHotkey();
                 if (on) ShowInputCatcher();
                 else HideInputCatcher();
+                if (on) ShowIntroCurtainIfNeeded();
                 log.Log("info", "transparency mode=" + (on ? "on" : "off"));
             }
             catch (Exception ex) { log.Error("transparency", ex); }
         }
 
+        /// <summary>
+        /// v0.4.0: drives the transparency colour key through the layered-window API instead of
+        /// WinForms' TransparencyKey. The order matters: for ON the key is installed *before* the form
+        /// paints magenta, so no frame can present the key colour as an opaque surface; for OFF the
+        /// background is painted black before the key is lifted.
+        /// </summary>
+        private void ApplyTransparencyVisual(bool on)
+        {
+            IntPtr hwnd = Handle;
+            if (on)
+            {
+                long style = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+                if ((style & WS_EX_LAYERED) == 0)
+                {
+                    SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(style | WS_EX_LAYERED));
+                    SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                }
+                SetLayeredWindowAttributes(hwnd, ColorTranslator.ToWin32(TransparencyKeyColor), 255, LWA_COLORKEY);
+                BackColor = TransparencyKeyColor;
+                webView.DefaultBackgroundColor = Color.Transparent;
+            }
+            else
+            {
+                BackColor = Color.Black;
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                webView.DefaultBackgroundColor = Color.Black;
+            }
+            transparencyVisualApplied = true;
+        }
+
+        // ------------------------------------------------------- v0.4.0: intro curtain
+
+        private bool CurtainEnabled()
+        {
+            if (!args.Curtain) return false;
+            string env = Environment.GetEnvironmentVariable("SPW_FOLIA_CURTAIN");
+            return !(env != null && env.Trim() == "0");
+        }
+
+        /**
+         * v0.4.0: per-monitor scale of the window's monitor. The curtain draws its fixed-size details
+         * (sparks, sweep width, hairline) in physical pixels, so they need this factor to look the
+         * same on a 100 % and a 150 % display; proportional details stay relative to the monitor size.
+         */
+        private float MonitorScale()
+        {
+            try
+            {
+                int dpi = DpiSupport.DpiForWindow(Handle);
+                if (dpi > 0) return dpi / 96f;
+                // Fallback for hosts without GetDpiForWindow: WinForms already tracks the monitor DPI.
+                return DeviceDpi / 96f;
+            }
+            catch (Exception) { }
+            return 1f;
+        }
+
+        private void ShowIntroCurtainIfNeeded()
+        {
+            if (introCurtainShown || !args.Fullscreen || !CurtainEnabled()) return;
+            try
+            {
+                Screen screen = Screen.FromRectangle(Bounds);
+                if (screen == null) return;
+                float scale = MonitorScale();
+                if (scale <= 0f) scale = 1f;
+                curtainFadeInMs = ClampCurtainDurationMs(args.CurtainDurationSec);
+                Color[] palette = ParseCurtainPalette(args.CurtainPalette);
+                introCurtainShown = true;
+                introCurtainShownAt = clock.ElapsedMilliseconds;
+                introCurtain = new IntroCurtain(screen.Bounds, scale, palette, curtainFadeInMs);
+                introCurtain.Finished = delegate
+                {
+                    SafeBeginInvoke(delegate { DisposeIntroCurtain(); });
+                };
+                introCurtain.Show();
+                // The veil must sit above the (topmost) player window for the opaque session too.
+                introCurtain.RaiseAbove();
+                log.Log("info", "intro curtain shown bounds=" + screen.Bounds.X + "," + screen.Bounds.Y
+                    + " " + screen.Bounds.Width + "x" + screen.Bounds.Height
+                    + " scale=" + scale.ToString("0.##", CultureInfo.InvariantCulture)
+                    + " fadeInMs=" + curtainFadeInMs
+                    + " palette=" + (palette.Length > 0 ? palette.Length.ToString(CultureInfo.InvariantCulture) : "0"));
+            }
+            catch (Exception ex) { log.Error("intro-curtain", ex); }
+        }
+
+        /** v0.4.0: config seekbar bounds 0.3-2.0 s; anything else falls back to 0.8 s. */
+        private static int ClampCurtainDurationMs(double seconds)
+        {
+            if (double.IsNaN(seconds) || seconds <= 0) seconds = 0.8;
+            if (seconds < 0.3) seconds = 0.3;
+            if (seconds > 2.0) seconds = 2.0;
+            return (int)Math.Round(seconds * 1000.0);
+        }
+
+        /** v0.4.0: parses the plugin's `#RRGGBB,#RRGGBB,…` cover palette; empty on any problem. */
+        private static Color[] ParseCurtainPalette(string csv)
+        {
+            if (string.IsNullOrEmpty(csv)) return new Color[0];
+            string[] parts = csv.Split(',');
+            List<Color> colors = new List<Color>(parts.Length);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = (parts[i] ?? "").Trim();
+                if (part.Length == 0) continue;
+                if (part[0] != '#') part = "#" + part;
+                try { colors.Add(ColorTranslator.FromHtml(part)); }
+                catch (Exception) { }
+            }
+            return colors.ToArray();
+        }
+
+        private void TickIntroCurtain()
+        {
+            if (!introCurtainShown || introCurtainRevealed || introCurtain == null) return;
+            long now = clock.ElapsedMilliseconds;
+            long shownFor = now - introCurtainShownAt;
+            bool pagePainted = firstPageFrameAt > 0;
+            bool frameGraceElapsed = pagePainted && (now - firstPageFrameAt) >= CurtainFrameGraceMs;
+            // v0.4.0: the fade-in itself must finish before the veil lifts (user-tunable 0.3-2.0 s);
+            // the fallback only fires when the page never reports a frame at all.
+            if ((shownFor >= curtainFadeInMs && frameGraceElapsed) || shownFor >= curtainFadeInMs + CurtainFallbackMs)
+            {
+                introCurtainRevealed = true;
+                log.Log("info", "intro curtain reveal pagePainted=" + (pagePainted ? "yes" : "no")
+                    + " shownForMs=" + shownFor + " fadeInMs=" + curtainFadeInMs);
+                try { introCurtain.BeginReveal(); }
+                catch (Exception ex) { log.Error("intro-curtain", ex); }
+            }
+        }
+
+        /**
+         * v0.4.0: the player window is created with `TopMost = args.TopMost` (true for plugin spawns)
+         * and the veil is topmost as well; the window shown *later* wins the z-order, so in an opaque
+         * session the player used to cover the veil entirely — the animation was only visible when the
+         * player was colour-keyed. Pushing the veil to the top of the topmost band fixes that for all
+         * modes (opaque, transparent and transparent + passthrough).
+         */
+        private void RaiseIntroCurtain()
+        {
+            if (introCurtain == null || introCurtainRevealed) return;
+            try
+            {
+                introCurtain.RaiseAbove();
+            }
+            catch (Exception ex) { log.Error("intro-curtain", ex); }
+        }
+
+        private void DisposeIntroCurtain()
+        {
+            IntroCurtain curtain = introCurtain;
+            introCurtain = null;
+            if (curtain == null) return;
+            try { curtain.Close(); } catch (Exception) { }
+            try { curtain.Dispose(); } catch (Exception) { }
+        }
+
         private void EnsureTransparencyHotkey()
+
         {
             if (!IsHandleCreated) return;
             // v0.1.8: registered for the whole lifetime, and it *toggles* (see WndProc), so the
@@ -626,7 +824,25 @@ namespace SpwFolia
         {
             base.OnHandleCreated(e);
             ApplyWindowGeometry("handle-created");
+            // v0.4.0: when the persisted settings asked for a transparent player page, key the window
+            // in the same message that creates it (see SetTransparency's handle-less path), so the first
+            // presented frame is transparent instead of an opaque magenta surface.
+            if (pendingTransparencyApply)
+            {
+                pendingTransparencyApply = false;
+                try
+                {
+                    ApplyTransparencyVisual(transparencyTarget);
+                    transparencyActive = transparencyTarget;
+                    if (transparencyActive) ShowInputCatcher();
+                }
+                catch (Exception ex) { log.Error("transparency", ex); }
+            }
             EnsureTransparencyHotkey();
+            // v0.4.0: the opening animation is shown for every Folia open (not only transparency
+            // sessions), and as early as the handle exists so the first main-window paint is already
+            // covered — that is what hides the magenta hand-over and the page's black first frame.
+            ShowIntroCurtainIfNeeded();
         }
 
         protected override void OnShown(EventArgs e)
@@ -634,6 +850,17 @@ namespace SpwFolia
             base.OnShown(e);
             if (!geometryApplied) ApplyWindowGeometry("shown");
             SyncWebViewBounds("shown");
+            // v0.4.0: the player is shown after the veil and is topmost too, so re-raise the veil
+            // after this window is on screen (required for the opaque session, harmless otherwise).
+            RaiseIntroCurtain();
+            TickIntroCurtain();
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            // Activation re-orders topmost windows; keep the veil above the player in every mode.
+            RaiseIntroCurtain();
         }
 
         protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -885,6 +1112,7 @@ namespace SpwFolia
                 transparencyHotkeyRegistered = false;
             }
             try { DisposeInputCatcher(); } catch (Exception) { }
+            try { DisposeIntroCurtain(); } catch (Exception) { }
 
             SendClosed();
             log.Log("info", "host-exit code=" + exitCode + " reason=" + closeReason
@@ -1173,6 +1401,13 @@ namespace SpwFolia
             else if (type == "fps")
             {
                 lastFps = JsonUtil.GetDouble(msg, "fps", lastFps);
+                if (firstPageFrameAt == 0)
+                {
+                    // v0.4.0: first frame the page itself reported after painting — the intro curtain
+                    // waits for this before revealing (see TickIntroCurtain).
+                    firstPageFrameAt = clock.ElapsedMilliseconds;
+                    log.Log("info", "page first-frame atMs=" + firstPageFrameAt);
+                }
                 if (!pageViewportLogged)
                 {
                     pageViewportLogged = true;
@@ -1214,6 +1449,7 @@ namespace SpwFolia
         {
             SyncInputCatcherBounds();
             TrackCursor();
+            TickIntroCurtain();
             long now = clock.ElapsedMilliseconds;
             long elapsed = now - lastTick;
             if (lastTick == 0) elapsed = 16;

@@ -63,6 +63,9 @@ namespace SpwFolia
         public bool OpenSettings;   // first run: open the injected settings UI once it is ready
         public double ExitAfterFps; // diagnostic: close when a page fps sample >= this
         public bool NoTransparency; // v0.1.7: force the window opaque (diagnostics/kill switch)
+        public bool Curtain = true; // v0.4.0: intro transition animation (--no-curtain disables it)
+        public double CurtainDurationSec = 0.8; // v0.4.0: fade-in duration, clamped to 0.3-2.0
+        public string CurtainPalette; // v0.4.0: cover-derived "#RRGGBB,#RRGGBB,…" for the curtain
 
         public static CliArgs Parse(string[] argv)
         {
@@ -105,6 +108,9 @@ namespace SpwFolia
                     case "--bundle-version": a.BundleVersion = Next(argv, ref i); break;
                     case "--open-settings": a.OpenSettings = true; break;
                     case "--no-transparency": a.NoTransparency = true; break;
+                    case "--no-curtain": a.Curtain = false; break;
+                    case "--curtain-duration": a.CurtainDurationSec = ParseDouble(Next(argv, ref i), 0.8); break;
+                    case "--curtain-palette": a.CurtainPalette = Next(argv, ref i); break;
                     case "--exit-after-fps": a.ExitAfterFps = ParseInt(Next(argv, ref i), 0); break;
                     case "--width": a.WindowWidth = ParseInt(Next(argv, ref i), 1280); break;
                     case "--height": a.WindowHeight = ParseInt(Next(argv, ref i), 720); break;
@@ -151,6 +157,13 @@ namespace SpwFolia
         {
             int value;
             if (!string.IsNullOrEmpty(text) && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)) return value;
+            return fallback;
+        }
+
+        private static double ParseDouble(string text, double fallback)
+        {
+            double value;
+            if (!string.IsNullOrEmpty(text) && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)) return value;
             return fallback;
         }
     }

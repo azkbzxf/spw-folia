@@ -29,6 +29,8 @@ const LOCAL_KEYS = {
         fontImportFailed: '字体导入失败',
         fontRemove: '移除',
         chooseSystemFontEmpty: '这台电脑上没有可用的系统字体列表',
+        /** v0.4.0: top-left close button on the player chrome (mirror of the top-right gear). */
+        closePlayer: '退出 Folia',
     },
 } as const;
 

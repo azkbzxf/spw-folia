@@ -15,6 +15,8 @@
  * at page load. */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
+import type { UploadedFontDescriptor } from '~/model/settings';
+import { loadUploadedFontFile } from '~/model/uploadedFonts';
 
 /** Size of the virtual screen inside the iframe; must stay 1920x1080 for the OBS layout. */
 const PREVIEW_WIDTH = 1920;
@@ -30,6 +32,8 @@ interface LivePreviewProps {
     config: ObsBrowserSourceConfig;
     loopDuration: number;
     startOffset: number;
+    /** v0.4.0: uploaded fonts, re-registered in the iframe document (see `applyUploadedFonts`). */
+    uploadedFonts: UploadedFontDescriptor[];
     onError?: (message?: string) => void;
 }
 
@@ -41,7 +45,7 @@ interface PreviewMessage {
 
 const IFRAME_URL = () => `${window.location.origin}/preview.html?obs=1&preview=1`;
 
-const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration, startOffset, onError }) => {
+const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration, startOffset, uploadedFonts, onError }) => {
     const wrapperRef = useRef<HTMLDivElement | null>(null);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const onErrorRef = useRef(onError);
@@ -64,6 +68,8 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
     const configTimerRef = useRef<number | null>(null);
     const readyTimerRef = useRef<number | null>(null);
     const statsRef = useRef<{ canvases: number; frames: number } | null>(null);
+    /** Families already pushed into the child document (the ready path and the later-effects path can race). */
+    const injectedFontsRef = useRef<Set<string>>(new Set());
 
     const send = useCallback((kind: string, payload: unknown) => {
         const target = iframeRef.current?.contentWindow;
@@ -90,6 +96,53 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
             send('config', configRef.current);
         }, wait);
     }, [send]);
+
+    /**
+     * v0.4.0 (fix: 预览框字体不跟随): uploaded fonts are registered with `document.fonts.add()` in
+     * the settings/player document only. The preview iframe is a *separate* document, so a
+     * `SpwFoliaFont_*` family is unknown there and Folia's renderer silently falls back. The iframe
+     * is same-origin, so register the same faces into its document before the first config is
+     * delivered (Folia's lyric font code calls `document.fonts.load(family)` when the config lands,
+     * so a face added later would not trigger a re-layout on its own).
+     * Returns true when at least one face was added (the renderer then needs a fresh config).
+     */
+    const applyUploadedFonts = useCallback(async (): Promise<boolean> => {
+        const contentWindow = iframeRef.current?.contentWindow;
+        const contentDocument = contentWindow?.document;
+        if (!contentWindow || !contentDocument || uploadedFonts.length === 0) return false;
+        const fontFaceCtor = (contentWindow as unknown as { FontFace?: typeof FontFace }).FontFace ?? FontFace;
+        const known = new Set<string>(injectedFontsRef.current);
+        contentDocument.fonts.forEach(face => known.add(face.family));
+        let added = false;
+        for (const descriptor of uploadedFonts) {
+            if (!descriptor.family || known.has(descriptor.family)) continue;
+            // Reserve before any await: the ready path and the uploadedFonts effect can start
+            // concurrently, and both would otherwise register a FontFace for the same family.
+            known.add(descriptor.family);
+            injectedFontsRef.current.add(descriptor.family);
+            let bytes: ArrayBuffer | null = null;
+            try {
+                const blob = await loadUploadedFontFile(descriptor.id).catch(() => null);
+                bytes = blob ? await blob.arrayBuffer().catch(() => null) : null;
+            } catch (error) {
+                bytes = null;
+            }
+            if (!bytes) {
+                injectedFontsRef.current.delete(descriptor.family);
+                continue;
+            }
+            try {
+                const face = new fontFaceCtor(descriptor.family, bytes);
+                await face.load();
+                contentDocument.fonts.add(face);
+                added = true;
+            } catch (error) {
+                injectedFontsRef.current.delete(descriptor.family);
+                console.warn('[spw-live-preview] font registration failed', descriptor.family, error);
+            }
+        }
+        return added;
+    }, [uploadedFonts]);
 
     // Measure the stage: scale the 1920x1080 virtual screen so it covers the box (1.15x crop).
     useLayoutEffect(() => {
@@ -128,9 +181,16 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
                     readyTimerRef.current = null;
                 }
                 lastSentAtRef.current = performance.now();
-                send('config', configRef.current);
                 send('meta', { loopDuration, startOffset });
                 send('paused', pausedRef.current || hiddenRef.current);
+                // Register uploaded fonts in the child document *before* the first config: Folia calls
+                // document.fonts.load(family) while applying the config, and a face added afterwards
+                // would not re-layout the already rendered lyrics.
+                void applyUploadedFonts().then(() => {
+                    if (!readyRef.current) return;
+                    lastSentAtRef.current = performance.now();
+                    send('config', configRef.current);
+                });
                 return;
             }
             if (data.kind === 'error') {
@@ -150,7 +210,7 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
         };
         window.addEventListener('message', onMessage);
         return () => window.removeEventListener('message', onMessage);
-    }, [fail, loopDuration, send, startOffset]);
+    }, [applyUploadedFonts, fail, loopDuration, send, startOffset]);
 
     // 4 s without `ready` (missing preview.html, broken shim) → fall back to the static sample. The
     // clock only runs while the iframe is actually loaded and the stage is visible: the settings
@@ -173,6 +233,19 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
         if (!ready) return;
         scheduleConfig();
     }, [config, ready, scheduleConfig]);
+
+    // A new upload (or a restored descriptor list) after the first render: register the face in the
+    // child document and re-deliver the config so Folia re-lays out with the now resolvable family.
+    useEffect(() => {
+        if (!ready) return undefined;
+        let cancelled = false;
+        void applyUploadedFonts().then(added => {
+            if (!cancelled && added) scheduleConfig();
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [applyUploadedFonts, ready, scheduleConfig]);
 
     useEffect(() => {
         if (!ready) return;
@@ -206,6 +279,10 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
                     tabIndex={-1}
                     aria-hidden="true"
                     data-spw-live-preview-iframe="true"
+                    onLoad={() => {
+                        // A reloaded child document has an empty FontFace table again.
+                        injectedFontsRef.current.clear();
+                    }}
                     style={{
                         position: 'absolute',
                         left: '50%',

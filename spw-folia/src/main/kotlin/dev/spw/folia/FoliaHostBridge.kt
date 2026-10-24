@@ -73,6 +73,20 @@ internal class FoliaHostBridge(
     /** Called with the raw settings JSON whenever the page sends an updated tree. */
     @Volatile var onSettingsFromPage: ((String) -> Unit)? = null
 
+    /**
+     * v0.4.0: 配置 page switch `transitionAnimation`. When false the helper is spawned with
+     * `--no-curtain`, so the intro animation that masks the transparent/passthrough hand-over is
+     * skipped. Read at spawn time only; toggling it affects the next open. The animation length is
+     * fixed in the host (0.8 s): WebView2's cold start dominates the opening time anyway.
+     */
+    @Volatile var curtainEnabled: Boolean = false
+
+    /**
+     * v0.4.0: cover-derived palette for the opening animation, `#RRGGBB,#RRGGBB,…` (`--curtain-palette`).
+     * Prepared by the plugin from the current track's artwork; null lets the host use its own default.
+     */
+    @Volatile var curtainPalette: String? = null
+
     // Providers installed by FoliaPlugin; polled by the state pump.
     @Volatile var snapshotProvider: (() -> PlaybackSnapshot?)? = null
     @Volatile var lyricsProvider: (() -> String?)? = null
@@ -143,6 +157,14 @@ internal class FoliaHostBridge(
             "--fullscreen",
             "--bundle-version", FoliaPlugin.PLUGIN_VERSION
         )
+        // v0.4.0: the 配置 page can turn the opening transition animation off; when on, the
+        // cover-derived palette travels with the spawn so the host has it on paint (the fade-in
+        // length is fixed by the host at 0.8 s).
+        if (!curtainEnabled) {
+            command += "--no-curtain"
+        } else {
+            curtainPalette?.takeIf { it.isNotBlank() }?.let { command += listOf("--curtain-palette", it) }
+        }
         val settingsDir = resolveSettingsDir(web)?.let { physicalFile(it) }
         if (settingsDir != null) {
             command += listOf("--settings-dir", settingsDir.absolutePath, "--settings-entry", SETTINGS_ENTRY)

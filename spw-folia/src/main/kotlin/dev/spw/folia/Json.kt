@@ -141,4 +141,123 @@ internal object Json {
         }
         return sb.toString()
     }
+
+    /** Extracts the boolean value of the root-level member [key]; null when absent or not a bool. */
+    fun boolField(json: String, key: String): Boolean? {
+        val span = findRootMember(json, key) ?: return null
+        return when (json.substring(span.valueStart, span.valueEnd).trim()) {
+            "true" -> true
+            "false" -> false
+            else -> null
+        }
+    }
+
+    /**
+     * Returns [json] with the root-level member [key] set to a boolean literal.
+     *
+     * The settings tree has to round-trip byte-identically, so this edits the text instead of
+     * re-serialising it: an existing member is rewritten in place and everything else (key order,
+     * whitespace, untouched values) stays as it was; a missing member is appended before the closing
+     * brace. Non-object input is returned unchanged, so a malformed tree is never made worse.
+     */
+    fun withBoolMember(json: String, key: String, value: Boolean): String {
+        val literal = bool(value)
+        val trimmed = json.trim()
+        if (trimmed.length < 2 || trimmed[0] != '{' || trimmed[trimmed.length - 1] != '}') return json
+        val member = findRootMember(json, key)
+        if (member != null) {
+            return json.substring(0, member.valueStart) + literal + json.substring(member.valueEnd)
+        }
+        val close = json.lastIndexOf('}')
+        if (close < 0) return json
+        var last = close - 1
+        while (last > 0 && json[last].isWhitespace()) last--
+        val separator = if (json[last] == '{') "" else ","
+        val inserted = separator + "\"" + key + "\":" + literal
+        return json.substring(0, last + 1) + inserted + json.substring(last + 1)
+    }
+
+    private class MemberSpan(val valueStart: Int, val valueEnd: Int)
+
+    /** Finds the root-level member [key] (nested keys are ignored) and returns its value span. */
+    private fun findRootMember(json: String, key: String): MemberSpan? {
+        var i = json.indexOf('{')
+        if (i < 0) return null
+        i++
+        while (i < json.length) {
+            while (i < json.length && json[i].isWhitespace()) i++
+            if (i >= json.length || json[i] == '}') return null
+            if (json[i] == ',') {
+                i++
+                continue
+            }
+            if (json[i] != '"') return null
+            val keyStart = i + 1
+            i = endOfString(json, i)
+            if (i < 0) return null
+            val keyEnd = i - 1
+            while (i < json.length && json[i].isWhitespace()) i++
+            if (i >= json.length || json[i] != ':') return null
+            i++
+            while (i < json.length && json[i].isWhitespace()) i++
+            val valueStart = i
+            i = endOfValue(json, i)
+            if (i < 0) return null
+            if (json.substring(keyStart, keyEnd) == key) return MemberSpan(valueStart, i)
+            while (i < json.length && json[i].isWhitespace()) i++
+            if (i < json.length && json[i] == ',') i++
+        }
+        return null
+    }
+
+    /** Index just past the string literal that starts at [start] (a quote); -1 when unterminated. */
+    private fun endOfString(json: String, start: Int): Int {
+        var i = start + 1
+        var escaped = false
+        while (i < json.length) {
+            val c = json[i]
+            if (escaped) escaped = false
+            else if (c == '\\') escaped = true
+            else if (c == '"') return i + 1
+            i++
+        }
+        return -1
+    }
+
+    /** Index just past the JSON value starting at [start]; -1 when the text is truncated. */
+    private fun endOfValue(json: String, start: Int): Int {
+        if (start >= json.length) return -1
+        return when (json[start]) {
+            '"' -> endOfString(json, start)
+            '{', '[' -> {
+                var depth = 0
+                var i = start
+                while (i < json.length) {
+                    when (json[i]) {
+                        '"' -> {
+                            i = endOfString(json, i)
+                            if (i < 0) return -1
+                            continue
+                        }
+                        '{', '[' -> depth++
+                        '}', ']' -> {
+                            depth--
+                            if (depth == 0) return i + 1
+                        }
+                    }
+                    i++
+                }
+                -1
+            }
+            else -> {
+                var i = start
+                while (i < json.length) {
+                    val c = json[i]
+                    if (c == ',' || c == '}' || c == ']' || c.isWhitespace()) break
+                    i++
+                }
+                i
+            }
+        }
+    }
 }
