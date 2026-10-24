@@ -18,14 +18,14 @@ Full source code: this repository. The release artifact contains:
 
 ## Folia web assets (`web/`)
 
-`web/` is the unmodified production web build of **Folia `folia-major` 0.7.21** (AGPL-3.0),
+`web/` is the unmodified production web build of **Folia `folia-major` 0.7.22** (AGPL-3.0),
 extracted from the installed Folia desktop application as distributed to end users. No Folia
 source is modified. `web/index.html` had two non-functional PWA tags removed (service-worker
 registration + manifest link); this one-line change is documented and reproducible.
 
 To reproduce or modify the Folia part, obtain the upstream Folia source:
-https://github.com/chthollyphile/folia-major, tag `v0.7.21`
-(commit `33b25ff75252435a78006af45114fdf10e64727a`). Run its web build and stage the subset with
+https://github.com/chthollyphile/folia-major, tag `v0.7.22`
+(commit `1f6d0f468f5bc81b23a8b40ad7ca96ccd4b1ecbe`). Run its web build and stage the subset with
 `node packaging/tools/stage-web.mjs` (see `docs/release.md`).
 
 Whoever distributes this plugin (including any modified version) must keep this source offer and

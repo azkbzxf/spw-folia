@@ -22,7 +22,7 @@ Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二�
 | H5 | WebView2Loader 架构 | 必须 **x64**（发布包里就是 x64，`machine=0x8664`） | x64 | 误用 x86/arm64 Loader → `BadImageFormatException` → exit 1 |
 | H6 | Salt Player for Windows | **严格 1.19.0**（菜单 hook 目标是该版本 R8 混淆名） | 1.19.0 | 不崩：日志 `unsupported SPW version …; hook not installed`，菜单里没有 Folia |
 | H7 | Java 运行时 | **JVM 25**（插件 class 为 Java 25 / major 69） | SPW 自带 JVM 25.0.4.1 | 用户无需另装 Java；低于 25 的 JVM 无法加载插件 |
-| H8 | 插件权限 | `class-transform`（钩子，必需）；`library-read`（封面/歌词，可选） | 已授予 class-transform | 缺 class-transform：不崩，吐司提示 + 菜单无 Folia；缺 library-read：封面取不到、仅日志报错 |
+| H8 | 插件权限 | `class-transform`（钩子，必需）；`library-read`（封面/歌词，可选）；`key-bindings`（快捷键，v0.4.0 起，可选） | 三项均已授予 | 缺 class-transform：不崩，吐司提示 + 菜单无 Folia；缺 library-read：封面取不到、仅日志报错；缺 key-bindings：快捷键不注册（日志 `KEY_BINDINGS not granted`），其余功能正常 |
 | H9 | 可写路径 | 插件安装目录可写（日志、`spw-folia.log`）；`%LOCALAPPDATA%\spw-folia\webview` 可创建/可写（WebView2 用户数据目录） | 27 MB 安装 + 121 MB 缓存 | 插件目录不可写：`spawn failed: …` → 退回 Swing「Folia (fallback)」黑窗；UDF 不可写 → exit 1 |
 | H10 | 页面资源完整 | `.spmod/web/index.html` 存在（解包不完整/被杀软删文件） | 1898 个文件 | `bundle has no index.html` → exit 2 |
 
@@ -80,6 +80,7 @@ Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二�
 | `webview process-failed kind=… reason=Unexpected` + `exited code=1` | WebView2 浏览器进程意外退出（已知偶发，见 §5） |
 | `helper unavailable, opening Swing fallback window` | 打开的是黑色占位窗，不是真 Folia |
 | `cover load failed: … PluginPermissionDeniedException: … 'library-read'` | 缺 library-read 权限（非致命） |
+| `KEY_BINDINGS not granted; transparency shortcuts not registered`（v0.4.0） | 缺 key-bindings 权限：快捷键不注册，其余功能正常（在插件权限页补授后重启 SPW） |
 
 > 注意：当前版本的插件**只把退出码写进日志**，没有把 exit 3 翻译成「请安装 WebView2 Runtime」的
 > 提示（`docs/host-app.md` §2 原本要求这样做）。所以用户侧最直观的反馈是「窗口闪一下」，支持时需要
@@ -170,7 +171,7 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-429
 
 .NET SDK / JDK / Node / pnpm / Python（仅源码构建需要，见 README「从源码构建」）· VC++ 运行库 ·
 管理员权限 · 网络连接 · 单独安装的浏览器（Edge Stable **不能**代替 WebView2 Runtime，微软明确禁止生产应用依赖浏览器）·
-Android 模拟器 · Folia 桌面版（bundle 已内置 Folia 0.7.21 网页产物）。
+Android 模拟器 · Folia 桌面版（bundle 已内置 Folia 0.7.22 网页产物）。
 
 ---
 

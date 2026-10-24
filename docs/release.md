@@ -13,7 +13,7 @@ packaging/
     assets/…                   #    complete Folia web chunk graph incl. every lazy per-style chunk
     settings/settings-ui.js    # -> injected settings island (task-5 build)
     settings/styles/           #    inlined CSS is in the JS; these are extra assets
-    settings/thumbs/*.jpg      #    14 real Folia style thumbnails
+    settings/thumbs/*.jpg      #    real Folia style thumbnails (14 staged as of v0.3.0; 15 with 花火)
     _host/shim.js, overlay.js  #    audit copies of the scripts embedded in the exe
   native/                      # -> .spmod/native/ (plugin resolveHelper also accepts lib/)
     spw-folia-host.exe         #    C# .NET Framework 4.8 helper (134,144 B as of v0.3.0)
@@ -247,7 +247,7 @@ WebView2 Runtime (system component).
   Microsoft WebView2 SDK license (texts shipped). No fonts, no model weights, no Folia binary
   assets are redistributed beyond the web build.
 - Before publishing: confirm the exact upstream Folia source URL/tag to cite in `NOTICE.md`
-  (currently "folia-major 0.7.21 as distributed in the Folia desktop application"; the release owner
+  (currently "folia-major 0.7.22 as distributed in the Folia desktop application"; the release owner
   should add the upstream repository link + commit hash).
 
 ## 10. Release checklist (owner: Lead)
@@ -261,7 +261,7 @@ WebView2 Runtime (system component).
 5. Smoke-test the assembled `.spmod` in a real SPW install (menu item → fullscreen visualizer,
    first-run settings, ESC, track change, pause/seek).
 6. Record versions in the release notes: plugin version, host exe sha256, Folia version
-   (`folia-major 0.7.21`), WebView2 SDK/NuGet version and tested WebView2 Runtime version
+   (`folia-major 0.7.22`), WebView2 SDK/NuGet version and tested WebView2 Runtime version
    (150.0.4078.83), settings island build.
 7. No secrets in the artifact (`packaging/` contains no credentials).
 
@@ -295,12 +295,15 @@ every `.spmod`).
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes
 (see [`archive/verification-v0.1.11.md`](archive/verification-v0.1.11.md)) went out with v0.2.0.
 
-Current release payload (v0.3.0): plugin classes 112,411 B (`18e89d9e…`, the Gradle-built
+Current release payload (v0.4.0): plugin classes 112,411 B (`18e89d9e…`, the Gradle-built
 `classes/` + metadata zip; 238,514 B uncompressed), native host 134,144 B (`536037d5…`, new
 control→stdin / queue→page relay and X-button forwarding), settings island 1,093,739 B
-(`62609003…`, playback controls / acrylic HUD / transparency fixes), complete Folia 0.7.21 OBS
-bundle + licenses. Staged payload: 1,910 files / 24.57 MB (web 1,898 / 22.37 MB, native 5 /
-1.02 MB, licenses 7 / 0.05 MB) against a 25 MB budget. Verify a downloaded artifact with:
+(`62609003…`, playback controls / acrylic HUD / transparency fixes), complete Folia 0.7.22 OBS
+bundle + licenses. **The byte figures in this paragraph are the v0.3.0 staging result** (staged
+payload 1,910 files / 24.57 MB — web 1,898 / 22.37 MB, native 5 / 1.02 MB, licenses 7 / 0.05 MB —
+against a 25 MB budget); v0.4.0 swaps in the Folia 0.7.22 bundle (new 花火 style) and a rebuilt
+settings island, so its own numbers are recorded once the artifact is re-staged. Verify a
+downloaded artifact with:
 
 ```bash
 sha256sum spw-folia-0.3.0.spmod    # compare with the ledger row and the release's SHA256SUMS.txt

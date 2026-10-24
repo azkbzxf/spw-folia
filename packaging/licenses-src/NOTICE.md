@@ -12,7 +12,7 @@ It is not affiliated with, endorsed by, or supported by the authors of Salt Play
 ## Folia (bundled web assets)
 
 - The `web/` directory contains the **unmodified production web build** of Folia
-  (`folia-major` 0.7.21, a React/TypeScript/Vite application) as shipped inside the installed
+  (`folia-major` 0.7.22, a React/TypeScript/Vite application) as shipped inside the installed
   Folia desktop application. It is redistributed here so the plugin can render Folia's own
   visualizers (`/obs` browser-source surface) inside a WebView2 window.
 - Folia is licensed **AGPL-3.0** (see its own `LICENSE`, reproduced at `licenses/AGPL-3.0.txt`).
@@ -21,8 +21,8 @@ It is not affiliated with, endorsed by, or supported by the authors of Salt Play
   worker registration tag and manifest link were removed, because the service worker is not
   shipped in this plugin). Everything else is byte-identical to the upstream build output.
 - The corresponding source of the bundled web assets is the upstream Folia source at
-  https://github.com/chthollyphile/folia-major, tag `v0.7.21`
-  (commit `33b25ff75252435a78006af45114fdf10e64727a`), plus this repository's build/staging
+  https://github.com/chthollyphile/folia-major, tag `v0.7.22`
+  (commit `1f6d0f468f5bc81b23a8b40ad7ca96ccd4b1ecbe`), plus this repository's build/staging
   scripts (`packaging/tools/stage-web.mjs`) documenting exactly how the subset was produced from
   that build output.
 - The visualizer settings UI shipped in `web/settings/` is built from this repository's source

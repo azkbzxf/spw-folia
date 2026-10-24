@@ -1,7 +1,7 @@
 # spw-folia — Architecture v2 (FINAL, 2026-10-18)
 
 Goal: **SPW 1.19.0 Windows workshop plugin**. Adds a **Folia** item to the mini-player 更多 menu; clicking opens a
-**fullscreen Folia lyric mode** reproducing Folia's 14 lyric styles, all effects, settings UI and defaults as
+**fullscreen Folia lyric mode** reproducing Folia's 15 lyric styles, all effects, settings UI and defaults as
 faithfully as possible. Publish to GitHub (`azkbzxf/spw-folia`, topic `salt-player-plugins`) under **AGPL-3.0**
 (Folia-derived work), with a `.spmod` release.
 
@@ -10,7 +10,7 @@ Related docs (authoritative order):
 - `docs/archive/re-host.md` — SPW host RE facts, local plugin install/test loop, build env.
 - `docs/hook-target.md` — exact SPW 1.19.0 hook target for the 更多 menu + fallbacks.
 - `docs/folia-spec/README.md` (+ style-map / settings-ui / tunings / runtime-contracts / fullscreen-shell / assets) —
-  Folia behavior spec extracted from source (14 styles, settings, audio scale, theme, transitions).
+  Folia behavior spec extracted from source (15 styles, settings, audio scale, theme, transitions).
 - Implementation docs: `docs/host-app.md`, `docs/settings-ui-impl.md`, `docs/audio-timeline.md`.
 - Decision records (frozen): `docs/archive/webview-spike.md`, `docs/archive/hook-poc.md`.
 - `docs/architecture.md` (this file) — how the pieces fit.
@@ -19,7 +19,7 @@ Related docs (authoritative order):
 
 1. **Do not port Folia's visualizers to Kotlin.** Folia (React/TS, ~60k lines, AGPL-3.0) already ships a
    first-class **OBS browser-source surface**: `dist` mounts `ObsBrowserSourceApp` at pathname `/obs` or `?obs=1`
-   (plain browser, no Electron; verified). We bundle Folia's real production dist → pixel-faithful, all 14 styles,
+   (plain browser, no Electron; verified). We bundle Folia's real production dist → pixel-faithful, all 15 styles,
    backgrounds, glow words, subtitle overlay, transitions.
 2. **No HTTP server, no network, no Electron.** WebView2 host maps a local folder to virtual host
    `https://spw-folia.local`; Folia's `EventSource` is replaced by an injected **Shim.js** fed by
@@ -48,7 +48,7 @@ Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-
                                                                     ▼
                                               WebView2 page = Folia dist (/obs) + injected scripts
                                               ├─ Shim.js: fake EventSource → clock/audio/config events
-                                              ├─ settings UI (React island): 歌词样式 window, 默认, style grid 14
+                                              ├─ settings UI (React island): 歌词样式 window, 默认, style grid 15
                                               └─ publisher.ts: settings+lyrics+track+theme → config → pushConfig()
 ```
 
@@ -91,17 +91,18 @@ Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-
 - Plugin runs the helper **in place** from its install dir (no extraction; `%APPDATA%` is writable); WebView2
   user-data → `%LOCALAPPDATA%\spw-folia\webview`.
 - Local test loop: unzip `.spmod` → `%APPDATA%\Salt Player for Windows\workshop\plugins\dev.spw.folia-<ver>-LOCAL-ONLY\`,
-  append `dev.spw.folia` to `enabled.txt`, pre-grant `{"dev.spw.folia":{"reviewed":["class-transform"],"granted":["class-transform"]}}`
+  append `dev.spw.folia` to `enabled.txt`, pre-grant
+  `{"dev.spw.folia":{"reviewed":["class-transform","library-read","key-bindings"],"granted":["class-transform","library-read","key-bindings"]}}`
   in `permissions.json`, restart SPW, check `logs.txt`.
 - Version guard: hook targets are SPW-1.19.0-specific (`docs/hook-target.md`); on startup verify target classes
   exist, else toast/log and no-op gracefully.
 
 ## 6. Fidelity requirements (from Folia spec)
 
-- 14 styles + order/names: 商籁 sonnet、凝彩 tempera、绘光 lumiere、流光 classic、心象 cadenza、云阶 partita、
-  浮名 fume、倾诉 tilt、回环 claddagh、莫奈 monet、时计 pendolo、群唱 cappella、镜台 diorama、静止 still.
+- 15 styles + order/names: 商籁 sonnet、凝彩 tempera、绘光 lumiere、花火 hanabi (order 26)、流光 classic、心象 cadenza、
+  云阶 partita、浮名 fume、倾诉 tilt、回环 claddagh、莫奈 monet、时计 pendolo、群唱 cappella、镜台 diorama、静止 still.
 - Settings window 1:1 with screenshot 1 (tabs 歌词动画/背景/字体/字幕, 默认, 智能动感模式, 动感效果 推镜裂光+强度,
-  渲染质量 纹理分辨率+GPU notice, 动态与构图 镜头运动强度/文字动势, 样式 14 grid, per-style tuning panels).
+  渲染质量 纹理分辨率+GPU notice, 动态与构图 镜头运动强度/文字动势, 样式 15 grid, per-style tuning panels).
 - Audio scale **0..255 with gamma**, breathing when paused, `beatImpact/downbeatImpact` only animate when we can
   inject them (webview-spike probing); otherwise sliders stored but animation stays static (documented).
 - Defaults = Folia store defaults (e.g. 智能动感 off in code, 纹理分辨率 1.5; screenshot's 1.00x is a user state).
@@ -112,7 +113,7 @@ Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-
 - M1 spikes: hook target decoded + PoC in progress (task-1); Folia renderer in WebView2 verified, 120 fps (task-3);
   spec docs done (task-2); audio/timeline in progress (task-4).
 - M2 integration: menu item + host process + first style end-to-end inside SPW.
-- M3 fidelity: all 14 styles + settings UI + persistence + real lyrics/clock.
+- M3 fidelity: all 15 styles + settings UI + persistence + real lyrics/clock.
 - M4 hardening: packaging, install/uninstall, state restore, version guard, perf (1080p60), docs (zh/en), LICENSE.
 - M5 publish: GitHub repo + topic + release `.spmod` + install guide.
 

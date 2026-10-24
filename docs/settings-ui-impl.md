@@ -1,13 +1,13 @@
 # 注入式设置 UI 实现说明（task-5 交付）
 
 > 状态：v1 完成并可注入真实 Folia 页面运行（WebView2 宿主实测）。
-> 产物：`poc/settings-ui/dist/settings-ui.js`（单文件、CSS 内联）+ `dist/thumbs/*.jpg`（14 张真实渲染帧）。
+> 产物：`poc/settings-ui/dist/settings-ui.js`（单文件、CSS 内联）+ `dist/thumbs/*.jpg`（15 张真实渲染帧）。
 > 参考规格：`docs/folia-spec/settings-ui.md`（1:1 复刻依据）、`docs/protocol.md` §3–§5/§7.5（桥/配置/chrome 契约）。
-> 上游：Folia v0.7.21（AGPL-3.0），`work/folia/folia-major-main`。
+> 上游：Folia v0.7.22（AGPL-3.0），`work/folia/folia-major-main`。
 
 ## 0. 结论
 
-- **不是清洁室重写**：设置窗口直接复用 Folia 自己的 React 组件（`StudioWindow` / kit / `VisPlaygroundSettingsPanel` / 13 个样式设置面板 / 背景卡片 / zh-CN 文案），Vite 用别名 `@/` 指向 Folia 源码，只有一个 ~240 行的适配层（store、bridge、publisher、Stage 预览、14 个 registry entry 壳）。
+- **不是清洁室重写**：设置窗口直接复用 Folia 自己的 React 组件（`StudioWindow` / kit / `VisPlaygroundSettingsPanel` / 13 个样式设置面板 / 背景卡片 / zh-CN 文案），Vite 用别名 `@/` 指向 Folia 源码，只有一个 ~240 行的适配层（store、bridge、publisher、Stage 预览、15 个 registry entry 壳）。
 - 在真实宿主里验证通过：注入后 0 页面错误，3320×2000 @DSF1.8 全屏下窗口为两栏布局（见 §8 证据）。
 - §7.5 chrome 契约已实现并实测：`__SPW_FOLIA__.ui` 三个方法、⚙ 按钮（鼠标静止 2.5s 淡出）、覆盖层打开时 capture 阶段吞掉 ESC、关闭时 ESC 交还宿主。
 - 差异（§7）集中在两类：**没有 electron/Node 能力（上传类控件降级）** 与 **预览用静态真实帧代替实时组件渲染**；视觉与文案与 Folia 一致。
@@ -21,7 +21,7 @@ Folia dist/index.html（真实播放页，OBS 模式）
         └─ React root → <App/>
               ├─ ⚙ chrome 按钮（overlay 关闭时可见）
               ├─ StudioWindow（Folia 原组件：1240×780 窗口、dim/blur 背板、header）
-              │    ├─ Stage（预览帧 + 暂停钮 + 样式 14 PictureGrid）
+              │    ├─ Stage（预览帧 + 暂停钮 + 样式 15 PictureGrid）
               │    └─ VisPlaygroundSettingsPanel（Folia 原组件：4 个 tab + 默认重置）
               ├─ zustand store（model/settings.ts）：唯一设置真源
               ├─ bridge.ts：__SPW_FOLIA__ 适配 + settings 往返 + __SPW_FOLIA__.ui
@@ -38,7 +38,7 @@ npm install          # 或 pnpm install
 npm run build        # = vite build，产物在 dist/
 ```
 
-- 产物：`dist/settings-ui.js`（~1.19 MB，含内联 CSS 与全部 React 组件）、`dist/thumbs/`（14×jpg，由 `public/thumbs` 原样拷贝）、`dist/assets/cacheUsage.worker-*.js`（Folia 侧 worker chunk，浏览器按需加载，可忽略）。
+- 产物：`dist/settings-ui.js`（v0.4.0 构建 **2,239.57 kB**，gzip 711.74 kB；含内联 CSS 与全部 React 组件）、`dist/thumbs/`（15×jpg，由 `public/thumbs` 原样拷贝）、`dist/assets/cacheUsage.worker-*.js`（Folia 侧 worker chunk，浏览器按需加载，可忽略）。
 - 入口配置（`vite.config.ts`）：`base: './'`、`rollupOptions.input.settings = src/main.tsx`、`entryFileNames: 'settings-ui.js'`、`cssCodeSplit: false`、`inlineCssIntoEntry()` 插件把 CSS 合并后以 `<style data-spw-settings-ui-css>` 注入，保证宿主只加一个 script 标签也能带样式。
 - 宿主注入（webview-spike 的实现）：
   ```bash
@@ -68,7 +68,7 @@ npm run build        # = vite build，产物在 dist/
 | 行组件与格式化 `percent()`/`times()`、SliderRow 拖动提交语义 | `src/components/visualizer/panelRows.tsx` |
 | 智能动感模式卡片 | `src/components/visualizer/SmartBeatSettingsCard.tsx` |
 | 动感效果组（推镜裂光/水镜涟漪/仿真鼓面） | `src/components/visualizer/BeatEffectsGroup.tsx` + `src/services/beatFx/beatEffects.ts` |
-| 13 个样式设置面板 | `settingsPanels.tsx`（classic/partita/fume/cappella/tilt/diorama/claddagh）+ `sonnet/`、`tempera/`、`lumiere/`、`monet/`、`pendolo/`（cadenza/still 无面板 → 空态“这个样式没有参数”） |
+| 13 个样式设置面板 | `settingsPanels.tsx`（classic/partita/fume/cappella/tilt/diorama/claddagh）+ `sonnet/`、`tempera/`、`lumiere/`、`hanabi/`、`monet/`、`pendolo/`（cadenza/still 无面板 → 空态“这个样式没有参数”） |
 | 背景设置卡片（通用/隐现/莫奈/漫游/空） | `src/components/visualizer/backgrounds/{common,latent,monet,nomand,sora}/*SettingsCard.tsx` |
 | 全部默认值（tuning、smartBeat、背景 tuning、阈值） | `src/types.ts` 的 `DEFAULT_*_TUNING` / `DEFAULT_SMART_BEAT_SETTINGS` 等 |
 | 中文文案 | `src/i18n/locales/zh-CN.ts`（纯数据，直接进 i18next resources） |
@@ -77,7 +77,7 @@ npm run build        # = vite build，产物在 dist/
 ### 3.2 本工程重写（适配层，~240 行）
 
 - `src/model/settings.ts`：zustand store（Folia 持久化层替换为内存 + 桥），字段/默认值镜像 Folia 与 `packaging/testdata/default-settings.json`。
-- `src/model/styles.tsx`：14 个样式 entry 壳（`mode/order/labelKey/labelFallback/thumb/renderSettingsPanel/beatEffects/ownFontSizeNoticeKey`），顺序与 `registry.order` 一致 → 2×7 网格。
+- `src/model/styles.tsx`：15 个样式 entry 壳（`mode/order/labelKey/labelFallback/thumb/renderSettingsPanel/beatEffects/ownFontSizeNoticeKey`），顺序与 `registry.order` 一致 → 8 列 × 2 行网格（15 样式 + 随机）。
 - `src/model/Stage.tsx` / `StylePreview.tsx`：大预览（真实帧 `<img>` + 暂停钮）+ 样式货架 PictureGrid（16:10 tile、选中环、名称）。
 - `src/model/theme.ts` / `assetBase.ts`：预览主题（深色 demo 主题）、`--text-primary`、控制卡底色、range thumb class、字体/字号/字重选项数组。
 - `src/bridge.ts`：`__SPW_FOLIA__` 契约适配、假桥、settings 往返（getSettings/`settings` 事件/节流 setSettings）、`__SPW_FOLIA_UI__` 与 `__SPW_FOLIA__.ui`、ESC/键盘动作。
@@ -109,7 +109,7 @@ npm run build        # = vite build，产物在 dist/
 ```jsonc
 {
   "version": 1,
-  "styleId": "sonnet",                 // visualizerMode；14 个之一
+  "styleId": "sonnet",                 // visualizerMode；15 个之一
   "smartBeat": {                       // 必须始终是对象；写成 true 会让面板崩（smartBeat.effects[...]）
     "enabled": true,
     "effects": {}                      // { "<effectId>": { "on": true, "strength": 1.0 } }
@@ -179,10 +179,10 @@ npm run build        # = vite build，产物在 dist/
 
 ## 7. 与 Folia 原版的差异（需在验收时知晓）
 
-1. **预览是真实宿主渲染帧**（`poc/webview/host` 全屏运行 Folia dist 截屏，按 16:10 裁切 1440×900 JPEG q82），不是 Folia 的实时 `preview/LyricStylePicture` 小渲染；换样式/调参时大图与 14 格货架不会跟着实时重绘（Folia 会）。这是性能与依赖取舍，视觉上等价于截图 1。
+1. **预览是真实宿主渲染帧**（`poc/webview/host` 全屏运行 Folia dist 截屏，按 16:10 裁切 1440×900 JPEG q82），不是 Folia 的实时 `preview/LyricStylePicture` 小渲染；换样式/调参时大图与 15 格货架不会跟着实时重绘（Folia 会）。这是性能与依赖取舍，视觉上等价于截图 1。
 2. **智能动感模式默认 ON**：与 `packaging/testdata/default-settings.json` 一致，也与截图 1 一致；Folia 应用自身的 stored default 是 `false`（`types.ts:609`），本工程按 v1 树 + 截图取 ON。
 3. **模型/播放能力降级**：`useSmartBeatAvailability()` 桩返回 `'ready'`（为了不显示“仅桌面版可用”提示，与截图 1 一致）；实际 webview 内没有 `beat_this`/`htdemucs` 模型，节拍效果不会真正驱动动画（视觉器在 `isBeatFxReady()` 为假时像素不变）。开关/强度均照常保存进设置树。
-4. **上传类控件降级**：自定义字体（`选择系统字体` 打开系统 picker）、tempera 画布图片、monet 封面/肖像、cappella 自定义表情/头像——按钮存在但为 no-op（对应桩）；文案与布局保持 Folia 原样。
+4. **上传类控件降级（v0.4.0 起只剩部分）**：自定义字体已可用——「自定义」磁贴可导入字体包（`.ttf/.otf/.woff/.woff2`，单个 ≤ 50 MB，存 IndexedDB 并用 `FontFace` 注册）或从插件下发的 `systemFonts`（AWT 枚举，最多 400 个家族，不持久化）里选，不再走 no-op 桩。仍然降级的还有 tempera 画布图片、monet 封面/肖像、cappella 自定义表情/头像——按钮存在但为 no-op（对应桩）；文案与布局保持 Folia 原样。
 5. **Folium mod 扩展卡片**不渲染（无 mod）；`背景类型 → 嵌入/空` 的动态图片列表为空。
 6. **背景缩略图**是 Folia 无图时的 glyph fallback（深色卡片 + 模式字形，沿 `backgrounds/<mode>/entry.tsx` 的 `PictureFrame` 语义重绘；Folia 在有背景数据时画实时小画布）；`背景` tab 设置项行为完全一致。
 7. **返回按钮**关闭注入覆盖层（不是回播放页）；顶部 header 的 `←` 与 §7.5 一致。
@@ -232,14 +232,14 @@ npm run build        # = vite build，产物在 dist/
 | `research/settings-ui/host-ui-check-results.txt` | 真实宿主 §7.5 契约 + ⚙ 指针命中（`elementFromPoint`）回归输出（含 `gearHit`/`gearHitHidden`） |
 | `docs/images/settings-ui.jpg` | 真实宿主全屏、覆盖层打开（2200 宽 JPEG q88）；本文件 §9 引用 |
 | `docs/images/fullscreen-chrome.jpg` | 公开 README 用：视觉器 + 右上 ⚙ chrome（JPEG q88） |
-| `docs/images/style-grid.png` | 公开 README 用：样式 14 两行网格裁切（样式 14 / 商籁…静止） |
+| `docs/images/style-grid.png` | 公开 README 用：样式货架两行网格裁切。**注意：当前文件是 v0.3.x 时期的 14 格截图**（缺「花火」），v0.4.0 需补一张 15 格版本后替换。 |
 | `docs/images/transparent-background.jpg` | 公开 README 用：播放页透明背景（歌词叠加桌面，含开关面板） |
 | `docs/images/menu-folia.png` | 公开 README 用：迷你播放器「更多」菜单里的 Folia 条目 |
 
 ## 10. 验收清单
 
 - [x] `npm run build` 通过，产物单文件 `dist/settings-ui.js`（CSS 内联），无运行期网络请求。
-- [x] 标题 `歌词样式`、右上 `默认`、4 tab `歌词动画/背景/字体/字幕`、14 样式 2×7（商籁…静止，末位 静止，13 位 镜台）。
+- [x] 标题 `歌词样式`、右上 `默认`、4 tab `歌词动画/背景/字体/字幕`、15 样式 + 随机 → 8 列 2 行（商籁…花火…静止，随机在末位）。
 - [x] 大预览 + 暂停钮 + 样式货架与 Folia 截图 1 同构；尺寸/间距来自 Folia 原组件（1240×780、右栏 420、tile 16:10）。
 - [x] 智能动感模式/动感效果/渲染质量/动态与构图四组，值与范围来自 `DEFAULT_SONNET_TUNING`（纹理 1.5x、镜头 1.00x、文字动势 1.00x）。
 - [x] 13 个样式面板全部可渲染（cadenza/still 为空态）。
@@ -260,9 +260,9 @@ npm run build        # = vite build，产物在 dist/
 
 公开版本有意识地只做到“设置窗口 + 配置下发 + 全屏 chrome”这一层，以下为 v2 待补，不是 bug：
 
-- **上传类控件降级**：自定义字体（`选择系统字体` 系统 picker）、tempera 画布图片、monet 封面取色/肖像、cappella 自定义表情/头像——控件在、点击 no-op（对应 `src/stubs/` 桩）。需要宿主/插件提供文件选择与 asset 通道。
+- **上传类控件降级**：tempera 画布图片、monet 封面取色/肖像、cappella 自定义表情/头像——控件在、点击 no-op（对应 `src/stubs/` 桩）。需要宿主/插件提供文件选择与 asset 通道。（自定义字体已在 v0.4.0 实现：导入字体包 + 系统字体列表，见 §7 第 4 条。）
 - **节拍效果只有 UI**：`beat_this` / `htdemucs` 模型不在 webview 内，开关与强度照常写进设置树，但视觉器不会真正随拍动画（`useSmartBeatAvailability` 桩返回 `'ready'` 仅为与截图 1 的桌面形态一致；缺失模型提示因此不显示）。
-- **预览是真实宿主渲染帧**，不是 Folia 的实时 `LyricStylePicture` 小渲染：换样式/拖参数时大图与 14 格货架不跟着实时重绘（静态 jpg，来自 `poc/webview/host` 全屏截屏 16:10 裁切）。视觉等价、性能更好，但少了实时性。
+- **预览是真实宿主渲染帧**，不是 Folia 的实时 `LyricStylePicture` 小渲染：换样式/拖参数时大图与 15 格货架不跟着实时重绘（静态 jpg，来自 `poc/webview/host` 全屏截屏 16:10 裁切）。视觉等价、性能更好，但少了实时性。
 - **背景缩略图**为 Folia glyph fallback（静态模式字形），不是实时小画布；`嵌入/空` 背景无动态图片列表。
 - **Folium mod 扩展卡片**不渲染（无 mod 运行时）。
 - **DSF/视口**：生产全屏两栏成立（如 3200×2000@1.8 → CSS 1778×1111）；窗口化到窄尺寸时 Folia 自身响应式会变单栏，属预期行为，不做特判。
@@ -278,7 +278,7 @@ npm run build        # = vite build，产物在 dist/
 | Tab 栏文字 / 下划线 | 7.10 / 2.11 | PASS（文字差为 0.25px 亚像素） |
 | 智能动感模式 / 动感效果 / 渲染质量 / 动态与构图 | 1.15 / 3.24 / 2.22 / 3.06 | PASS |
 | 字体 tab / 字幕 tab / 背景「隐现背景」卡片 | 2.08 / 4.61 / 7.00 | PASS |
-| 背景类型 6 格 / 样式货架 14 格 / 大预览 | 23.72 / 29.66 / 53.88 | 有意差异（实时渲染 vs 静态帧） |
+| 背景类型 6 格 / 样式货架 15 格 / 大预览 | 23.72 / 29.66 / 53.88 | 有意差异（实时渲染 vs 静态帧；MAE 为 v0.3.x 14 格时期测得，15 格未重测） |
 
 修复的 4 处可见偏差：`--text-primary` 取配色主题（原为 kit fallback）、补齐 Folia `@theme` CJK 字体栈、body/滚动条配色对齐、背景格改为 Folia glyph fallback（原为渐变占位）。
 

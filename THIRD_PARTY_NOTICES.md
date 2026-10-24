@@ -8,13 +8,13 @@ source offer.
 ## Folia (visualizer, settings UI, web bundle)
 
 - Upstream: https://github.com/chthollyphile/folia-major (author: chthollyphile)
-- Version used: **0.7.21**
-- Exact source: tag `v0.7.21` (commit `33b25ff75252435a78006af45114fdf10e64727a`) of
+- Version used: **0.7.22**
+- Exact source: tag `v0.7.22` (commit `1f6d0f468f5bc81b23a8b40ad7ca96ccd4b1ecbe`) of
   https://github.com/chthollyphile/folia-major
 - License: **GNU AGPL-3.0**
 - What we use:
-  - the production web bundle compiled from Folia 0.7.21 (the OBS browser-source surface,
-    all 14 lyric styles, backgrounds, subtitle/harmony overlays, transitions) — redistributed in
+  - the production web bundle compiled from Folia 0.7.22 (the OBS browser-source surface,
+    all 15 lyric styles, backgrounds, subtitle/harmony overlays, transitions) — redistributed in
     `packaging/web/` and inside the `.spmod`;
   - React components, translations (`zh-CN`), styling and store defaults reused by our settings UI
     (`poc/settings-ui/`), with minimal adapters (see `docs/settings-ui-impl.md` patch list);
@@ -23,7 +23,7 @@ source offer.
 - Because Folia is AGPL-3.0, the combined plugin (Kotlin plugin + C# helper + settings UI + bundled
   web assets) is distributed under AGPL-3.0 as well. Corresponding sources for everything we ship
   are in this repository; Folia's own source is available from the upstream URL above at version
-  0.7.21 (see `docs/licensing.md` §Source offer).
+  0.7.22 (see `docs/licensing.md` §Source offer).
 
 ## Salt Player for Windows workshop plugin API
 
@@ -75,7 +75,7 @@ so the distributed binaries are AGPL-3.0). No third-party audio library is used.
 
 ## Research / reference assets
 
-During development we used screenshots and UI assets captured from Folia 0.7.21 (AGPL-3.0) for
+During development we used screenshots and UI assets captured from Folia 0.7.22 (AGPL-3.0) for
 specification and visual comparison. Those reference captures are not redistributed in this
 repository; the equivalent material is reproducible from the upstream Folia source at the tag/commit
 listed above and from the bundled `web/` build inside the released `.spmod`.

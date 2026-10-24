@@ -112,6 +112,12 @@ classic script，由 `preview.html` 在 `<head>` 里以 `<script src="/_host/pre
    `assets/placeholder_cover-2-BuqqkGqf.jpg` → `out/preview/placeholder_cover-2.jpg`
    （缺失时用 glob 在 `out/assets/` 里按前缀 `placeholder_cover` 查找；找不到则打印 warning，预览封面退化为无封面）。
 4. 报告里加 `previewHtml: true/false`、`previewShimCopied: true/false`。
+5. **本地安装也必须走这个脚本**：`spw-folia/build.gradle.kts` 的 `stageDevWeb`（Gradle 调
+   `node packaging/tools/stage-web.mjs --dist poc/webview/dist/dist --out build/web-stage/web --report build/web-stage/report.json`）
+   生成与发布包一致的 `web/` 布局，再由 `syncDevAssets` 拷进 `build/plugin-root/web`。
+   **不要**再直接拷贝 `poc/webview/dist/dist`：裸 dist 会带上 PWA 的 `sw.js`，它的 `NavigationRoute`
+   会把 `/preview.html` 这次导航重新导回 `index.html`（OBS 页没有子帧垫片、没有 token），
+   预览就永远停在「正在连接 Folia」；同时裸 dist 里也没有生成的 `preview.html` / `_host/preview-shim.js`。
 
 ## 顶层 `Shim.js` 改动（webview-spike 负责）
 

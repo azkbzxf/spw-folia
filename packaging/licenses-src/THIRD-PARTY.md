@@ -4,8 +4,8 @@ Bundled in the plugin distribution:
 
 | component | version | license | where | notes |
 | --- | --- | --- | --- | --- |
-| Folia web build (`folia-major`) | 0.7.21 | AGPL-3.0 | `web/**` (96 files, ~7.9 MB) | unmodified production build except removed PWA tags in `index.html` |
-| Folia visualizer styles (15 registered styles) | 0.7.21 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface |
+| Folia web build (`folia-major`) | 0.7.22 | AGPL-3.0 | `web/**` (Folia build: 3,671 files, 30.9 MB) | unmodified production build except removed PWA tags in `index.html` |
+| Folia visualizer styles (15 registered styles) | 0.7.22 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface; 0.7.21 had 14, 花火 (hanabi) is new in 0.7.22 |
 | spw-folia settings UI | this repo | AGPL-3.0 | `web/settings/**` | React island; reuses Folia components |
 | spw-folia native host | this repo | AGPL-3.0 | `lib/spw-folia-host.exe` | C#, .NET Framework 4.8 |
 | WASAPI loopback analyzer | this repo | MIT | compiled into host exe | original clean-room C#, no NAudio |

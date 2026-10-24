@@ -2,7 +2,7 @@
 
 把 [Folia](https://github.com/chthollyphile/folia-major) 的歌词可视化系统带进 **Salt Player for
 Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打开无边框全屏模式，直接运行 Folia
-**自己的**渲染代码（全部 14 种歌词样式），由 SPW 正在播放的音乐驱动。
+**自己的**渲染代码（全部 15 种歌词样式），由 SPW 正在播放的音乐驱动。
 
 [![Release](https://img.shields.io/github/v/release/azkbzxf/spw-folia)](https://github.com/azkbzxf/spw-folia/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
@@ -15,15 +15,18 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 
 ## 亮点
 
-- **跑的是真 Folia，不是仿制** —— 插件内嵌 Folia 0.7.21 的生产级 OBS 浏览器源产物，14 种样式
+- **跑的是真 Folia，不是仿制** —— 插件内嵌 Folia 0.7.22 的生产级 OBS 浏览器源产物，15 种样式
   全部是 Folia 原始代码：动态、辉光、逐字时间轴、背景与转场都与 Folia 像素级一致。
-- **14 种样式，随手切换** —— 商籁 · 凝彩 · 绘光 · 流光 · 心象 · 云阶 · 浮名 · 倾诉 · 回环 · 莫奈 ·
+- **15 种样式，随手切换** —— 商籁 · 凝彩 · 绘光 · 花火 · 流光 · 心象 · 云阶 · 浮名 · 倾诉 · 回环 · 莫奈 ·
   时计 · 群唱 · 镜台 · 静止。
 - **设置页与 Folia 1:1** ——「歌词样式」窗口复用 Folia 自己的 React 组件；左侧大预览就是同源
   iframe 里逐帧运行的真实渲染器，拖动任何滑块立刻看到结果。
 - **桌面透明叠加** —— 全屏页右下角的圆钮面板可开关「播放页透明背景」：窗口变成真正的透明窗口，
   只留歌词与特效叠在桌面或其它窗口之上，适合直播 / OBS 叠加；第二行「鼠标穿透」让你一边放歌词
   一边照常操作电脑，**Ctrl+Alt+B** 随时恢复不透明。
+- **透明背景快捷键** —— SPW 的「快捷键管理」里新增两条可重绑动作：`播放页透明背景：开 / 关`
+  （默认 **Ctrl+Alt+G**）与 `播放页透明背景 + 鼠标穿透：开 / 关`（默认 **Ctrl+Alt+Shift+G**）。
+  窗口开着时按下立刻生效；打开该动作的「全局」开关后，Folia 窗口聚焦时也能用。
 - **封面取色** —— 主题、背景与强调色由当前歌曲封面派生，切歌即变。
 - **与播放器完全同步** —— 逐字歌词、翻译字幕、播放 / 暂停 / 跳转 / 倍速；另有 WASAPI 环回音频
   分析，让画面跟着音乐起伏。
@@ -38,11 +41,11 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 </p>
 <p align="center">
   <img src="docs/images/transparent-background.jpg" width="49%" alt="播放页透明背景：歌词直接叠加在桌面上">
-  <img src="docs/images/style-grid.png" width="49%" alt="14 种歌词样式一览">
+  <img src="docs/images/style-grid.png" width="49%" alt="15 种歌词样式一览">
 </p>
-<div align="center"><sub>全屏播放页 · Folia 设置页 · 播放页透明背景 · 14 种歌词样式</sub></div>
+<div align="center"><sub>全屏播放页 · Folia 设置页 · 播放页透明背景 · 15 种歌词样式（样式图为 v0.3.x 拍摄，尚缺「花火」）</sub></div>
 
-> 想一次看全？[**宣传站**](https://azkbzxf.github.io/spw-folia/) 有滚动演示、14 种样式大图，
+> 想一次看全？[**宣传站**](https://azkbzxf.github.io/spw-folia/) 有滚动演示、15 种样式大图，
 > 以及 [一段 48 秒的实拍巡览](https://azkbzxf.github.io/spw-folia/#film)（画面全部由插件真实渲染）。
 
 ## 安装
@@ -52,9 +55,10 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖矩阵与闪退排查见
 [docs/runtime-requirements.md](docs/runtime-requirements.md)。
 
-1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.3.1.spmod`。
+1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.0.spmod`。
 2. SPW → **设置 → 插件 / 创意工坊 → 导入插件**，选择该文件并启用；询问时授予 **class-transform**
-   （「钩子」）权限——菜单 hook 需要它。
+   （「钩子」）权限——菜单 hook 需要它；再授予 **key-bindings**（「快捷键」）——透明快捷键需要它
+   （漏了也可以在插件权限页补授后重启 SPW）。
 3. 插件管理器提示时重启 SPW。
 4. 播放歌曲，打开迷你播放器的 **更多**（…）菜单 → **Folia**。
 
@@ -77,12 +81,13 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖
 
 ## 版本
 
-当前 **v0.3.1**。每个版本的 `.spmod` 与 SHA-256 校验值都在
+当前 **v0.4.0**。每个版本的 `.spmod` 与 SHA-256 校验值都在
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)；逐版变更与验收证据归档在
 [docs/archive/](docs/archive/)，仓库内不再重复。
 
-发布产物已在 Windows 11 + 真实 SPW **1.19.0 与 1.19.2** 上完成端到端验收：菜单条目 → 全屏渲染、
-14 种样式 15/15 扫描、0 页面错误、0 外部网络请求、16 分钟长稳、设置持久化、无残留辅助进程。
+v0.3.1 的发布产物已在 Windows 11 + 真实 SPW **1.19.0 与 1.19.2** 上完成端到端验收：菜单条目 →
+全屏渲染、0 页面错误、0 外部网络请求、16 分钟长稳、设置持久化、无残留辅助进程。v0.4.0 把样式扩到
+**15 种**（新增「花火」）并加入随机样式池、自定义字体与托盘入口，**真机逐样式验收待发布前完成**。
 
 ## 从源码构建
 
@@ -92,7 +97,7 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖
 ```bat
 :: 1) 插件（Kotlin，官方 SPW 创意工坊 Gradle 插件）
 cd spw-folia
-gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.3.1.spmod
+gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.0.spmod
 
 :: 2) 原生辅助进程（C# + WebView2）
 cd ..\poc\webview\host
@@ -105,8 +110,8 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 :: 4) 组装可分发 .spmod（插件 classes + 暂存 web bundle + 原生进程 + 许可证）
 bash packaging/build-package.sh     :: 暂存 packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
-    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.3.1.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.3.1.spmod
+    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.0.spmod ^
+    --staging packaging --out dist/release --name spw-folia-0.4.0.spmod
 ```
 
 完整的打包流水线、payload 清单、大小预算与发布检查表见 [docs/release.md](docs/release.md)。
@@ -122,7 +127,7 @@ python packaging/tools/assemble-release.py ^
 ## 致谢
 
 - [Folia](https://github.com/chthollyphile/folia-major)，作者 chthollyphile（AGPL-3.0）——整个
-  可视化器、设置 UI 与 web bundle 都来自 Folia 的工作（v0.7.21）。
+  可视化器、设置 UI 与 web bundle 都来自 Folia 的工作（v0.7.22）。
 - [Salt Player for Windows](https://saltplayer.com/) 创意工坊插件 API，作者 Moriafly。
 - [spw-island（Dynamic Lyrics Island for SPW）](https://github.com/gaboron/spw-island) ——
   仅作为行为参考（GPL-3.0）；未复制任何代码。

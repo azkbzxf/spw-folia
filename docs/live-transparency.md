@@ -76,6 +76,13 @@ webView.DefaultBackgroundColor = Color.Black;
      「透明 ↔ 不透明」之间切换（`EnterTransparentMode` / `ExitTransparentMode`）；日志
      `transparency hotkey=registered mods=0x3 vk=0x42` / `transparency enter source=hotkey` /
      `transparency exit source=hotkey` / `hotkey=failed`。
+   - **SPW 快捷键管理（v0.4.0）**：插件向 `keyBindingManager` 注册两条动作 ——
+     `播放页透明背景：开 / 关`（默认 Ctrl+Alt+G）与 `播放页透明背景 + 鼠标穿透：开 / 关`
+     （默认 Ctrl+Alt+Shift+G）。按下后插件只改设置树并推一条 `{"t":"settings"}` 给宿主，宿主走
+     同一条 `ApplyTransparencyFromSettings()` 套色键、再把设置回发页面；样式不支持透明（`monet`、
+     浅色主题的 `lumiere`）时由页面拒绝并回退，插件随后提示「当前歌词样式不支持播放页透明背景」。
+     默认键位避开了上面的宿主热键链与本机已被占用的 Ctrl+Alt+T；要在 Folia 窗口聚焦时也生效，
+     需在 SPW 里打开该动作的「全局」开关。
    - **页面里的两个开关**：右下角圆钮 → 面板里的「播放页透明背景」开关；有了热区转发，透明状态下它们
      永远可点，所以不需要额外的浮标窗口（v0.1.7/v0.1.8 的 `TransparencyBadge` chip 已在 v0.1.9 删除）。
    - 两条通道都走 `ExitTransparentMode(source)`：log → `SetTransparency(false)` →

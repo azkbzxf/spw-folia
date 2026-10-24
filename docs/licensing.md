@@ -5,7 +5,7 @@
   assets, native helper binary) is licensed **AGPL-3.0-or-later**.
   Rationale: the plugin's visualizer is a redistribution + integration of **Folia**, which is
   AGPL-3.0 (see `work/folia/folia-major-main/LICENSE`, upstream https://github.com/…/folia —
-  record the exact upstream repo URL + commit/tag 0.7.21 in NOTICE). AGPL requires derivative
+  record the exact upstream repo URL + commit/tag 0.7.22 in NOTICE). AGPL requires derivative
   works and combined distributions to be AGPL and to offer corresponding source to network users.
 - Source availability: repo contains all our source + build scripts; the Folia web bundle is built
   from an unmodified upstream Folia checkout (pin commit hash in a `FOLIA_UPSTREAM.md` note), so its
@@ -15,7 +15,7 @@
 ## Bundled components and their licenses (NOTICE file must list all)
 | component | version | license | how we use it | obligations |
 | --- | --- | --- | --- | --- |
-| Folia (app + 14 visualizer styles + settings UI components if reused) | 0.7.21 | AGPL-3.0 | bundled `web/` production dist (unmodified), reused React components or clean-room derived UI | AGPL, source offer, copyright notice |
+| Folia (app + 15 visualizer styles + settings UI components if reused) | 0.7.22 | AGPL-3.0 | bundled `web/` production dist (unmodified), reused React components or clean-room derived UI | AGPL, source offer, copyright notice |
 | NeteaseCloudMusicApi-style deps inside Folia dist (libraries already licensed inside Folia) | as shipped | mixed (MIT/Apache etc.) | transitively bundled in `web/` dist | keep Folia's bundled license reports (Folia dist contains its own attributions; copy them) |
 | spw-workshop-api | 0.1.0-dev22/23 | check repo LICENSE (record) | compileOnly API only, not redistributed | none if compileOnly; attribution in docs anyway |
 | PF4J | 3.12.0 | Apache-2.0 | compileOnly (host provides) | none if not redistributed |
@@ -32,7 +32,7 @@
 ## Publish checklist (G6)
 - [ ] `LICENSE` = AGPL-3.0 full text at repo root.
 - [ ] `NOTICE` with Folia copyright/upstream URL/version + commit, WebView2 SDK notice, any other.
-- [ ] `FOLIA_UPSTREAM.md`: upstream URL, tag 0.7.21 commit hash, `pnpm build` recipe, list of
+- [ ] `FOLIA_UPSTREAM.md`: upstream URL, tag 0.7.22 commit hash, `pnpm build` recipe, list of
       files we changed (if any), how to reproduce `web/` dist byte-for-byte or honestly note
       "dist from upstream release build".
 - [ ] README links to source, states AGPL, says plugin is unofficial community work, not affiliated
