@@ -86,7 +86,6 @@ const snapshotBase = {
   commonBackground: { opacity: 0.75, useCoverColorBg: false, disableVignette: false, disableGeometricBackground: false },
   appearance: { fontStyle: 'sans', fontScale: 1, fontWeight: null, visualizerOpacity: 1, customFontFamily: null },
   subtitle: {},
-  previewPlaceholderId: 'default',
   lyricMotion: 0.8,
   textureResolution: 1.5,
   mousePassthrough: false,

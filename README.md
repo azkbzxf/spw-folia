@@ -19,8 +19,9 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
   全部是 Folia 原始代码：动态、辉光、逐字时间轴、背景与转场都与 Folia 像素级一致。
 - **15 种样式，随手切换** —— 商籁 · 凝彩 · 绘光 · 花火 · 流光 · 心象 · 云阶 · 浮名 · 倾诉 · 回环 · 莫奈 ·
   时计 · 群唱 · 镜台 · 静止。
-- **设置页与 Folia 1:1** ——「歌词样式」窗口复用 Folia 自己的 React 组件；左侧大预览就是同源
-  iframe 里逐帧运行的真实渲染器，拖动任何滑块立刻看到结果。
+- **设置页与 Folia 1:1** ——「歌词样式」窗口复用 Folia 自己的 React 组件；左侧大预览**逐帧镜像播放页**：
+  同一个同源 iframe 渲染器、同一份播放页 config、同一条真实时钟，连「播放页透明背景」的透明效果也
+  真实呈现；拖动任何滑块立刻看到结果。
 - **桌面透明叠加** —— 全屏页右下角的圆钮面板可开关「播放页透明背景」：窗口变成真正的透明窗口，
   只留歌词与特效叠在桌面或其它窗口之上，适合直播 / OBS 叠加；第二行「鼠标穿透」让你一边放歌词
   一边照常操作电脑，**Ctrl+Alt+B** 随时恢复不透明。
@@ -55,7 +56,7 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖矩阵与闪退排查见
 [docs/runtime-requirements.md](docs/runtime-requirements.md)。
 
-1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.0.spmod`。
+1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.1-preview.1.spmod`。
 2. SPW → **设置 → 插件 / 创意工坊 → 导入插件**，选择该文件并启用；询问时授予 **class-transform**
    （「钩子」）权限——菜单 hook 需要它；再授予 **key-bindings**（「快捷键」）——透明快捷键需要它
    （漏了也可以在插件权限页补授后重启 SPW）。
@@ -81,13 +82,13 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖
 
 ## 版本
 
-当前 **v0.4.0**。每个版本的 `.spmod` 与 SHA-256 校验值都在
+当前 **v0.4.1-preview.1**。每个版本的 `.spmod` 与 SHA-256 校验值都在
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)；逐版变更与验收证据归档在
 [docs/archive/](docs/archive/)，仓库内不再重复。
 
 v0.3.1 的发布产物已在 Windows 11 + 真实 SPW **1.19.0 与 1.19.2** 上完成端到端验收：菜单条目 →
-全屏渲染、0 页面错误、0 外部网络请求、16 分钟长稳、设置持久化、无残留辅助进程。v0.4.0 把样式扩到
-**15 种**（新增「花火」）并加入随机样式池、自定义字体与托盘入口，**真机逐样式验收待发布前完成**。
+全屏渲染、0 页面错误、0 外部网络请求、16 分钟长稳、设置持久化、无残留辅助进程。v0.4.0 把样式扩到 **15 种**（新增「花火」）并加入随机样式池、自定义字体与托盘入口；v0.4.1 让设置页
+预览变成播放页的真实镜像（真实歌曲/歌词/背景/透明状态 + 真实时钟），并移除「预览文本」选项。
 
 ## 从源码构建
 
@@ -97,7 +98,7 @@ v0.3.1 的发布产物已在 Windows 11 + 真实 SPW **1.19.0 与 1.19.2** 上�
 ```bat
 :: 1) 插件（Kotlin，官方 SPW 创意工坊 Gradle 插件）
 cd spw-folia
-gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.0.spmod
+gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.1.spmod
 
 :: 2) 原生辅助进程（C# + WebView2）
 cd ..\poc\webview\host
@@ -110,8 +111,8 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 :: 4) 组装可分发 .spmod（插件 classes + 暂存 web bundle + 原生进程 + 许可证）
 bash packaging/build-package.sh     :: 暂存 packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
-    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.0.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.0.spmod
+    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
+    --staging packaging --out dist/release --name spw-folia-0.4.1-preview.1.spmod
 ```
 
 完整的打包流水线、payload 清单、大小预算与发布检查表见 [docs/release.md](docs/release.md)。

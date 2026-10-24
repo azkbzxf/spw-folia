@@ -792,3 +792,15 @@ html[data-spw-transparent='true'] .visualizer-still div[class*='bg-[radial-gradi
     color: rgba(255, 255, 255, 0.42);
 }
 
+/* v0.4.1 真实预览: with the player window transparent the iframe paints no background at all, so the
+ * stage shows the usual "transparency" checkerboard instead of the old preset theme colour. */
+.st-stage-transparent {
+    background-color: #26262b;
+    background-image:
+        linear-gradient(45deg, #34343a 25%, transparent 25%, transparent 75%, #34343a 75%),
+        linear-gradient(45deg, #34343a 25%, transparent 25%, transparent 75%, #34343a 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+}
+
+

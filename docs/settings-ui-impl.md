@@ -38,7 +38,7 @@ npm install          # 或 pnpm install
 npm run build        # = vite build，产物在 dist/
 ```
 
-- 产物：`dist/settings-ui.js`（v0.4.0 构建 **2,239.57 kB**，gzip 711.74 kB；含内联 CSS 与全部 React 组件）、`dist/thumbs/`（15×jpg，由 `public/thumbs` 原样拷贝）、`dist/assets/cacheUsage.worker-*.js`（Folia 侧 worker chunk，浏览器按需加载，可忽略）。
+- 产物：`dist/settings-ui.js`（v0.4.1 构建 **2,237,591 字节**，gzip 705,576 字节；含内联 CSS 与全部 React 组件）、`dist/thumbs/`（15×jpg，由 `public/thumbs` 原样拷贝）、`dist/assets/cacheUsage.worker-*.js`（Folia 侧 worker chunk，浏览器按需加载，可忽略）。
 - 入口配置（`vite.config.ts`）：`base: './'`、`rollupOptions.input.settings = src/main.tsx`、`entryFileNames: 'settings-ui.js'`、`cssCodeSplit: false`、`inlineCssIntoEntry()` 插件把 CSS 合并后以 `<style data-spw-settings-ui-css>` 注入，保证宿主只加一个 script 标签也能带样式。
 - 宿主注入（webview-spike 的实现）：
   ```bash
@@ -132,7 +132,6 @@ npm run build        # = vite build，产物在 dist/
     "subtitleFontWeight": null,
     "subtitleFontScale": 1
   },
-  "previewPlaceholderId": "default",    // default|reserved（预览示例歌词）
   "lyricMotion": 0.8,                  // 0.5–1.2（v1 树已有；本窗口暂无控件，见 §7）
   "textureResolution": 1.5             // 0.5–4.0，0.25 步进（样式面板内另有 per-style 同名值）
 }

@@ -2,7 +2,7 @@
 
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
-Last verified: 2026-10-24 (v0.4.0 preview artifact; host `spw-folia-host.exe` 152,576 B, WebView2 150.0.4078.83).
+Last verified: 2026-10-24 (v0.4.1 preview artifact; host `spw-folia-host.exe` 152,576 B, WebView2 150.0.4078.83).
 
 ## 1. What ships
 
@@ -18,7 +18,7 @@ packaging/
     settings/thumbs/*.jpg      #    real Folia style thumbnails (14 staged as of v0.3.0; 15 with 花火)
     _host/shim.js, overlay.js  #    audit copies of the scripts embedded in the exe
   native/                      # -> .spmod/native/ (plugin resolveHelper also accepts lib/)
-    spw-folia-host.exe         #    C# .NET Framework 4.8 helper (152,576 B as of v0.4.0)
+    spw-folia-host.exe         #    C# .NET Framework 4.8 helper (152,576 B as of v0.4.1)
     spw-folia-host.exe.config  #    PerMonitorV2 DPI + supportedRuntime v4.8
     Microsoft.Web.WebView2.Core.dll
     Microsoft.Web.WebView2.WinForms.dll
@@ -55,7 +55,7 @@ Current sizes (`packaging/size-report.json`, `bash packaging/build-package.sh` o
 | **total** | **3,837** | **25.97 MB** (budget 25 MB: OVER by 0.97 MB) |
 
 The uncompressed staging total is text-heavy and over the historical 25 MB guard, but the shipped
-`.spmod` is **12,193,169 B (11.63 MiB)** as of `v0.4.0-preview.2` — the budget is a rough staging
+`.spmod` is **12,191,035 B (11.63 MiB)** as of `v0.4.1-preview.1` — the budget is a rough staging
 bloat guard, the artifact size is what users download. The growth comes from upstream Folia 0.7.22
 (19.54 → 20.01 MB of `assets/`) and the settings island now pulling the whole visualizer registry
 (1,950 files in `settings/assets`); two extra passes compensate ~7.3 MB:
@@ -314,20 +314,20 @@ every `.spmod`).
 | v0.2.1 | 13,152,604 | 1,941 | `56c0aa4177a1bea8fe0078a9c27ab2dee264f0c85387af0a667086cd39f0e792` | 2026-10-20 |
 | v0.2.2 | 13,153,013 | 1,941 | `ca74c7fc4b6ce807af582f8dcbae041f4001bbf8b291e86e3be29a30f9fa38ac` | 2026-10-21 |
 | **v0.3.0** | **13,178,430** | **1,943** | `7f79d9dc8184c1119ce42a6dc59e1036fb3ffee6bb883c0c603cfdd977d80744` | 2026-10-21 |
+| v0.4.0-preview.1 | 20,029,633 | 3,925 | `4c3f252deca659697a687681538d96b492054b64b6f1865bd82b4c720d07fcd3` | 2026-10-24 |
+| v0.4.0-preview.2 | 12,193,169 | 3,896 | `1c9816a992cd303a93b1b24e7601657c36d82247dceddf36e2e768c3e2e7e7cb` | 2026-10-24 |
+| **v0.4.1-preview.1** | **12,191,035** | **3,896** | `6e07ae30a3f2a1f92c165afa0cb516fa87b75a7484bc909690c8001532a6b7fb` | 2026-10-24 |
 
 `local only` builds were verified on a real install but never uploaded; their changes shipped inside
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes
 (see [`archive/verification-v0.1.11.md`](archive/verification-v0.1.11.md)) went out with v0.2.0.
 
-Current release payload (v0.4.0): plugin classes 112,411 B (`18e89d9e…`, the Gradle-built
-`classes/` + metadata zip; 238,514 B uncompressed), native host 134,144 B (`536037d5…`, new
-control→stdin / queue→page relay and X-button forwarding), settings island 1,093,739 B
-(`62609003…`, playback controls / acrylic HUD / transparency fixes), complete Folia 0.7.22 OBS
-bundle + licenses. **The byte figures in this paragraph are the v0.3.0 staging result** (staged
-payload 1,910 files / 24.57 MB — web 1,898 / 22.37 MB, native 5 / 1.02 MB, licenses 7 / 0.05 MB —
-against a 25 MB budget); v0.4.0 swaps in the Folia 0.7.22 bundle (new 花火 style) and a rebuilt
-settings island, so its own numbers are recorded once the artifact is re-staged. Verify a
-downloaded artifact with:
+Current release payload (v0.4.1-preview.1): plugin classes zip 205,694 B (the Gradle-built
+`plugin-dev.spw.folia-0.4.1.spmod`; `classes/` is 439,249 B uncompressed), native host
+`spw-folia-host.exe` 152,576 B, settings island 2,237,591 B, complete Folia 0.7.22 OBS bundle +
+licenses. The staged payload is 3,837 files / 27,231,100 B (web 3,825 / 26,096,876 B, native 5 /
+1,084,854 B, licenses 7 / 49,370 B) against the historical 25 MB staging guard; the shipped
+`.spmod` is 12,191,035 B with sha256 `6e07ae30…`. Verify a downloaded artifact with:
 
 ```bash
 sha256sum spw-folia-0.3.0.spmod    # compare with the ledger row and the release's SHA256SUMS.txt

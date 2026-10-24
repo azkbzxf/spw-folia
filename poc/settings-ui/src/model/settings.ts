@@ -53,10 +53,6 @@ export type SettingsSection = 'visualizer' | 'background' | 'common' | 'subtitle
 
 export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
 
-/** 预览文本 choices. `current` (v0.4.0) samples the song that is actually playing; it is the
- *  default so the font section previews the user's own lyrics, matching Folia 0.7.22. */
-export type PreviewPlaceholderId = 'current' | 'default' | 'reserved';
-
 /** Each style's tuning defaults, imported from Folia so its own panel shows Folia's values. */
 export const STYLE_TUNING_DEFAULTS: Record<StyleMode, Record<string, unknown>> = {
     sonnet: { ...DEFAULT_SONNET_TUNING },
@@ -240,9 +236,6 @@ interface SettingsState {
     /** Another style from the pool for the song that is playing (never the current one). */
     rerollVisualizerMode: () => void;
 
-    previewPlaceholderId: PreviewPlaceholderId;
-    setPreviewPlaceholderId: (id: PreviewPlaceholderId) => void;
-
     /** Folia storage keys mirrored for round-trip fidelity (no control in this window yet). */
     lyricMotion: number;
     setLyricMotion: (value: number) => void;
@@ -348,9 +341,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         get().setVisualizerMode(mode, { preserveRandom: options?.preserveRandom }),
     handleToggleRandomVisualizerModePerSong: enable => get().setRandomVisualizerModePerSong(enable),
     handleSetRandomVisualizerModes: modes => get().setRandomVisualizerModes(modes),
-
-    previewPlaceholderId: 'current',
-    setPreviewPlaceholderId: previewPlaceholderId => set({ previewPlaceholderId }),
 
     lyricMotion: DEFAULT_LYRIC_MOTION,
     setLyricMotion: lyricMotion => set({ lyricMotion }),
@@ -481,7 +471,6 @@ export interface SettingsSnapshot {
     /** v0.4.0: imported font descriptors (the files live in IndexedDB). */
     uploadedFonts: UploadedFontDescriptor[];
     subtitle: SubtitleSettings;
-    previewPlaceholderId: PreviewPlaceholderId;
     lyricMotion: number;
     textureResolution: number;
     transparentPlayerBackground: boolean;
@@ -501,7 +490,6 @@ export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
     appearance: state.appearance,
     uploadedFonts: state.uploadedFonts,
     subtitle: state.subtitle,
-    previewPlaceholderId: state.previewPlaceholderId,
     lyricMotion: state.lyricMotion,
     textureResolution: state.textureResolution,
     transparentPlayerBackground: state.transparentPlayerBackground,
@@ -534,7 +522,6 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
             appearance: { ...state.appearance, ...clean(snapshot.appearance, {} as AppearanceSettings) },
             uploadedFonts: Array.isArray(snapshot.uploadedFonts) ? snapshot.uploadedFonts : state.uploadedFonts,
             subtitle: { ...state.subtitle, ...clean(snapshot.subtitle, {} as SubtitleSettings) },
-            previewPlaceholderId: clean(snapshot.previewPlaceholderId, state.previewPlaceholderId),
             lyricMotion: clean(snapshot.lyricMotion, state.lyricMotion),
             textureResolution: clean(snapshot.textureResolution, state.textureResolution),
             transparentPlayerBackground: transparentBlocked

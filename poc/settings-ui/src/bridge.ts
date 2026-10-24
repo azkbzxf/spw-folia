@@ -77,6 +77,8 @@ export interface SpwFoliaBridge {
     getSettings: () => unknown;
     setSettings: (partial: unknown) => void;
     requestClose?: () => void;
+    /** v0.4.1: the last config the player page received (Shim.js keeps it for the real preview). */
+    lastConfig?: () => ObsBrowserSourceConfig | null;
     inputs?: {
         state?: BridgeStateMessage | null;
         lyrics?: unknown;

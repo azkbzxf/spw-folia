@@ -9,12 +9,21 @@
 //
 // Parent -> child (all messages carry __spwFoliaPreview: 1):
 //   {kind:'config', payload: ObsBrowserSourceConfig}
-//   {kind:'meta',   payload: {loopDuration, startOffset}}     seconds
+//   {kind:'live',   payload: true}        v0.4.1: no synthesized timeline from now on
+//   {kind:'state',  payload: {posMs,durationMs,playing,rate,tsMs,lyricOffsetMs?}}
+//                                         the host's real clock, forwarded by the parent
+//   {kind:'audio',  payload: {power?,audioPower?,bands,spectrum}}  the host's real audio
+//   {kind:'meta',   payload: {loopDuration, startOffset}}     legacy fallback (no parent clock)
 //   {kind:'paused', payload: boolean}
 // Child -> parent:
 //   {kind:'ready', payload:{}}       retried at 0/100/300/1000/2000 ms until the first config
 //   {kind:'error', payload:{message}} init failure (parent falls back to the static preview)
-//   {kind:'stats', payload:{canvases, frames}}  ~1 Hz
+//   {kind:'stats', payload:{canvases, frames, clockMs, playerState, live}}  ~1 Hz
+//
+// v0.4.1 真实预览: the parent forwards the actual host state/audio events of the song that is
+// playing, so the iframe shows the real track at the real position, with the config the player is
+// showing (including `background.transparent`). The synthetic timeline below is only the fallback
+// for a parent that never sends `live` (old bundle / the diag-preview harness).
 //
 // Motion synthesis mirrors src/components/visualizer/preview/useVisPlaygroundPreviewPlayback.ts:
 // while playing, clock advances with rAF dt and wraps over loopDuration; audioPower/bands/spectrum
@@ -64,6 +73,9 @@
   var configTimer = null;
   var statsTimer = null;
   var readyTimers = [];
+  var live = false;           // parent forwards the host's real clock/audio; synthesis is off
+  var liveLastState = null;   // last real host `state` payload (used to pin/resume the clock)
+  var liveLastClock = null;   // last clock delivered, already in the page's SSE shape
 
   // ---------------------------------------------------------------- diagnostics
 
@@ -82,13 +94,14 @@
   });
 
   // The acceptance eval reads window.__SPW_FOLIA_PREVIEW__.{receivedConfig,frames,canvases}.
-  var summary = { receivedConfig: false, frames: 0, canvases: 0, paused: false, clockMs: 0, playerState: null, loopDuration: loopDuration, startOffset: startOffset, errors: 0 };
+  var summary = { receivedConfig: false, frames: 0, canvases: 0, paused: false, clockMs: 0, playerState: null, loopDuration: loopDuration, startOffset: startOffset, errors: 0, live: false, configTransparent: false, songTitle: null, configUpdatedAt: null, configLyricCount: 0 };
   window.__SPW_FOLIA_PREVIEW__ = summary;
   function refreshSummary() {
     summary.receivedConfig = receivedConfig;
     summary.frames = frames;
     summary.canvases = canvases;
     summary.paused = paused;
+    summary.live = live;
     summary.loopDuration = loopDuration;
     summary.startOffset = startOffset;
   }
@@ -192,6 +205,84 @@
     };
   }
 
+  // ---------------------------------------------------------------- real host clock/audio
+
+  // v0.4.1: the parent forwards the host's real `state`/`audio` events; translate them exactly like
+  // the top-page Shim (Shim.js `toClock` / `toAudio`) so Folia's renderer cannot tell the two apart.
+  var ZERO_BANDS = { bass: 0, lowMid: 0, mid: 0, vocal: 0, treble: 0 };
+
+  function stateToClock(state) {
+    return {
+      currentTime: (typeof state.posMs === 'number' ? state.posMs : 0) / 1000,
+      duration: (typeof state.durationMs === 'number' ? state.durationMs : 0) / 1000,
+      playerState: state.playing === false ? 'PAUSED' : 'PLAYING',
+      sentAtMs: Date.now(),
+      playbackRate: typeof state.rate === 'number' ? state.rate : 1,
+      lyricOffsetMs: (typeof state.lyricOffsetMs === 'number' ? state.lyricOffsetMs : 0) / 1000
+    };
+  }
+
+  function audioToEvent(msg) {
+    var bands = msg.bands;
+    if (bands && Object.prototype.toString.call(bands) === '[object Array]') {
+      bands = { bass: bands[0] || 0, lowMid: bands[1] || 0, mid: bands[2] || 0, vocal: bands[3] || 0, treble: bands[4] || 0 };
+    } else if (!bands) {
+      bands = {
+        bass: msg.bass || 0, lowMid: msg.lowMid || 0, mid: msg.mid || 0,
+        vocal: msg.vocal || 0, treble: msg.treble || 0
+      };
+    }
+    var spectrum = msg.spectrum;
+    if (spectrum && Object.prototype.toString.call(spectrum) === '[object Array]') {
+      var bytes = new Uint8Array(spectrum.length);
+      for (var i = 0; i < spectrum.length; i++) {
+        var value = spectrum[i] | 0;
+        bytes[i] = value < 0 ? 0 : (value > 255 ? 255 : value);
+      }
+      spectrum = bytes;
+    } else if (!spectrum) {
+      spectrum = new Uint8Array(0);
+    }
+    return {
+      audioPower: typeof msg.power === 'number' ? msg.power : (msg.audioPower || 0),
+      bands: bands || ZERO_BANDS,
+      spectrum: spectrum,
+      sentAtMs: Date.now()
+    };
+  }
+
+  function deliverLiveClock(state) {
+    var clock = stateToClock(state);
+    liveLastClock = clock;
+    summary.clockMs = clock.currentTime * 1000;
+    summary.playerState = clock.playerState;
+    deliver('clock', clock);
+  }
+
+  function applyLive() {
+    if (live) return;
+    live = true;
+    lastTick = null;
+    // `live` arrives before the first state; the page keeps a sane clock in the meantime.
+    if (liveLastState) deliverLiveClock(liveLastState);
+    refreshSummary();
+  }
+
+  function applyLiveState(state) {
+    if (!state || typeof state !== 'object') return;
+    liveLastState = state;
+    if (!live) applyLive();
+    if (paused) return;      // the parent stops forwarding while paused; applyPaused pinned the clock
+    deliverLiveClock(state);
+  }
+
+  function applyLiveAudio(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (!live) applyLive();
+    if (paused) return;
+    deliver('audio', audioToEvent(msg));
+  }
+
   function emitClock(nowMs, playerState) {
     // Expose the synthesized clock for acceptance evals: paused => clockMs stays pinned, so a probe can
     // assert |delta clockMs| over time instead of relying only on pixel diffs (Folia's grain noise is
@@ -210,7 +301,10 @@
 
   function tick(now) {
     try {
-      if (!paused) {
+      if (live) {
+        // v0.4.1: the real clock/audio arrive from the parent; nothing to synthesize. The loop stays
+        // alive so `frames` keeps counting and a legacy `meta` could still take over.
+      } else if (!paused) {
         var previous = lastTick === null ? now : lastTick;
         var dt = (now - previous) / 1000;
         if (!(dt >= 0) || dt > 1) dt = 0;      // tab throttling / first frame
@@ -240,6 +334,11 @@
   function applyConfig(payload) {
     if (!payload || typeof payload !== 'object') return;
     receivedConfig = true;
+    // v0.4.1 inspection fields: the acceptance probes read these instead of poking Folia's store.
+    summary.configTransparent = !!(payload.background && payload.background.transparent === true);
+    summary.songTitle = payload.song && typeof payload.song.name === 'string' ? payload.song.name : null;
+    summary.configUpdatedAt = typeof payload.updatedAt === 'number' ? payload.updatedAt : null;
+    summary.configLyricCount = payload.lyrics && payload.lyrics.lines ? payload.lyrics.lines.length : 0;
     if (configTimer) { clearTimeout(configTimer); configTimer = null; }
     for (var i = 0; i < readyTimers.length; i++) clearTimeout(readyTimers[i]);
     readyTimers = [];
@@ -272,6 +371,28 @@
       }
     }
     if (!paused) lastTick = null;
+    if (live) {
+      // v0.4.1: the parent stops forwarding clock/audio while paused. Pin the frozen position as a
+      // PAUSED clock so Folia does not keep extrapolating a PLAYING one, then resume from the last
+      // real state so the lyrics jump forward exactly as much as the song did while paused.
+      if (paused) {
+        if (liveLastClock) {
+          var pinned = {
+            currentTime: liveLastClock.currentTime,
+            duration: liveLastClock.duration,
+            playerState: 'PAUSED',
+            sentAtMs: Date.now(),
+            playbackRate: liveLastClock.playbackRate,
+            lyricOffsetMs: liveLastClock.lyricOffsetMs
+          };
+          summary.clockMs = pinned.currentTime * 1000;
+          summary.playerState = 'PAUSED';
+          deliver('clock', pinned);
+        }
+      } else if (liveLastState) {
+        deliverLiveClock(liveLastState);
+      }
+    }
     refreshSummary();
   }
 
@@ -280,6 +401,9 @@
     if (!data || typeof data !== 'object' || data.__spwFoliaPreview !== 1) return;
     var payload = data.payload !== undefined ? data.payload : data.value;
     if (data.kind === 'config') applyConfig(payload);
+    else if (data.kind === 'live') applyLive();
+    else if (data.kind === 'state') applyLiveState(payload);
+    else if (data.kind === 'audio') applyLiveAudio(payload);
     else if (data.kind === 'meta') applyMeta(payload);
     else if (data.kind === 'paused') applyPaused(payload !== undefined ? payload : data.paused);
   });

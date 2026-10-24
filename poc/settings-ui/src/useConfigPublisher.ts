@@ -1,6 +1,6 @@
 /* Feeds the config publisher from every input the page owns: the persisted settings, the host's
  * track/lyrics events, and the cover-derived theme (protocol §4). */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
     getBridge,
     bridgeOn,
@@ -15,6 +15,7 @@ import { ConfigPublisher, type PublisherLyricLine, type PublisherTrack } from '~
 import { sampleCover, themeFromSample, type CoverSample } from '~/publisher/deriveTheme';
 import { applyThemeFonts } from '~/publisher/themeFonts';
 import type { Theme } from '@/types';
+import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 
 const isLyricLine = (value: unknown): value is { startMs: number; endMs: number; main: string } =>
     Boolean(value) && typeof value === 'object' && typeof (value as { main?: unknown }).main === 'string';
@@ -77,9 +78,90 @@ let lastPublishedSubtitleTheme: Theme | null = null;
 export const getLastPublishedTheme = (): Theme | null => lastPublishedTheme;
 export const getLastPublishedSubtitleTheme = (): Theme | null => lastPublishedSubtitleTheme;
 
+/* v0.4.1 真实预览: the stage used to rebuild a config of its own from hand-copied placeholder songs,
+ * which made the preview a simulation. The window now renders the config the player page actually
+ * received: Shim.js keeps the last `config` event (the page-side publisher's pushConfig and a
+ * host-sent config both land there) and re-emits it as a local bridge event, so the stage follows the
+ * player instead of guessing — same track, lyrics, theme, background and transparent flag. */
+let playerConfig: ObsBrowserSourceConfig | null = null;
+const configSubscribers = new Set<(config: ObsBrowserSourceConfig) => void>();
+let configSourceBound = false;
+
+/** Diagnostic ring for the real-preview acceptance probe (v0.4.1). */
+interface PublishHistoryEntry {
+    at: number;
+    song: string | null;
+    lyricLines: number;
+    transparent: boolean;
+    updatedAt: number;
+}
+const publishHistory: PublishHistoryEntry[] = [];
+
+export const getPlayerConfig = (): ObsBrowserSourceConfig | null => playerConfig;
+
+/** Subscribe to every config the player page receives (the stage renders the preview with it). */
+export const subscribePlayerConfig = (listener: (config: ObsBrowserSourceConfig) => void): (() => void) => {
+    configSubscribers.add(listener);
+    return () => {
+        configSubscribers.delete(listener);
+    };
+};
+
+const rememberPlayerConfig = (config: ObsBrowserSourceConfig | null | undefined): void => {
+    if (!config || config === playerConfig) return;
+    playerConfig = config;
+    // Diagnostic ring the real-preview acceptance probe reads (v0.4.1).
+    publishHistory.push({
+        at: Math.round(performance.now()),
+        song: config.song?.name ?? null,
+        lyricLines: config.lyrics?.lines?.length ?? 0,
+        transparent: !!config.background?.transparent,
+        updatedAt: config.updatedAt,
+    });
+    if (publishHistory.length > 40) publishHistory.shift();
+    (window as unknown as Record<string, unknown>).__spwFoliaPublishHistory = publishHistory;
+    for (const listener of [...configSubscribers]) {
+        try {
+            listener(config);
+        } catch (error) {
+            console.error('[settings-ui] player-config listener failed', error);
+        }
+    }
+};
+
+/** Diagnostic: the last configs handed to the player (v0.4.1 real-preview probe). */
+export const getPublishHistory = () => publishHistory;
+
+/** Bind the player-config source once: the shim's cached config + every later `config` event. */
+const ensurePlayerConfigSource = (): void => {
+    if (configSourceBound) return;
+    configSourceBound = true;
+    try {
+        const bridge = getBridge();
+        rememberPlayerConfig(bridge.lastConfig?.() ?? null);
+        bridgeOn<ObsBrowserSourceConfig | null>('config', next => rememberPlayerConfig(next));
+    } catch (error) {
+        console.warn('[settings-ui] player-config source unavailable', error);
+    }
+};
+
+/** The config the player currently shows; `null` until the player received one. */
+export const usePlayerConfig = (): ObsBrowserSourceConfig | null => {
+    const [config, setConfig] = useState<ObsBrowserSourceConfig | null>(() => playerConfig);
+    useEffect(() => {
+        ensurePlayerConfigSource();
+        setConfig(playerConfig);
+        return subscribePlayerConfig(setConfig);
+    }, []);
+    return config;
+};
+
 export const useConfigPublisher = (): void => {
     useEffect(() => {
         const bridge = getBridge();
+        // v0.4.1 真实预览: remember whatever config the player page already holds and follow every
+        // later `config` event, so the stage can mirror the player even before this effect publishes.
+        ensurePlayerConfigSource();
         // The last cover sample (v0.3.0): the base theme is rebuilt synchronously from it, with the
         // 字体 settings applied on top (v0.1.3) and the effective lightness chosen per mode.
         let coverSample: CoverSample | null = null;
@@ -119,7 +201,12 @@ export const useConfigPublisher = (): void => {
             return { settings: snapshotFromState(state), theme, subtitleTheme, isDaylight: derived.isDaylight };
         };
 
-        const publisher = new ConfigPublisher({ pushConfig: config => bridge.pushConfig(config) }, {
+        const publisher = new ConfigPublisher({ pushConfig: config => {
+            // The shim re-emits `config` locally, so this only feeds the preview when the page has no
+            // shim (browser dev): identity-checked, so the shim path never double-notifies.
+            rememberPlayerConfig(config);
+            bridge.pushConfig(config);
+        } }, {
             ...themedInputs(),
             track,
             lyricOffsetMs: bridge.inputs?.state?.lyricOffsetMs ?? 0,

@@ -61,7 +61,9 @@ def add_tree(zf: zipfile.ZipFile, root: Path, arc_prefix: str, skip=()) -> int:
         info.compress_type = zipfile.ZIP_DEFLATED
         with open(path, "rb") as fh:
             data = fh.read()
-        zf.writestr(info, data)
+        # Python 3.14's zipfile only forwards ZipFile(compresslevel=...) to entries passed
+        # as plain names, not to explicit ZipInfo objects, so pass it here as well.
+        zf.writestr(info, data, compresslevel=9)
         count += 1
     return count
 

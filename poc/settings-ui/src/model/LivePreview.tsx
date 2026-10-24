@@ -4,6 +4,11 @@
  * renderer into settings-ui.js we load `preview.html` (a copy of the OBS page plus a child-frame
  * shim) and drive it over postMessage: see docs/live-preview-iframe.md for the frozen contract.
  *
+ * v0.4.1 真实预览: the child no longer runs a synthesized timeline and a placeholder song. The
+ * parent forwards the host's real `state`/`audio` events (the same ones the player page consumes)
+ * and the exact config the publisher just handed to the host, so the stage is a true mirror of the
+ * player — real track, real lyrics, real background and the transparent-playback effect.
+ *
  * The iframe is laid out at a fixed 1920x1080 CSS px — Folia's surface only reaches its fullscreen
  * layout when the viewport is >= 1080p — and then scaled to cover the stage box with Folia's own
  * 1.15 "sample zoom", exactly like VisPlayground does for its live sample. pointer-events stay off
@@ -15,6 +20,7 @@
  * at page load. */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
+import { bridgeOn } from '~/bridge';
 import type { UploadedFontDescriptor } from '~/model/settings';
 import { loadUploadedFontFile } from '~/model/uploadedFonts';
 
@@ -27,11 +33,20 @@ const READY_TIMEOUT_MS = 4000;
 /** postMessage budget: the settings UI pushes config at most 10 Hz (protocol §4). */
 const MESSAGE_MIN_INTERVAL_MS = 100;
 
+/** The host `state` event (docs/protocol.md §3): the raw clock the player page interpolates from. */
+interface BridgeStatePayload {
+    posMs?: number;
+    durationMs?: number;
+    playing?: boolean;
+    rate?: number;
+    tsMs?: number;
+    lyricOffsetMs?: number;
+}
+
 interface LivePreviewProps {
     paused: boolean;
+    /** The exact config the publisher pushed to the player; the child renders it verbatim. */
     config: ObsBrowserSourceConfig;
-    loopDuration: number;
-    startOffset: number;
     /** v0.4.0: uploaded fonts, re-registered in the iframe document (see `applyUploadedFonts`). */
     uploadedFonts: UploadedFontDescriptor[];
     onError?: (message?: string) => void;
@@ -45,7 +60,7 @@ interface PreviewMessage {
 
 const IFRAME_URL = () => `${window.location.origin}/preview.html?obs=1&preview=1`;
 
-const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration, startOffset, uploadedFonts, onError }) => {
+const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts, onError }) => {
     const wrapperRef = useRef<HTMLDivElement | null>(null);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const onErrorRef = useRef(onError);
@@ -181,7 +196,8 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
                     readyTimerRef.current = null;
                 }
                 lastSentAtRef.current = performance.now();
-                send('meta', { loopDuration, startOffset });
+                // v0.4.1: live mode — no synthesized timeline; the parent forwards the host's clock.
+                send('live', true);
                 send('paused', pausedRef.current || hiddenRef.current);
                 // Register uploaded fonts in the child document *before* the first config: Folia calls
                 // document.fonts.load(family) while applying the config, and a face added afterwards
@@ -210,7 +226,7 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
         };
         window.addEventListener('message', onMessage);
         return () => window.removeEventListener('message', onMessage);
-    }, [applyUploadedFonts, fail, loopDuration, send, startOffset]);
+    }, [applyUploadedFonts, fail, send]);
 
     // 4 s without `ready` (missing preview.html, broken shim) → fall back to the static sample. The
     // clock only runs while the iframe is actually loaded and the stage is visible: the settings
@@ -247,10 +263,22 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, loopDuration,
         };
     }, [applyUploadedFonts, ready, scheduleConfig]);
 
+    // v0.4.1 真实预览: forward the host's real clock/audio to the child, the same events the player
+    // page consumes. The preview shim turns them into the SSE shapes Folia's renderer expects
+    // (clock/audio) and stops its own synthetic tick; nothing is forwarded while paused or hidden,
+    // because the child pins its last clock then.
     useEffect(() => {
-        if (!ready) return;
-        send('meta', { loopDuration, startOffset });
-    }, [loopDuration, startOffset, ready, send]);
+        const forward = (kind: 'state' | 'audio') => (payload: unknown) => {
+            if (!readyRef.current || pausedRef.current || hiddenRef.current) return;
+            send(kind, payload);
+        };
+        const offState = bridgeOn<BridgeStatePayload>('state', forward('state'));
+        const offAudio = bridgeOn<unknown>('audio', forward('audio'));
+        return () => {
+            offState();
+            offAudio();
+        };
+    }, [send]);
 
     // The overlay is display:none while closed: freeze the child instead of paying for a hidden 1080p
     // renderer. The pause button freezes it too.

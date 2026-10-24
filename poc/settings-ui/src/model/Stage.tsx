@@ -6,23 +6,23 @@
  * drawn here (a Shuffle glyph) instead of through upstream's `drawLyricStyleChoice`, because that
  * helper pulls `LyricStylePicture` — and with it the whole renderer graph — into this bundle.
  *
- * The sample is Folia's real renderer running in the same-origin `preview.html` iframe
- * (docs/live-preview-iframe.md); the settings overlay injects the iframe and pumps it with a
- * `buildConfig` payload for one of the two placeholder songs, so the sample animates for real and
- * reacts to every style/tuning/background/font change. If the iframe never reports ready (older
- * bundle without preview.html, missing child shim) Stage falls back to the captured-frame sample
- * (StylePreview, Ken Burns) — the pause button drives whichever sample is showing. */
-import React, { useMemo, useState } from 'react';
+ * v0.4.1 真实预览: the sample is no longer a simulation. The stage renders the *exact* config the
+ * player page received (`usePlayerConfig`): the song that is playing, its
+ * lyrics, the user's theme/background choices and — when enabled — the transparent-playback flag.
+ * The same-origin `preview.html` iframe runs Folia's real renderer against that config and the
+ * parent forwards the host's real clock/audio events into it (docs/live-preview-iframe.md), so the
+ * window shows what the player window shows, including the transparent background (drawn as the
+ * standard checkerboard here). If the iframe never reports ready (older bundle without preview.html,
+ * missing child shim) Stage falls back to the captured-frame sample (StylePreview, Ken Burns) — the
+ * pause button drives whichever sample is showing. */
+import React, { useState } from 'react';
 import { Pause, Play, Shuffle } from 'lucide-react';
 import { PictureGrid } from '@/components/modal/settings/kit';
 import { STYLE_COUNT, STYLE_ENTRIES, getStyleEntry, type StyleEntry } from './styles';
 import StylePreview from './StylePreview';
 import LivePreview from './LivePreview';
-import { snapshotFromState, useSettingsStore, type StyleMode } from './settings';
-import { IS_DAYLIGHT, PREVIEW_THEME } from './theme';
-import { getPreviewPlaceholder, previewStartOffsetFor, previewTrackFor } from './previewSong';
-import { buildConfig } from '~/publisher/config';
-import { getLastPublishedSubtitleTheme, getLastPublishedTheme } from '~/useConfigPublisher';
+import { useSettingsStore, type StyleMode } from './settings';
+import { usePlayerConfig } from '~/useConfigPublisher';
 
 /** Folia's picker choice for the random pool; mirrors `random/lyricStyleChoices.tsx`. */
 const RANDOM_VISUALIZER_CHOICE = '__random__';
@@ -59,53 +59,36 @@ const drawShelf = (value: ShelfValue, state: { visible: boolean }): React.ReactN
     value === RANDOM_VISUALIZER_CHOICE ? <RandomPicture /> : <StylePicture mode={value} state={state} />
 );
 
-/** Placeholder covers live beside preview.html at the bundle root (`/preview/`). */
-const previewCoverBase = () => `${window.location.origin}/preview`;
-
 const Stage: React.FC<StageProps> = ({ t, visualizerMode, onVisualizerModeChange, randomEnabled, onRandomChange }) => {
     const [paused, setPaused] = useState(false);
     const [liveFailed, setLiveFailed] = useState(false);
     const settingsState = useSettingsStore();
-
-    const placeholder = getPreviewPlaceholder(settingsState.previewPlaceholderId);
-    // The live publisher already applied the 字体/字幕字体 selections to the theme; reuse the exact
-    // theme it published (falling back to the window's sample theme before its effect has run).
-    const theme = getLastPublishedTheme() ?? PREVIEW_THEME;
-    const subtitleTheme = getLastPublishedSubtitleTheme() ?? theme;
-
-    const config = useMemo(
-        () => buildConfig({
-            settings: snapshotFromState(settingsState),
-            track: previewTrackFor(settingsState.previewPlaceholderId, previewCoverBase()),
-            theme,
-            subtitleTheme,
-            isDaylight: IS_DAYLIGHT,
-        }),
-        // settingsState is the store object: any settings change rebuilds the payload.
-        [settingsState, theme, subtitleTheme],
-    );
-
-    const startOffset = previewStartOffsetFor(visualizerMode, placeholder.loopDuration);
+    // The player's current config, verbatim: no placeholder song, no guessed theme, no preset
+    // background. `null` only until the player page has received its first config.
+    const config = usePlayerConfig();
+    const transparent = config?.background?.transparent === true;
 
     return (
         <>
-            {/* Big sample: Folia's real renderer in a scaled 1920x1080 iframe; pause/play drives it. */}
+            {/* Big sample: Folia's real renderer in a scaled 1920x1080 iframe, showing the real song. */}
             <div
-                className="relative min-h-[160px] flex-1 overflow-hidden rounded-xl shadow-[0_0_0_1px_var(--st-line)]"
-                style={{ backgroundColor: theme.backgroundColor }}
+                className={`relative min-h-[160px] flex-1 overflow-hidden rounded-xl shadow-[0_0_0_1px_var(--st-line)]${transparent ? ' st-stage-transparent' : ''}`}
             >
-                {liveFailed
+                {config != null && (liveFailed
                     ? <StylePreview mode={visualizerMode} paused={paused} />
                     : (
                         <LivePreview
                             paused={paused}
                             config={config}
-                            loopDuration={placeholder.loopDuration}
-                            startOffset={startOffset}
                             uploadedFonts={settingsState.uploadedFonts}
                             onError={() => setLiveFailed(true)}
                         />
-                    )}
+                    ))}
+                {transparent && (
+                    <span className="absolute bottom-3 left-3 z-40 rounded-full bg-black/45 px-2.5 py-1 text-[11px] leading-none text-white/90">
+                        {t('options.transparentPlayerBackground')}
+                    </span>
+                )}
                 <button
                     type="button"
                     aria-label={t(paused ? 'options.resumePreview' : 'options.pausePreview')}

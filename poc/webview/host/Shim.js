@@ -117,7 +117,13 @@
 
   function deliver(name, data) {
     lastEvents[name] = data;
-    if (name === 'config') lastConfig = data;
+    if (name === 'config') {
+      lastConfig = data;
+      // v0.4.1 真实预览: the settings UI mirrors the config the player actually received (the page-side
+      // publisher's pushConfig and a host-sent config both land here), so the stage preview never has
+      // to guess. Local listeners are the page's `bridgeOn('config')` subscribers.
+      emitLocal('config', data);
+    }
     if (name === 'clock') lastClock = data;
     for (var i = 0; i < sources.length; i++) dispatch(sources[i], name, data);
   }

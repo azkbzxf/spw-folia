@@ -217,6 +217,34 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
                 find: "                            <Group def={HARMONY_GROUP}>\n                                <ToggleRow\n                                    label={t('options.showHarmonySubtitle')}\n                                    note={t('options.showHarmonySubtitleDesc')}\n                                    checked={showHarmonySubtitle}\n                                    disabled={!onToggleShowHarmonySubtitle}\n                                    onChange={next => onToggleShowHarmonySubtitle?.(next)}\n                                />\n                                <Reveal when={showHarmonySubtitle}>\n                                    <ToggleRow\n                                        sub\n                                        label={t('options.harmonySubtitleBackground')}\n                                        note={t('options.harmonySubtitleBackgroundDesc')}\n                                        checked={harmonySubtitleBackground}\n                                        disabled={!onToggleHarmonySubtitleBackground}\n                                        onChange={next => onToggleHarmonySubtitleBackground?.(next)}\n                                    />\n                                </Reveal>\n                            </Group>\n",
                 replace: '',
             },
+            // v0.4.1 真实预览: the stage always previews the song that is playing, so the 预览文本
+            // choice (placeholder songs) has no meaning any more. Remove the row and the plumbing the
+            // reused panel would otherwise require from App.tsx.
+            {
+                what: 'preview text import',
+                find: /^import \{ type PreviewPlaceholderId \} from '[^']*';\r?\n/m,
+                replace: '',
+            },
+            {
+                what: 'preview text props',
+                find: '    previewPlaceholderId: PreviewPlaceholderId;\n    previewPlaceholderOptions: PresetOption<PreviewPlaceholderId>[];\n    onPreviewPlaceholderChange: (id: PreviewPlaceholderId) => void;\n',
+                replace: '',
+            },
+            {
+                what: 'preview text destructure',
+                find: '        previewPlaceholderId,\n        previewPlaceholderOptions,\n        onPreviewPlaceholderChange,\n',
+                replace: '',
+            },
+            {
+                what: 'preview text reset call',
+                find: "                    onPreviewPlaceholderChange('default');\n",
+                replace: '',
+            },
+            {
+                what: 'preview text row',
+                find: "                            <Row label={t('options.previewText')}>\n                                <Segmented value={previewPlaceholderId} options={previewPlaceholderOptions} onChange={onPreviewPlaceholderChange} />\n                            </Row>\n",
+                replace: '',
+            },
         ],
     },
     {

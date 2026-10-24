@@ -65,7 +65,7 @@ Windows 11; install "Microsoft Edge WebView2 Runtime" on Windows 10) · .NET Fra
 since Windows 10 1903). The full dependency matrix and crash troubleshooting live in
 [docs/runtime-requirements.md](docs/runtime-requirements.md).
 
-1. Download `spw-folia-0.4.0.spmod` from [Releases](https://github.com/azkbzxf/spw-folia/releases).
+1. Download `spw-folia-0.4.1-preview.1.spmod` from [Releases](https://github.com/azkbzxf/spw-folia/releases).
 2. SPW → **Settings → Plugins / Workshop → Import plugin**, pick the file and enable it. Grant the
    **class-transform** ("hook") permission when asked — the menu hook needs it; also grant
    **key-bindings** ("shortcuts") for the transparency shortcuts (you can grant it later on the
@@ -96,15 +96,16 @@ directory.
 
 ## Versions
 
-Currently **v0.4.0**. The `.spmod` and its SHA-256 checksum for every release are on
+Currently **v0.4.1-preview.1**. The `.spmod` and its SHA-256 checksum for every release are on
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases); per-version notes and acceptance
 evidence are archived in [docs/archive/](docs/archive/) rather than repeated here.
 
 The v0.3.1 artifact was accepted end to end on Windows 11 against a real SPW 1.19.0 **and 1.19.2**:
 menu entry → fullscreen rendering, 0 page errors, 0 external network requests, a 16-minute soak,
-persisted settings and no orphaned helper processes. v0.4.0 brings the style count to **15** (with
-Hanabi) plus the random style pool, custom fonts and the tray entry; its on-device acceptance run is
-scheduled before release.
+persisted settings and no orphaned helper processes. v0.4.0 brings the style count to **15** (with Hanabi) plus the random style pool, custom fonts and the
+tray entry. v0.4.1 turns the settings-page preview into a frame-accurate mirror of the player page
+(real song/lyrics/background/transparency plus the real playback clock) and removes the “preview
+text” option.
 
 ## Build from source
 
@@ -115,7 +116,7 @@ SDK required.
 ```bat
 :: 1) Plugin (Kotlin, via the official SPW workshop Gradle plugin)
 cd spw-folia
-gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.0.spmod
+gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.1.spmod
 
 :: 2) Native helper (C# + WebView2)
 cd ..\poc\webview\host
@@ -128,8 +129,8 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 :: 4) Assemble the distributable .spmod (plugin classes + staged web bundle + native process + licenses)
 bash packaging/build-package.sh     :: stages packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
-    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.0.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.0.spmod
+    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
+    --staging packaging --out dist/release --name spw-folia-0.4.1-preview.1.spmod
 ```
 
 The full pipeline, payload inventory, size budget and release checklist are in

@@ -8,7 +8,6 @@ import VisPlaygroundSettingsPanel from '@/components/visualizer/window/VisPlaygr
 import type { FontChoice } from '@/components/visualizer/window/FontTiles';
 import type { StyleDraft } from '@/components/visualizer/window/useTuningDrafts';
 import type { VisPlaygroundEditSection } from '@/components/visualizer/window/VisPlaygroundPreviewHotspots';
-import type { PreviewPlaceholderId } from '@/components/visualizer/PreviewPlaceholder';
 import type { SubtitleContentMode, Theme, VisualizerMode } from '@/types';
 import {
     selectBackgroundActions,
@@ -48,7 +47,7 @@ import { useRandomSongMode } from '~/model/useRandomSongMode';
 /* v0.4.0 自定义字体: picker modal + IndexedDB-backed font packs + 当前播放歌词预览. */
 import FontPickerModal, { type FontPickerChoice } from '~/model/FontPickerModal';
 import { restoreUploadedFonts } from '~/model/uploadedFonts';
-import { useCurrentLyricText } from '~/model/previewSong';
+import { useCurrentLyricText } from '~/model/currentLyric';
 
 interface AppProps {
     injected: boolean;
@@ -258,13 +257,7 @@ const App: React.FC<AppProps> = ({ injected }) => {
         { label: t('options.customFont'), value: 'custom' as FontChoice },
     ]), [t]);
 
-    // v0.4.0: the preview text defaults to the line that is playing right now (the user's request);
-    // the two bundled placeholder songs stay available for a font/size check without playback.
-    const previewPlaceholderOptions = useMemo(() => ([
-        { label: t('options.previewTextCurrent'), value: 'current' as PreviewPlaceholderId },
-        { label: t('options.previewTextDefault'), value: 'default' as PreviewPlaceholderId },
-        { label: t('options.previewTextReserved'), value: 'reserved' as PreviewPlaceholderId },
-    ]), [t]);
+    // v0.4.1: the 预览文本 choice is gone — the stage always previews the song that is playing.
 
     /* v0.4.0 自定义字体: the picker writes the appearance fields in one go, so the theme and the
      * pushed config always agree. A system face needs no extra record; an imported pack is already
@@ -404,9 +397,6 @@ const App: React.FC<AppProps> = ({ injected }) => {
                     onVisualizerOpacityChange={opacity => state.setAppearance({ visualizerOpacity: opacity })}
                     backgroundConfig={backgroundConfig as never}
                     backgroundActions={backgroundActions as never}
-                    previewPlaceholderId={state.previewPlaceholderId as never}
-                    previewPlaceholderOptions={previewPlaceholderOptions as never}
-                    onPreviewPlaceholderChange={id => state.setPreviewPlaceholderId(id as PreviewPlaceholderId)}
                     fontStyleValue={state.appearance.fontStyle as FontChoice}
                     fontStyleOptions={fontStyleOptions}
                     subtitleFontStyleOptions={fontStyleOptions}
@@ -432,8 +422,6 @@ const App: React.FC<AppProps> = ({ injected }) => {
                     onFontWeightFollowChange={follow => state.setAppearance({ fontWeight: follow ? null : 400 })}
                     onResetCommonSettings={() => {
                         state.resetAppearance();
-                        // v0.4.0: the live lyric line is the default preview text again.
-                        state.setPreviewPlaceholderId('current');
                     }}
                     hideTranslationSubtitle={state.subtitle.hideTranslationSubtitle}
                     onToggleHideTranslationSubtitle={hideTranslationSubtitle => state.setSubtitle({ hideTranslationSubtitle })}
