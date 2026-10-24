@@ -7,4 +7,7 @@ export const visualizersRegistry = {
     get: (_mode: string): unknown => undefined,
 };
 
-export default { visualizersRegistry };
+/** Per-mode mod settings for `mod:` styles (0.7.22). None are installed, so always null. */
+export const useFoliumVisualizerSettings = (_mode: string): unknown => null;
+
+export default { visualizersRegistry, useFoliumVisualizerSettings };

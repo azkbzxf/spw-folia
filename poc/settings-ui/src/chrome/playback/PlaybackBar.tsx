@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ListMusic, Pause, Play, Shuffle, SkipBack, SkipForward } from 'lucide-react';
-import { useSettingsStore } from '~/model/settings';
+import { Dices, ListMusic, Pause, Play, Shuffle, SkipBack, SkipForward } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { normalizeRandomModes, useSettingsStore } from '~/model/settings';
 import {
     bridgeOn,
     getBridge,
@@ -26,6 +27,8 @@ import PlaybackQueuePanel from './PlaybackQueuePanel';
  * DOM contract shared with the integration acceptance scripts (do not rename):
  *   transport buttons keep `.spw-playback-play` / `.spw-playback-step` / `.spw-playback-icon`,
  *   shuffle has aria-label「随机播放」, queue toggle「播放列表」;
+ *   0.7.22 随机歌词样式's reroll chip is `.spw-playback-icon.spw-playback-reroll` with aria-label
+ *   「从随机池里换一种」(`options.randomVisualizerReroll`), rendered only while 随机 is on;
  *   seek rail is `.spw-playback-bar .spw-playback-track` and answers BOTH the
  *   pointerdown→pointerup sequence and a plain `click` (synthetic events included).
  *
@@ -115,6 +118,16 @@ interface DragState {
 const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
     const mousePassthrough = useSettingsStore((s) => s.mousePassthrough);
     const flat = useSettingsStore((s) => s.transparentPlayerBackground);
+    /* 0.7.22 随机歌词样式: the 重抽 chip ("draw another style from the pool") only exists while the
+     * per-song random draw is on — the same rule Folia's own appearance section uses. */
+    const randomSongMode = useSettingsStore((s) => s.randomVisualizerModePerSong);
+    /* A draw only exists when the pool holds a style other than the one on screen: with a
+     * one-style pool `pickRandomMode` falls back to the pool and rerolling would be a no-op.
+     * (Folia's `randomPool.canReroll`: `modes.some(entry => entry !== mode)`.) */
+    const rerollDisabled = useSettingsStore(
+        (s) => !normalizeRandomModes(s.randomVisualizerModes).some((mode) => mode !== s.visualizerMode),
+    );
+    const { t } = useTranslation();
     const { meta, clockRef } = usePlaybackClock();
     const [expanded, setExpanded] = useState(false);
     const [queueOpen, setQueueOpen] = useState(false);
@@ -493,6 +506,23 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
                         >
                             <Shuffle size={18} />
                         </button>
+                        {randomSongMode ? (
+                            <button
+                                type="button"
+                                className="spw-playback-icon spw-playback-reroll"
+                                data-active="false"
+                                title={t('options.randomVisualizerReroll')}
+                                aria-label={t('options.randomVisualizerReroll')}
+                                /* nothing else in the pool to draw: the chip stays visible but inert
+                                 * (`app.css` has no `:disabled` rule for the icon, so the dimming and
+                                 * the "no draw here" cursor are stated inline, next to the condition) */
+                                disabled={rerollDisabled}
+                                style={rerollDisabled ? { opacity: 0.4, cursor: 'default' } : undefined}
+                                onClick={() => useSettingsStore.getState().rerollVisualizerMode()}
+                            >
+                                <Dices size={18} />
+                            </button>
+                        ) : null}
                         <button
                             ref={listButtonRef}
                             type="button"

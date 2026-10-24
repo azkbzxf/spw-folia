@@ -6,6 +6,13 @@ export const saveToCache = async (): Promise<void> => undefined;
 
 export const removeFromCache = async (): Promise<void> => undefined;
 
+/** 0.7.22: bulk cache eviction helpers that services/db re-exports. */
+export const getCacheKeysByPrefix = async (): Promise<string[]> => [];
+
+export const removeCacheEntries = async (_keys: string[]): Promise<void> => undefined;
+
+export const removeCacheEntriesByPrefix = async (_prefixes: string[]): Promise<void> => undefined;
+
 export const applyLocalLibrarySnapshot = async (): Promise<void> => undefined;
 
 export const readSession = async (): Promise<null> => null;

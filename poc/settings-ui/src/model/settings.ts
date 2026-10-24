@@ -25,11 +25,16 @@ import {
 } from '@/types';
 import { getStyleTransparencyCompat } from './transparencyCompat';
 import { systemPrefersLight } from './theme';
+/* 0.7.22 花火's tuning defaults live with the style's own module, not in `src/types.ts` (unlike the
+ * 14 older styles), so they are imported from there. */
+import { DEFAULT_HANABI_TUNING } from '@/components/visualizer/hanabi/types';
 
 export type StyleMode =
     | 'sonnet'
     | 'tempera'
     | 'lumiere'
+    /** 0.7.22 花火: order 26, between 绘光 (25) and 古典 (30) on Folia's own shelf. */
+    | 'hanabi'
     | 'classic'
     | 'cadenza'
     | 'partita'
@@ -48,13 +53,16 @@ export type SettingsSection = 'visualizer' | 'background' | 'common' | 'subtitle
 
 export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
 
-export type PreviewPlaceholderId = 'default' | 'reserved';
+/** 预览文本 choices. `current` (v0.4.0) samples the song that is actually playing; it is the
+ *  default so the font section previews the user's own lyrics, matching Folia 0.7.22. */
+export type PreviewPlaceholderId = 'current' | 'default' | 'reserved';
 
 /** Each style's tuning defaults, imported from Folia so its own panel shows Folia's values. */
 export const STYLE_TUNING_DEFAULTS: Record<StyleMode, Record<string, unknown>> = {
     sonnet: { ...DEFAULT_SONNET_TUNING },
     tempera: { ...DEFAULT_TEMPERA_TUNING },
     lumiere: { ...DEFAULT_LUMIERE_TUNING },
+    hanabi: { ...DEFAULT_HANABI_TUNING },
     classic: { ...DEFAULT_CLASSIC_TUNING },
     cadenza: { ...DEFAULT_CADENZA_TUNING },
     partita: { ...DEFAULT_PARTITA_TUNING },
@@ -73,6 +81,7 @@ export const STYLE_TUNING_KEYS: Record<StyleMode, string> = {
     sonnet: 'sonnetTuning',
     tempera: 'temperaTuning',
     lumiere: 'lumiereTuning',
+    hanabi: 'hanabiTuning',
     classic: 'classicTuning',
     cadenza: 'cadenzaTuning',
     partita: 'partitaTuning',
@@ -93,6 +102,36 @@ export const BACKGROUND_TUNING_DEFAULTS: Record<'monet' | 'nomand' | 'latent' | 
     sora: { ...DEFAULT_SORA_BACKGROUND_TUNING },
 };
 
+/** The shelf order of `model/styles.tsx` (each entry's `order` ascending). Duplicated here because
+ *  `styles.tsx` imports `StyleMode` from this module — a value import back would be a cycle.
+ *  `styles.tsx` asserts the two lists agree at module load. */
+export const STYLE_MODE_SHELF_ORDER: StyleMode[] = [
+    'sonnet', 'tempera', 'lumiere', 'hanabi', 'classic', 'cadenza', 'partita', 'fume',
+    'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
+];
+
+/** 0.7.22 随机歌词样式's default pool: every style ticked, in Folia's shelf order. */
+export const DEFAULT_RANDOM_VISUALIZER_MODES: StyleMode[] = [...STYLE_MODE_SHELF_ORDER];
+
+/** Keeps only known styles, in shelf order; an empty selection means "everything". */
+export const normalizeRandomModes = (value: unknown): StyleMode[] => {
+    const selected = new Set(Array.isArray(value) ? value : []);
+    const modes = STYLE_MODE_SHELF_ORDER.filter(mode => selected.has(mode));
+    return modes.length > 0 ? modes : [...STYLE_MODE_SHELF_ORDER];
+};
+
+/** Picks inside the pool, excluding the current style whenever another choice exists. */
+export const pickRandomMode = (
+    modes: readonly StyleMode[],
+    current: StyleMode,
+    random: () => number = Math.random,
+): StyleMode => {
+    const pool = normalizeRandomModes(modes);
+    const alternatives = pool.filter(mode => mode !== current);
+    const candidates = alternatives.length > 0 ? alternatives : pool;
+    return candidates[Math.floor(random() * candidates.length)];
+};
+
 export interface CommonBackgroundSettings {
     opacity: number;
     useCoverColorBg: boolean;
@@ -106,6 +145,23 @@ export interface AppearanceSettings {
     fontWeight: number | null;
     visualizerOpacity: number;
     customFontFamily: string | null;
+    /** v0.4.0: fallback families for a custom font (Folia's `fontFamilyStack`), comma-separated list. */
+    customFontStack: string | null;
+    /** v0.4.0: which custom font source is in use — `null` when the built-in faces are selected. */
+    customFontSource: CustomFontSource | null;
+}
+
+/** A user-chosen lyrics font. `system` picks one already installed on this machine (Chromium's
+ *  Local Font Access API); `uploaded` is a font file the user imported, registered through the
+ *  FontFace API and persisted in IndexedDB so it survives a page reload. */
+export type CustomFontSource = 'system' | 'uploaded';
+
+/** One uploaded font as the settings tree persists it (the Blob stays in IndexedDB, keyed by id). */
+export interface UploadedFontDescriptor {
+    id: string;
+    label: string;
+    family: string;
+    createdAt: number;
 }
 
 export interface SubtitleSettings {
@@ -128,6 +184,8 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
     fontWeight: null,
     visualizerOpacity: 1,
     customFontFamily: null,
+    customFontStack: null,
+    customFontSource: null,
 };
 
 export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
@@ -165,7 +223,22 @@ interface SettingsState {
     setActiveSection: (section: SettingsSection) => void;
 
     visualizerMode: StyleMode;
-    setVisualizerMode: (mode: StyleMode) => void;
+    /** `options.preserveRandom` (0.7.22): a per-song reroll must not switch 随机模式 back off. */
+    setVisualizerMode: (mode: StyleMode, options?: { preserveRandom?: boolean; notify?: boolean }) => void;
+
+    /** Folia's own method names. `stubs/useVisualizerSettingsStore.ts` aliases Folia's store to this
+     *  one, so the reused RandomPoolGroup / lyricStyleChoices code calls these three directly. */
+    handleSetVisualizerMode: (mode: StyleMode, options?: { notify?: boolean; preserveRandom?: boolean }) => void;
+    handleToggleRandomVisualizerModePerSong: (enable: boolean, options?: { notify?: boolean }) => void;
+    handleSetRandomVisualizerModes: (modes: readonly StyleMode[]) => void;
+
+    /** 0.7.22 随机歌词样式: one style drawn per song from `randomVisualizerModes`. */
+    randomVisualizerModePerSong: boolean;
+    setRandomVisualizerModePerSong: (enabled: boolean) => void;
+    randomVisualizerModes: StyleMode[];
+    setRandomVisualizerModes: (modes: readonly StyleMode[]) => void;
+    /** Another style from the pool for the song that is playing (never the current one). */
+    rerollVisualizerMode: () => void;
 
     previewPlaceholderId: PreviewPlaceholderId;
     setPreviewPlaceholderId: (id: PreviewPlaceholderId) => void;
@@ -212,6 +285,13 @@ interface SettingsState {
     setAppearance: (patch: Partial<AppearanceSettings>) => void;
     resetAppearance: () => void;
 
+    /** v0.4.0: font files the user imported. The file itself lives in IndexedDB under `id`; only
+     *  this descriptor list rides the settings tree (so import/export and sync carry the names). */
+    uploadedFonts: UploadedFontDescriptor[];
+    setUploadedFonts: (fonts: readonly UploadedFontDescriptor[]) => void;
+    addUploadedFont: (descriptor: UploadedFontDescriptor) => void;
+    removeUploadedFont: (id: string) => void;
+
     subtitle: SubtitleSettings;
     setSubtitle: (patch: Partial<SubtitleSettings>) => void;
     resetSubtitle: () => void;
@@ -226,15 +306,50 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     // light-theme dark field) that the colour-key window would turn into a pink haze. Selecting one
     // of those turns the transparent window (and mouse pass-through) back off, so the style is
     // always usable — see `model/transparencyCompat.ts`.
-    setVisualizerMode: visualizerMode =>
+    setVisualizerMode: (visualizerMode, options) =>
         set(state => {
             const compat = getStyleTransparencyCompat(visualizerMode, { isDaylight: state.isDaylightTheme });
-            if (compat !== 'unsupported') return { visualizerMode };
-            if (!state.transparentPlayerBackground) return { visualizerMode };
-            return { visualizerMode, transparentPlayerBackground: false, mousePassthrough: false };
+            // 0.7.22: a reroll inside the random pool keeps 随机 on; a style the user picked by hand
+            // while random was on means "play this one", so random switches itself off then.
+            const randomPatch = options?.preserveRandom ? {} : { randomVisualizerModePerSong: false };
+            if (compat !== 'unsupported') return { visualizerMode, ...randomPatch };
+            if (!state.transparentPlayerBackground) return { visualizerMode, ...randomPatch };
+            return { visualizerMode, ...randomPatch, transparentPlayerBackground: false, mousePassthrough: false };
         }),
 
-    previewPlaceholderId: 'default',
+    randomVisualizerModePerSong: false,
+    setRandomVisualizerModePerSong: enabled =>
+        set(state => {
+            if (!enabled) return { randomVisualizerModePerSong: false };
+            // Entering the pool draws a style at once, so the shelf and the shelf's first tab agree.
+            const current = state.visualizerMode;
+            const pool = normalizeRandomModes(state.randomVisualizerModes);
+            const next = pool.length > 0 ? pickRandomMode(pool, current) : current;
+            return { randomVisualizerModePerSong: true, visualizerMode: next };
+        }),
+    randomVisualizerModes: DEFAULT_RANDOM_VISUALIZER_MODES,
+    setRandomVisualizerModes: modes => set({ randomVisualizerModes: normalizeRandomModes(modes) }),
+    rerollVisualizerMode: () =>
+        set(state => {
+            const pool = normalizeRandomModes(state.randomVisualizerModes);
+            const next = pickRandomMode(pool, state.visualizerMode);
+            if (next === state.visualizerMode) return {};
+            const compat = getStyleTransparencyCompat(next, { isDaylight: state.isDaylightTheme });
+            const blocked = compat === 'unsupported' && state.transparentPlayerBackground;
+            return blocked
+                ? { visualizerMode: next, transparentPlayerBackground: false, mousePassthrough: false }
+                : { visualizerMode: next };
+        }),
+
+    // Folia's names, forwarded to the implementations above so the reused panels (whose store import
+    // is aliased to this one) can drive the pool. Kept as store fields so their identity is stable
+    // across renders — `useRandomPool` selects them through `useShallow`.
+    handleSetVisualizerMode: (mode, options) =>
+        get().setVisualizerMode(mode, { preserveRandom: options?.preserveRandom }),
+    handleToggleRandomVisualizerModePerSong: enable => get().setRandomVisualizerModePerSong(enable),
+    handleSetRandomVisualizerModes: modes => get().setRandomVisualizerModes(modes),
+
+    previewPlaceholderId: 'current',
     setPreviewPlaceholderId: previewPlaceholderId => set({ previewPlaceholderId }),
 
     lyricMotion: DEFAULT_LYRIC_MOTION,
@@ -322,6 +437,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setAppearance: patch => set(state => ({ appearance: { ...state.appearance, ...patch } })),
     resetAppearance: () => set({ appearance: { ...DEFAULT_APPEARANCE } }),
 
+    uploadedFonts: [],
+    setUploadedFonts: fonts => set({ uploadedFonts: [...fonts] }),
+    addUploadedFont: descriptor =>
+        set(state => {
+            const rest = state.uploadedFonts.filter(font => font.id !== descriptor.id);
+            return { uploadedFonts: [...rest, descriptor] };
+        }),
+    removeUploadedFont: id => set(state => ({ uploadedFonts: state.uploadedFonts.filter(font => font.id !== id) })),
+
     subtitle: { ...DEFAULT_SUBTITLE_SETTINGS },
     setSubtitle: patch => set(state => ({ subtitle: { ...state.subtitle, ...patch } })),
     resetSubtitle: () => set({ subtitle: { ...DEFAULT_SUBTITLE_SETTINGS } }),
@@ -345,12 +469,17 @@ export const selectTuningSettings = (state: SettingsState): Record<string, unkno
 export interface SettingsSnapshot {
     version: 1;
     styleId: StyleMode;
+    /** 0.7.22 随机歌词样式: the pool and whether one style is drawn per song. */
+    randomVisualizerModePerSong: boolean;
+    randomVisualizerModes: StyleMode[];
     smartBeat: SmartBeatSettings;
     styleTunings: Record<StyleMode, Record<string, unknown>>;
     backgroundMode: BackgroundMode;
     backgroundTunings: Record<'monet' | 'nomand' | 'latent' | 'sora', Record<string, unknown>>;
     commonBackground: CommonBackgroundSettings;
     appearance: AppearanceSettings;
+    /** v0.4.0: imported font descriptors (the files live in IndexedDB). */
+    uploadedFonts: UploadedFontDescriptor[];
     subtitle: SubtitleSettings;
     previewPlaceholderId: PreviewPlaceholderId;
     lyricMotion: number;
@@ -362,12 +491,15 @@ export interface SettingsSnapshot {
 export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
     version: 1,
     styleId: state.visualizerMode,
+    randomVisualizerModePerSong: state.randomVisualizerModePerSong,
+    randomVisualizerModes: state.randomVisualizerModes,
     smartBeat: state.smartBeat,
     styleTunings: state.styleTunings,
     backgroundMode: state.backgroundMode,
     backgroundTunings: state.backgroundTunings,
     commonBackground: state.commonBackground,
     appearance: state.appearance,
+    uploadedFonts: state.uploadedFonts,
     subtitle: state.subtitle,
     previewPlaceholderId: state.previewPlaceholderId,
     lyricMotion: state.lyricMotion,
@@ -390,12 +522,17 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
             getStyleTransparencyCompat(visualizerMode, { isDaylight: state.isDaylightTheme }) === 'unsupported';
         return {
             visualizerMode,
+            randomVisualizerModePerSong: clean(snapshot.randomVisualizerModePerSong, state.randomVisualizerModePerSong),
+            randomVisualizerModes: snapshot.randomVisualizerModes === undefined
+                ? state.randomVisualizerModes
+                : normalizeRandomModes(snapshot.randomVisualizerModes),
             smartBeat: clean(snapshot.smartBeat, state.smartBeat),
             styleTunings: { ...state.styleTunings, ...clean(snapshot.styleTunings, {} as Record<StyleMode, Record<string, unknown>>) },
             backgroundMode: clean(snapshot.backgroundMode, state.backgroundMode),
             backgroundTunings: { ...state.backgroundTunings, ...clean(snapshot.backgroundTunings, {} as Record<'monet' | 'nomand' | 'latent' | 'sora', Record<string, unknown>>) },
             commonBackground: { ...state.commonBackground, ...clean(snapshot.commonBackground, {} as CommonBackgroundSettings) },
             appearance: { ...state.appearance, ...clean(snapshot.appearance, {} as AppearanceSettings) },
+            uploadedFonts: Array.isArray(snapshot.uploadedFonts) ? snapshot.uploadedFonts : state.uploadedFonts,
             subtitle: { ...state.subtitle, ...clean(snapshot.subtitle, {} as SubtitleSettings) },
             previewPlaceholderId: clean(snapshot.previewPlaceholderId, state.previewPlaceholderId),
             lyricMotion: clean(snapshot.lyricMotion, state.lyricMotion),

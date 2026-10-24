@@ -108,6 +108,11 @@ export const useConfigPublisher = (): void => {
                 : applyThemeFonts(derived.theme, {
                     fontStyle: state.subtitle.subtitleFontStyle,
                     fontWeight: state.subtitle.subtitleFontWeight,
+                    // v0.4.0: one custom face is imported at a time, so a custom subtitle font uses
+                    // the same family/fallback list as the lyric font (upstream keeps a second
+                    // `subtitleFontFamily`; the injected page has no second picker).
+                    customFontFamily: state.appearance.customFontFamily,
+                    customFontStack: state.appearance.customFontStack,
                 });
             lastPublishedTheme = theme;
             lastPublishedSubtitleTheme = subtitleTheme;

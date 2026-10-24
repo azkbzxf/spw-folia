@@ -1,6 +1,10 @@
-/* The window's left stage: the live sample of the chosen style and the 14-picture style shelf,
- * laid out exactly like VisPlayground.tsx:425-530. StudioWindow already wraps this in the stage
- * <section>, so this component renders the two children only.
+/* The window's left stage: the live sample of the chosen style and the 15-picture style shelf plus
+ * the 随机 tile, laid out exactly like VisPlayground.tsx:425-530. StudioWindow already wraps this in
+ * the stage <section>, so this component renders the two children only.
+ *
+ * 0.7.22 随机歌词样式: the last tile is Folia's `__random__` picker choice, never a renderer id. It is
+ * drawn here (a Shuffle glyph) instead of through upstream's `drawLyricStyleChoice`, because that
+ * helper pulls `LyricStylePicture` — and with it the whole renderer graph — into this bundle.
  *
  * The sample is Folia's real renderer running in the same-origin `preview.html` iframe
  * (docs/live-preview-iframe.md); the settings overlay injects the iframe and pumps it with a
@@ -9,7 +13,7 @@
  * bundle without preview.html, missing child shim) Stage falls back to the captured-frame sample
  * (StylePreview, Ken Burns) — the pause button drives whichever sample is showing. */
 import React, { useMemo, useState } from 'react';
-import { Pause, Play } from 'lucide-react';
+import { Pause, Play, Shuffle } from 'lucide-react';
 import { PictureGrid } from '@/components/modal/settings/kit';
 import { STYLE_COUNT, STYLE_ENTRIES, getStyleEntry, type StyleEntry } from './styles';
 import StylePreview from './StylePreview';
@@ -20,10 +24,18 @@ import { getPreviewPlaceholder, previewStartOffsetFor, previewTrackFor } from '.
 import { buildConfig } from '~/publisher/config';
 import { getLastPublishedSubtitleTheme, getLastPublishedTheme } from '~/useConfigPublisher';
 
+/** Folia's picker choice for the random pool; mirrors `random/lyricStyleChoices.tsx`. */
+const RANDOM_VISUALIZER_CHOICE = '__random__';
+/** A shelf value: a real style, or the 随机 tile. */
+type ShelfValue = StyleMode | typeof RANDOM_VISUALIZER_CHOICE;
+
 interface StageProps {
     t: (key: string) => string;
     visualizerMode: StyleMode;
     onVisualizerModeChange: (mode: StyleMode) => void;
+    /** 0.7.22 随机池: whether the shelf should show the 随机 tile as chosen. */
+    randomEnabled: boolean;
+    onRandomChange: (enabled: boolean) => void;
 }
 
 const StylePicture: React.FC<{ mode: StyleMode; state: { visible: boolean } }> = ({ mode, state }) => (
@@ -36,10 +48,21 @@ const StylePicture: React.FC<{ mode: StyleMode; state: { visible: boolean } }> =
     />
 );
 
+/** The 随机 tile shares the 16:10 frame with a style picture, so it is just a centred glyph. */
+const RandomPicture: React.FC = () => (
+    <span className="absolute inset-0 grid place-items-center bg-[var(--st-pv)] text-[color:var(--st-accent)]">
+        <Shuffle size={28} aria-hidden="true" />
+    </span>
+);
+
+const drawShelf = (value: ShelfValue, state: { visible: boolean }): React.ReactNode => (
+    value === RANDOM_VISUALIZER_CHOICE ? <RandomPicture /> : <StylePicture mode={value} state={state} />
+);
+
 /** Placeholder covers live beside preview.html at the bundle root (`/preview/`). */
 const previewCoverBase = () => `${window.location.origin}/preview`;
 
-const Stage: React.FC<StageProps> = ({ t, visualizerMode, onVisualizerModeChange }) => {
+const Stage: React.FC<StageProps> = ({ t, visualizerMode, onVisualizerModeChange, randomEnabled, onRandomChange }) => {
     const [paused, setPaused] = useState(false);
     const [liveFailed, setLiveFailed] = useState(false);
     const settingsState = useSettingsStore();
@@ -95,21 +118,29 @@ const Stage: React.FC<StageProps> = ({ t, visualizerMode, onVisualizerModeChange
                 </button>
             </div>
 
-            {/* Style shelf: 7 columns in the wide window, the count beside the heading. */}
+            {/* Style shelf: 8 columns in the wide window (15 styles + 随机 = two clean rows), the
+                count beside the heading. Choosing 随机 turns the pool on; choosing a style by hand
+                turns it off again through the store's `setVisualizerMode`. */}
             <div className="flex shrink-0 flex-col">
                 <h3 className="mb-2 flex min-h-6 items-center px-1 text-[13px] font-semibold leading-5 text-[color:var(--st-t2)]">
                     {t('options.lyricStyles')}
                     <span className="ml-1.5 font-normal text-[color:var(--st-t3)]">{STYLE_COUNT}</span>
                 </h3>
-                <PictureGrid<StyleMode>
-                    value={visualizerMode}
-                    options={STYLE_ENTRIES.map((entry: StyleEntry) => ({
-                        value: entry.mode,
-                        label: t(entry.labelKey) || entry.labelFallback,
-                    }))}
-                    picture={(mode, state) => <StylePicture mode={mode} state={state} />}
-                    columns={7}
-                    onChange={onVisualizerModeChange}
+                <PictureGrid<ShelfValue>
+                    value={randomEnabled ? RANDOM_VISUALIZER_CHOICE : visualizerMode}
+                    options={[
+                        ...STYLE_ENTRIES.map((entry: StyleEntry) => ({
+                            value: entry.mode as ShelfValue,
+                            label: t(entry.labelKey) || entry.labelFallback,
+                        })),
+                        { value: RANDOM_VISUALIZER_CHOICE as ShelfValue, label: t('ui.visualizerRandom') },
+                    ]}
+                    picture={drawShelf}
+                    columns={8}
+                    onChange={value => {
+                        if (value === RANDOM_VISUALIZER_CHOICE) onRandomChange(true);
+                        else onVisualizerModeChange(value);
+                    }}
                     label={t('ui.animationMode')}
                     maxHeight={250}
                     className="-mx-4"

@@ -68,6 +68,9 @@ class FoliaPlugin(
      */
     private var toggleShortcut: AutoCloseable? = null
 
+    /** Tray (minimised-icon) right-click entry, in the same section as 桌面歌词. */
+    private val trayMenu: FoliaTrayMenu by lazy { FoliaTrayMenu(::log, ::openFolia) }
+
     /** Legacy Swing fallback, only used when the native helper cannot be found/spawned. */
     private var swingFallbackWindow: JFrame? = null
 
@@ -95,12 +98,11 @@ class FoliaPlugin(
             "start: id=${pluginContext.pluginId} version=${pluginContext.pluginVersion} " +
                 "spw=${pluginContext.spwVersion} channel=${pluginContext.spwChannel} path=${pluginContext.pluginPath}"
         )
-        runCatching {
-            WorkshopApi.ui.toast("spw-folia loaded", WorkshopApi.Ui.ToastType.Success)
-        }.onFailure { log("toast failed: $it") }
-
+        // v0.3.2 (issue #9): the "loaded" success toast is gone — a notification on every start is
+        // pure noise. Only failures toast (see the class-transform and hook paths below); normal
+        // startup is proven by the log line above.
         settingsTree = settingsStore.load()
-        bridge.settingsTree = settingsTree
+        bridge.settingsTree = withSystemFonts(settingsTree)
         bridge.hostVersion = pluginContext.spwVersion
         // Fallback snapshot keeps the state line flowing at 100 ms even if the PF4J extension is
         // not instantiated yet (proves the bridge/clocks even on a bare host); the extension
@@ -113,8 +115,14 @@ class FoliaPlugin(
         // v0.3.0 playback bar: queue snapshot + controls (reflection over the host player).
         bridge.queueProvider = { FoliaPlaybackControls.queueJson() }
         bridge.onSettingsFromPage = { tree ->
-            settingsTree = tree
-            settingsStore.persist(tree)
+            // The page echoes the tree it was given, including the injected `systemFonts` list. That
+            // list is derived data (recomputed on every start), so it is stripped before it reaches
+            // the in-memory tree or the settings file — persisting it would add ~10-20 KB of names
+            // that go stale as soon as a font is installed.
+            val cleanTree = FoliaSystemFonts.withoutSystemFontsJson(tree)
+            settingsTree = cleanTree
+            bridge.settingsTree = withSystemFonts(cleanTree)
+            settingsStore.persist(cleanTree)
         }
         bridge.onClosed = { reason -> log("folia window closed (reason=$reason); plugin stays loaded") }
         startExtensionWatch()
@@ -137,6 +145,10 @@ class FoliaPlugin(
             toast("spw-folia: class-transform permission missing", WorkshopApi.Ui.ToastType.Error)
             return
         }
+        // Tray right-click entry: independent of the 更多 flyout target, so it is attempted even if
+        // that resolution fails. Degrades to a single log warning (no toast) on unsupported builds.
+        runCatching { trayMenu.install() }
+            .onFailure { log("WARNING: tray menu item disabled: ${it::class.java.name}: ${it.message}") }
         installHookForHostBuild()
         log("start done")
     }
@@ -179,6 +191,7 @@ class FoliaPlugin(
         toggleShortcut = null
         runCatching { methodHook?.unhook() }.onFailure { log("unhook failed: $it") }
         methodHook = null
+        runCatching { trayMenu.uninstall() }.onFailure { log("tray unhook failed: $it") }
         runCatching { bridge.stop() }.onFailure { log("bridge stop failed: $it") }
         runCatching { settingsStore.shutdown() }
         runCatching { FoliaPlaybackExtension.get()?.shutdown() }
@@ -264,7 +277,8 @@ class FoliaPlugin(
             methodHook = it
             menuTarget = target
             log("hookMethod installed: $it (${target.origin})")
-            toast("spw-folia: Folia menu item hook installed", WorkshopApi.Ui.ToastType.Success)
+            // v0.3.2 (issue #9): no success toast on every start — the hook is an implementation
+            // detail, not something to interrupt playback for. Failures still toast below.
         }.onFailure {
             log("hookMethod FAILED: ${it::class.java.name}: ${it.message}")
             toast("spw-folia: hook failed (${it.message})", WorkshopApi.Ui.ToastType.Error)
@@ -400,7 +414,7 @@ class FoliaPlugin(
      * Falls back to the Swing placeholder only when the helper cannot be located/spawned.
      */
     private fun openFolia() {
-        bridge.settingsTree = settingsTree
+        bridge.settingsTree = withSystemFonts(settingsTree)
         val started = try {
             bridge.open()
         } catch (t: Throwable) {
@@ -459,6 +473,17 @@ class FoliaPlugin(
     }
 
     // --------------------------------------------------------------- misc ----
+
+    /**
+     * Settings trees travel to the page with a top-level `"systemFonts":[<installed families>]` member
+     * so Folia's font picker can list what this machine actually has.
+     *
+     * The merge is deliberately dumb and cheap (see [FoliaSystemFonts.mergeSystemFontsJson]): a
+     * non-object tree is returned unchanged, an existing member is overwritten in place, and a tree
+     * that already carries the exact payload comes back as the same instance. It never throws, so it
+     * is safe to call on every hand-off to the helper.
+     */
+    private fun withSystemFonts(tree: String): String = FoliaSystemFonts.mergeSystemFontsJson(tree)
 
     private fun toast(text: String, type: WorkshopApi.Ui.ToastType) {
         runCatching { WorkshopApi.ui.toast(text, type) }.onFailure { log("toast failed: $it") }

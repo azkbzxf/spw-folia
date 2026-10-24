@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_ROOT = path.resolve(__dirname, '..', 'dist', 'dist');
 const PORT = Number(process.argv[2] || 18080);
 const TOKEN = 'spike-token';
-const MODES = ['cadenza', 'cappella', 'claddagh', 'classic', 'diorama', 'fume', 'lumiere', 'monet', 'partita', 'pendolo', 'sonnet', 'still', 'tempera', 'tilt'];
+const MODES = ['cadenza', 'cappella', 'claddagh', 'classic', 'diorama', 'fume', 'hanabi', 'lumiere', 'monet', 'partita', 'pendolo', 'sonnet', 'still', 'tempera', 'tilt'];
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',

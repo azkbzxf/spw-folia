@@ -12,6 +12,8 @@ import {
     DEFAULT_COMMON_BACKGROUND,
 } from '~/model/settings';
 import { transparentStyleTuning } from '~/model/transparencyCompat';
+import { normalizeRandomModes } from '~/model/settings';
+import { parseFontFamilyStack } from './themeFonts';
 import { DEFAULT_THEME } from './deriveTheme';
 
 export const CONFIG_MIN_INTERVAL_MS = 100; // ≤10 Hz, protocol §4
@@ -60,6 +62,32 @@ export interface PublisherInputs {
 
 export interface ConfigPublisherBridge {
     pushConfig: (config: ObsBrowserSourceConfig) => void;
+}
+
+/* v0.4.0: the config fields the shipped 0.7.22 page reads for typography and the 随机歌词样式 pool.
+ *
+ * They are NOT in the 0.7.22 checkout's `ObsBrowserSourceConfig` declaration (that type still lists
+ * only `lyricsFontScale`), but the shipped bundle maps them onto its own store — verified in
+ * poc/webview/dist/dist/assets/bootstrap-DJI6ZImv.js:
+ *   ...e.lyricsFontStyle&&(t.lfs=e.lyricsFontStyle), e.lyricsFontFallbackFamilies?.length&&(t.lff=
+ *   e.lyricsFontFallbackFamilies), e.lyricsCustomFontFamily&&(t.lcf=e.lyricsCustomFontFamily), ...
+ *   Array.isArray(e.randomVisualizerModes)&&(t.randomVisualizerModes=Iu(e.randomVisualizerModes))
+ * and the apply path treats `lyricsCustomFontFamily` as a `source:'system'` custom font. So the
+ * fields ride the config as extra keys; the publisher spreads them in without widening the imported
+ * type (upstream's own import/export map names them in
+ * components/modal/settings/pages/storage/visualConfigTransfer.ts). */
+export interface FoliaConfigExtras {
+    lyricsFontStyle: string;
+    lyricsFontWeight: number | null;
+    lyricsCustomFontFamily: string | null;
+    lyricsFontFallbackFamilies: string[];
+    subtitleFontInheritsLyrics: boolean;
+    subtitleFontStyle: string;
+    subtitleFontWeight: number | null;
+    subtitleFontFamily: string | null;
+    subtitleFontFallbackFamilies: string[];
+    randomVisualizerModePerSong: boolean;
+    randomVisualizerModes: StyleMode[];
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -166,7 +194,32 @@ export const buildConfig = ({ settings, track, theme, subtitleTheme, isDaylight,
         ? 'translation'
         : subtitle.subtitleContentMode as SubtitleContentMode;
     const coverUrl = track?.coverUrl ?? null;
+    // v0.4.0 (Folia 0.7.22): the lyric font and the 随机歌词样式 pool travel in the config. The page
+    // maps both onto its own stores (`lyricsFontStyle`/`lyricsCustomFontFamily` →
+    // handleSetLyricsCustomFont({source:'system'}), `randomVisualizerModes` →
+    // handleSetRandomVisualizerModes), so no protocol or renderer change is needed. Kept in its own
+    // object so the extra keys do not trip the excess-property check on the typed config literal.
+    const fontExtras: FoliaConfigExtras = {
+        lyricsFontStyle: appearance.fontStyle === 'custom' ? 'sans' : appearance.fontStyle,
+        lyricsFontWeight: appearance.fontWeight,
+        lyricsCustomFontFamily: appearance.fontStyle === 'custom' ? appearance.customFontFamily : null,
+        lyricsFontFallbackFamilies: appearance.fontStyle === 'custom'
+            ? parseFontFamilyStack(appearance.customFontStack)
+            : [],
+        subtitleFontInheritsLyrics: subtitle.subtitleFontInheritsLyrics,
+        subtitleFontStyle: subtitle.subtitleFontStyle === 'custom' ? 'sans' : subtitle.subtitleFontStyle,
+        subtitleFontWeight: subtitle.subtitleFontWeight,
+        subtitleFontFamily: subtitle.subtitleFontInheritsLyrics
+            ? null
+            : (subtitle.subtitleFontStyle === 'custom' ? appearance.customFontFamily : null),
+        subtitleFontFallbackFamilies: subtitle.subtitleFontInheritsLyrics
+            ? []
+            : (subtitle.subtitleFontStyle === 'custom' ? parseFontFamilyStack(appearance.customFontStack) : []),
+        randomVisualizerModePerSong: settings.randomVisualizerModePerSong,
+        randomVisualizerModes: normalizeRandomModes(settings.randomVisualizerModes),
+    };
     const config: ObsBrowserSourceConfig = {
+        ...fontExtras,
         activePlaybackContext: 'main',
         stageSource: null,
         hasTrack: Boolean(track),

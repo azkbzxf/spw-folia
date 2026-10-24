@@ -1,4 +1,4 @@
-/* The 14 lyric styles in Folia's shelf order (each entry's `order` ascending), with the real settings
+/* The 15 lyric styles in Folia's shelf order (each entry's `order` ascending), with the real settings
  * panel its registry entry renders and the beat effects it declares. Only the panels are reused; the
  * style previews are static frames captured from the real renderers (poc/webview/server/out/styles). */
 import React from 'react';
@@ -14,10 +14,12 @@ import {
 import SonnetSettingsPanel from '@/components/visualizer/sonnet/SonnetSettingsPanel';
 import TemperaSettingsPanel from '@/components/visualizer/tempera/TemperaSettingsPanel';
 import LumiereSettingsPanel from '@/components/visualizer/lumiere/LumiereSettingsPanel';
+import HanabiSettingsPanel from '@/components/visualizer/hanabi/HanabiSettingsPanel';
 import PendoloSettingsPanel from '@/components/visualizer/pendolo/PendoloSettingsPanel';
 import { MonetSettingsPanel } from '@/components/visualizer/monet/MonetSettingsPanel';
 import { BEAT_EFFECT_IDS, type BeatEffectDef } from '@/components/../services/beatFx/beatEffects';
 import type { StyleMode } from './settings';
+import { STYLE_MODE_SHELF_ORDER } from './settings';
 import { stylePreviewUrl } from './assetBase';
 
 export interface StyleEntry {
@@ -72,6 +74,29 @@ export const STYLE_ENTRIES: StyleEntry[] = [
         thumb: stylePreviewUrl('lumiere'),
         renderSettingsPanel: panel(LumiereSettingsPanel),
         ownFontSizeNoticeKey: 'options.lumiereFontSizeAutoNotice',
+    },
+    {
+        mode: 'hanabi',
+        order: 26,
+        labelKey: 'ui.visualizerHanabi',
+        labelFallback: '花火',
+        thumb: stylePreviewUrl('hanabi'),
+        renderSettingsPanel: panel(HanabiSettingsPanel),
+        ownFontSizeNoticeKey: 'options.hanabiFontSizeAutoNotice',
+        beatEffects: [
+            {
+                id: BEAT_EFFECT_IDS.hanabiBeatBursts,
+                nameKey: 'options.beatEffect_hanabiBeatBursts',
+                descKey: 'options.beatEffect_hanabiBeatBurstsDesc',
+                source: 'beats',
+            },
+            {
+                id: BEAT_EFFECT_IDS.hanabiBeatPulse,
+                nameKey: 'options.beatEffect_hanabiBeatPulse',
+                descKey: 'options.beatEffect_hanabiBeatPulseDesc',
+                source: 'beats',
+            },
+        ],
     },
     {
         mode: 'classic',
@@ -188,3 +213,29 @@ export const getStyleEntry = (mode: StyleMode): StyleEntry =>
     STYLE_ENTRIES.find(entry => entry.mode === mode) ?? STYLE_ENTRIES[0];
 
 export const STYLE_COUNT = STYLE_ENTRIES.length;
+
+/* Folia's `DefineVisualizer` invariant (`types/visualizerModes.ts#assertBuiltinModeList`): the shelf
+ * order lives in two places — this table (mode + `order`, what the picture grid draws) and
+ * `STYLE_MODE_SHELF_ORDER` (settings.ts: what 随机歌词样式 draws from and what the store normalises
+ * pools against). Adding a style to one of them and forgetting the other would silently desync the
+ * shelf from the random pool, so the two lists are compared once, at module load, and a mismatch
+ * throws at once instead of quietly shipping 15 tiles over a 14-mode pool.
+ * `./settings` imports nothing from this module by value (only the `StyleMode` type is declared
+ * here, and `import type` is erased), so importing the order back is not a cycle. */
+const declaredShelfOrder = [...STYLE_ENTRIES]
+    .sort((left, right) => left.order - right.order)
+    .map(entry => entry.mode);
+const missingFromStyles = STYLE_MODE_SHELF_ORDER.filter(mode => !declaredShelfOrder.includes(mode));
+const staleInStyles = declaredShelfOrder.filter(mode => !STYLE_MODE_SHELF_ORDER.includes(mode));
+const orderDrifted = missingFromStyles.length === 0
+    && staleInStyles.length === 0
+    && declaredShelfOrder.join(',') !== STYLE_MODE_SHELF_ORDER.join(',');
+if (missingFromStyles.length > 0 || staleInStyles.length > 0 || orderDrifted) {
+    throw new Error(
+        '[spw-folia] model/styles.tsx 与 model/settings.ts 的样式清单不一致：'
+        + `${missingFromStyles.length > 0 ? ` styles.tsx 缺少 ${missingFromStyles.join(', ')}；` : ''}`
+        + `${staleInStyles.length > 0 ? ` styles.tsx 多出 ${staleInStyles.join(', ')}；` : ''}`
+        + `${orderDrifted ? ` 排序不同（styles.tsx: ${declaredShelfOrder.join(',')} / settings.ts: ${STYLE_MODE_SHELF_ORDER.join(',')}）；` : ''}`
+        + ' 两种改法：在 STYLE_ENTRIES 加/删条目（或改 order），或同步 STYLE_MODE_SHELF_ORDER。',
+    );
+}

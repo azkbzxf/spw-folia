@@ -16,6 +16,12 @@
  *  - `unsupported`: no tuning can remove the layer (monet paints the portrait plate, which is
  *    part of the style's identity; lumiere forces a 94% dark field on light themes). Selecting
  *    the style turns the transparent window off (see `useSettingsStore`).
+ *
+ * 0.7.22 花火 (order 26) is `tuned`: it paints a night-sky gradient over the whole canvas at
+ * `tuning.sky` (default 0.85), and its collage draws a full-bleed dot tiling (120% x 120% of the
+ * stage) plus film/lace rails on top. Both are removable through the style's own tuning keys, so
+ * transparency stays usable and the window keeps a lyric-only hanabi instead of switching the
+ * transparent window off. See the `case 'hanabi'` below for the exact derivation.
  */
 import type { StyleMode } from './settings';
 
@@ -31,6 +37,7 @@ const STYLE_COMPAT: Record<StyleMode, TransparencyCompat> = {
     sonnet: 'native',
     tempera: 'tuned',
     lumiere: 'tuned',
+    hanabi: 'tuned',
     classic: 'native',
     cadenza: 'native',
     partita: 'native',
@@ -80,6 +87,21 @@ export const transparentStyleTuning = (
         case 'pendolo':
             // The centre radial gradient is a ~72%-alpha disc across the watch face.
             return { showCenterGradient: false };
+        case 'hanabi':
+            // 花火's two full-bleed layers, both read straight from `hanabiTuning` (no rebuild of the
+            // already-published config needed, `sky`/`collage` are plain tuning fields):
+            //  - `sky` (default 0.85) is hanabiSky.ts's whole-canvas night gradient: `update()` sets
+            //    `view.visible = alpha > 0.002`, so 0 removes the layer instead of drawing it at 0
+            //    alpha (createHanabiPixiRuntime.ts:314 also forces 0 while `textOnly`).
+            //  - `collage` (default 1) gates scene.ts:254 `collageOn = graphicsOn && tuning.collage > 0`,
+            //    which builds collage/unitCollage.ts's full-stage dot tiling (120% x 120%, alpha
+            //    0.05..0.08) plus the film/lace rails, and the shot collages. At 0 none are created.
+            // `textOnly` is deliberately NOT set: it also drops the fireworks, ornaments and ambient
+            // dust (scene.ts:183 `graphicsOn = !tuning.textOnly`), which are small bright marks that
+            // key out fine — the brief's target look is glyphs + fireworks, not glyphs alone.
+            // Left as-is: bloom (a threshold-0.5 glow around bright pixels, not a plate) and the small
+            // overlay frame (overlay.ts: seal letters, corner marks — a few unit-percent, like sonnet).
+            return { sky: 0, collage: 0 };
         default:
             return null;
     }

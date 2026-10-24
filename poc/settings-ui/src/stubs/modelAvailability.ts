@@ -23,6 +23,9 @@ export const modelsPresent = (): AutomixModelsPresent => ABSENT;
 
 export const modelCanRun = (_name: AutomixModelName): boolean => false;
 
+/** 0.7.22: called after a model run produced nothing; nothing to re-check in the injected page. */
+export const noteModelFailed = async (_name: AutomixModelName): Promise<void> => undefined;
+
 export const refreshModelAvailability = async (): Promise<AutomixModelsPresent> => ABSENT;
 
 export const resetModelAvailability = (): void => undefined;

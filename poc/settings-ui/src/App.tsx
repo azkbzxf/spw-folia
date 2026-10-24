@@ -42,6 +42,12 @@ import PlayerBackgroundControl from '~/chrome/PlayerBackgroundControl';
 /* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar). */
 import PlaybackBar from '~/chrome/playback/PlaybackBar';
 import { useConfigPublisher } from '~/useConfigPublisher';
+/* 0.7.22 随机歌词样式: one style drawn per song from the random pool. */
+import { useRandomSongMode } from '~/model/useRandomSongMode';
+/* v0.4.0 自定义字体: picker modal + IndexedDB-backed font packs + 当前播放歌词预览. */
+import FontPickerModal, { type FontPickerChoice } from '~/model/FontPickerModal';
+import { restoreUploadedFonts } from '~/model/uploadedFonts';
+import { useCurrentLyricText } from '~/model/previewSong';
 
 interface AppProps {
     injected: boolean;
@@ -55,6 +61,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
     const [chromeVisible, setChromeVisible] = useState(true);
     /** v0.1.7: bottom-right panel holding the player-page transparent-background switch. */
     const [playerPanelOpen, setPlayerPanelOpen] = useState(false);
+    /** v0.4.0: 自定义字体 picker, opened from the 字体 tile / 当前字体 row. */
+    const [fontPickerOpen, setFontPickerOpen] = useState(false);
     const visualizerMode = state.visualizerMode;
     /** v0.1.7: with the player background transparent the page is click-through on its keyed pixels,
      *  so the chrome buttons must stay pinned on screen — otherwise they could never be clicked again. */
@@ -204,12 +212,17 @@ const App: React.FC<AppProps> = ({ injected }) => {
         };
     }, []);
 
-    // A settings file written before v0.1.3 may still select removed options; normalise it once so
-    // the reused panel renders sane values (custom font -> sans, romanization/both -> translation).
+    // 0.7.22 随机歌词样式: one style per song from the pool. Mounted once, at the shell level.
+    useRandomSongMode();
+    /** v0.4.0: 字体预览用当前播放的那句歌词（没在播放时回落到内置样句）。 */
+    const liveLyricText = useCurrentLyricText();
+
+    // A settings file written before v0.4.0 may still select removed options; normalise it once so
+    // the reused panel renders sane values (romanization/both -> translation). Custom font choices
+    // are kept: v0.4.0 restored the custom font subsystem (uploaded pack / system family), so
+    // 'custom' is a real selection again.
     useEffect(() => {
         const current = useSettingsStore.getState();
-        if (current.appearance.fontStyle === 'custom') current.setAppearance({ fontStyle: 'sans' });
-        if (current.subtitle.subtitleFontStyle === 'custom') current.setSubtitle({ subtitleFontStyle: 'sans' });
         const mode = current.subtitle.subtitleContentMode;
         if (mode === 'romanization' || mode === 'both') current.setSubtitle({ subtitleContentMode: 'translation' });
         if ((current.backgroundMode as string) === 'url') current.setBackgroundMode('latent');
@@ -234,18 +247,64 @@ const App: React.FC<AppProps> = ({ injected }) => {
     const backgroundConfig = useMemo(() => selectBackgroundConfig(state), [state]);
     const backgroundActions = useMemo(() => selectBackgroundActions(state), [state]);
 
-    // v0.1.3: custom font families are removed — the injected page has no font source, so the tile
-    // could never produce a working font. Only Folia's built-in sans/serif/mono remain.
+    // v0.4.0: 自定义字体 is a real choice again — the user imports a font pack or picks an installed
+    // system family, and the settings tree carries only the chosen family/label (the font binary
+    // stays in IndexedDB). The tile opens the picker through `onFontStyleChange('custom')`.
     const fontStyleOptions = useMemo(() => ([
         { label: t('options.fontSans'), value: 'sans' as FontChoice },
         { label: t('options.fontSerif'), value: 'serif' as FontChoice },
         { label: t('options.fontMono'), value: 'mono' as FontChoice },
+        { label: t('options.customFont'), value: 'custom' as FontChoice },
     ]), [t]);
 
+    // v0.4.0: the preview text defaults to the line that is playing right now (the user's request);
+    // the two bundled placeholder songs stay available for a font/size check without playback.
     const previewPlaceholderOptions = useMemo(() => ([
+        { label: t('options.previewTextCurrent'), value: 'current' as PreviewPlaceholderId },
         { label: t('options.previewTextDefault'), value: 'default' as PreviewPlaceholderId },
         { label: t('options.previewTextReserved'), value: 'reserved' as PreviewPlaceholderId },
     ]), [t]);
+
+    /* v0.4.0 自定义字体: the picker writes the appearance fields in one go, so the theme and the
+     * pushed config always agree. A system face needs no extra record; an imported pack is already
+     * in `state.uploadedFonts` (the picker registered it), so nothing is written here but the choice.
+     * The label shown next to the current font is the pack's file name when the choice is imported,
+     * the family name otherwise — `addUploadedFont` is never called from this path. */
+    const currentFontLabel = useMemo(() => {
+        const { customFontFamily, fontStyle } = state.appearance;
+        if (fontStyle !== 'custom' || !customFontFamily) return t('options.customFont');
+        const uploaded = state.uploadedFonts.find(font => font.family === customFontFamily);
+        return uploaded?.label ?? customFontFamily;
+    }, [state.appearance, state.uploadedFonts, t]);
+
+    const onPickFont = useCallback((choice: FontPickerChoice) => {
+        setFontPickerOpen(false);
+        useSettingsStore.getState().setAppearance({
+            fontStyle: 'custom',
+            customFontFamily: choice.family,
+            customFontSource: choice.source,
+            customFontStack: choice.stack && choice.stack.length > 0 ? choice.stack.join(', ') : null,
+        });
+    }, []);
+
+    /** 恢复默认: back to the built-in sans stack, custom fields cleared. */
+    const onClearFont = useCallback(() => {
+        setFontPickerOpen(false);
+        useSettingsStore.getState().setAppearance({
+            fontStyle: 'sans',
+            customFontFamily: null,
+            customFontSource: null,
+            customFontStack: null,
+        });
+    }, []);
+
+    /* v0.4.0: imported font packs live in IndexedDB; registering them again on every load is what
+     * makes a persisted choice survive a page reload (the font binary is not in the settings tree). */
+    const uploadedFonts = state.uploadedFonts;
+    useEffect(() => {
+        if (uploadedFonts.length === 0) return;
+        void restoreUploadedFonts(uploadedFonts).catch(() => undefined);
+    }, [uploadedFonts]);
 
     return (
         <>
@@ -305,6 +364,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
                         t={t}
                         visualizerMode={visualizerMode}
                         onVisualizerModeChange={mode => state.setVisualizerMode(mode)}
+                        randomEnabled={state.randomVisualizerModePerSong}
+                        onRandomChange={enabled => state.setRandomVisualizerModePerSong(enabled)}
                     />
                 )}
             >
@@ -324,15 +385,23 @@ const App: React.FC<AppProps> = ({ injected }) => {
                     onVisualizerOpacityChange={opacity => state.setAppearance({ visualizerOpacity: opacity })}
                     backgroundConfig={backgroundConfig as never}
                     backgroundActions={backgroundActions as never}
-                    previewPlaceholderId={state.previewPlaceholderId}
-                    previewPlaceholderOptions={previewPlaceholderOptions}
-                    onPreviewPlaceholderChange={id => state.setPreviewPlaceholderId(id)}
+                    previewPlaceholderId={state.previewPlaceholderId as never}
+                    previewPlaceholderOptions={previewPlaceholderOptions as never}
+                    onPreviewPlaceholderChange={id => state.setPreviewPlaceholderId(id as PreviewPlaceholderId)}
                     fontStyleValue={state.appearance.fontStyle as FontChoice}
                     fontStyleOptions={fontStyleOptions}
                     subtitleFontStyleOptions={fontStyleOptions}
-                    onFontStyleChange={fontStyle => state.setAppearance({ fontStyle })}
+                    onFontStyleChange={fontStyle => {
+                        // v0.4.0: picking 自定义 opens the picker instead of relying on a tile that
+                        // has no font to show yet; the family is written once a face is chosen.
+                        if (fontStyle === 'custom') {
+                            setFontPickerOpen(true);
+                            return;
+                        }
+                        state.setAppearance({ fontStyle });
+                    }}
                     customFontFamily={state.appearance.customFontFamily}
-                    currentFontLabel={state.appearance.customFontFamily ?? t('options.customFont')}
+                    currentFontLabel={currentFontLabel}
                     fontScale={state.appearance.fontScale}
                     fontScaleOptions={FONT_SCALE_OPTIONS}
                     onFontScaleChange={fontScale => state.setAppearance({ fontScale })}
@@ -344,7 +413,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
                     onFontWeightFollowChange={follow => state.setAppearance({ fontWeight: follow ? null : 400 })}
                     onResetCommonSettings={() => {
                         state.resetAppearance();
-                        state.setPreviewPlaceholderId('default');
+                        // v0.4.0: the live lyric line is the default preview text again.
+                        state.setPreviewPlaceholderId('current');
                     }}
                     hideTranslationSubtitle={state.subtitle.hideTranslationSubtitle}
                     onToggleHideTranslationSubtitle={hideTranslationSubtitle => state.setSubtitle({ hideTranslationSubtitle })}
@@ -375,6 +445,15 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 />
             </StudioWindow>
             </div>
+            {/* v0.4.0 自定义字体: 导入字体包 / 系统字体，预览用当前播放的那句歌词。 */}
+            <FontPickerModal
+                open={fontPickerOpen}
+                onClose={() => setFontPickerOpen(false)}
+                currentFamily={state.appearance.fontStyle === 'custom' ? state.appearance.customFontFamily : null}
+                onPick={onPickFont}
+                onClear={onClearFont}
+                previewText={liveLyricText ?? undefined}
+            />
         </>
     );
 };

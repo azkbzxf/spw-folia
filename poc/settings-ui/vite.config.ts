@@ -6,6 +6,7 @@
 // touch outside a browser (stores, registries, analysis models) is mapped to a stub under ./src/stubs
 // by the `folia-stubs` plugin: the stubs keep the same selector/return shapes but read from this
 // page's own settings store.
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
@@ -44,22 +45,42 @@ const STUB_RULES: Array<[RegExp, string]> = [
     [/lyrics\/workerClient$/, 'lyricsWorkerClient.ts'],
     [/lyrics\/parserCore$/, 'lyricsParserCore.ts'],
     [/services\/db$/, 'db.ts'],
+    // Online-music adapters: every provider imports a Node-only SDK and the registry is the one
+    // module that pulls all of them in. The settings window never plays music — the host does.
+    [/services\/onlineMusic\/providerRegistry$/, 'onlineMusicProviderRegistry.ts'],
     [/services\/localCoverAssetService$/, 'localCoverAssetService.ts'],
     [/services\/localMusicService$/, 'localMusicService.ts'],
 ];
 
 const foliaSrcPosix = foliaSrc.replace(/\\/g, '/');
 
+/** Folia serves two generated modules through Vite virtual ids: the zh-TW bundle and the command
+ *  palette's pinyin dictionary. 0.7.22's reused pages import both transitively (i18n/config.ts and
+ *  the command registry the settings window pulls in), so their generators have to run here too.
+ *  Both are plain Node ESM with no Folia `@/` imports, so they are imported straight from the
+ *  checkout. */
+const FOLIA_DEV = path.join(workspaceRoot, 'work/folia/folia-major-main/dev');
+const foliaVirtualModules = async (): Promise<Plugin[]> => {
+    const { traditionalLocalePlugin } = await import(`file://${path.join(FOLIA_DEV, 'i18n/traditionalLocalePlugin.mjs').replace(/\\/g, '/')}`);
+    const { commandPinyinPlugin } = await import(`file://${path.join(FOLIA_DEV, 'pinyin/commandPinyinPlugin.mjs').replace(/\\/g, '/')}`);
+    return [traditionalLocalePlugin(), commandPinyinPlugin()];
+};
+
 const foliaStubs = (): Plugin => ({
     name: 'spw-folia-stubs',
     enforce: 'pre',
     resolveId(source, importer) {
         // Ids reach this hook with forward slashes on every platform; compare in that form.
-        if (!importer || !importer.replace(/\\/g, '/').startsWith(foliaSrcPosix)) {
-            return null;
-        }
+        if (!importer) return null;
+        const importerPosix = importer.replace(/\\/g, '/');
+        if (!importerPosix.startsWith(foliaSrcPosix)) return null;
+        // Sibling imports (`./parserCore` from utils/lyrics/*) carry no directory part, so the rules
+        // are matched against the importer-relative target as well as the raw specifier.
+        const sibling = source.startsWith('.')
+            ? path.posix.normalize(path.posix.join(path.posix.dirname(importerPosix), source.replace(/\\/g, '/')))
+            : source;
         for (const [pattern, file] of STUB_RULES) {
-            if (pattern.test(source)) {
+            if (pattern.test(source) || pattern.test(sibling)) {
                 return path.join(stubs, file);
             }
         }
@@ -89,6 +110,24 @@ const inlineCssIntoEntry = (): Plugin => ({
         }
     },
 });
+
+/** The Folia checkout under work/ is a bare source tree: it has no node_modules of its own, so Vite
+ *  resolves nothing bare from inside it. Up to v0.3.x the reused panels only imported a handful of
+ *  packages that resolved through the aliases; 0.7.22's style previews pull in the whole visualizer
+ *  registry (three.js, pixi.js, …) plus the two dev/ generators, so the checkout needs a real
+ *  dependency root. `work/` is a local, gitignored checkout, so the link is part of the local build
+ *  setup and is (re)created on demand. */
+const ensureFoliaDeps = () => {
+    const link = path.join(workspaceRoot, 'work/folia/folia-major-main/node_modules');
+    if (fs.existsSync(link)) return;
+    try {
+        fs.symlinkSync(path.join(here, 'node_modules'), link, 'junction');
+    } catch (error) {
+        throw new Error(
+            `[spw-folia] could not link Folia's dependencies (${link} -> ${path.join(here, 'node_modules')}): ${String(error)}`,
+        );
+    }
+};
 
 const debugWhoImports = (): Plugin => ({
     name: 'spw-debug-importer',
@@ -133,10 +172,17 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
     {
         suffix: '/components/visualizer/window/VisPlaygroundSettingsPanel.tsx',
         edits: [
+            // 0.7.22 moved the card into a fifth 全局 tab; the tab itself goes too (surgery below),
+            // so the card's own line is dropped and nothing renders for `global` any more.
             {
                 what: 'SmartBeatSettingsCard element',
-                find: '                            <SmartBeatSettingsCard t={t} />\n',
-                replace: `                            ${SMART_BEAT_REVEAL}\n`,
+                find: '                    {activeSection === \'global\' && <SmartBeatSettingsCard t={t} />}\n',
+                replace: '',
+            },
+            {
+                what: 'global tab option',
+                find: "const SECTION_OPTIONS: VisPlaygroundEditSection[] = ['visualizer', 'background', 'common', 'subtitle', 'global'];",
+                replace: "const SECTION_OPTIONS: VisPlaygroundEditSection[] = ['visualizer', 'background', 'common', 'subtitle'];",
             },
             {
                 what: 'SmartBeatSettingsCard import',
@@ -145,7 +191,7 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
             },
             {
                 what: 'BeatEffectsGroup element',
-                find: '                                {/* Its 智能动感模式 effects, each named, switched and scaled on its own. */}\n                                <BeatEffectsGroup\n                                    t={t}\n                                    effects={visualizerEntry.beatEffects}\n                                    onSliderPointerDown={onSliderPointerDown}\n                                    onSliderCommit={onSliderCommit}\n                                />\n',
+                find: '                                {/* Its 智能动感模式 effects, each named, switched and scaled on its own. */}\n                                <BeatEffectsGroup\n                                    t={t}\n                                    effects={visualizerEntry.beatEffects}\n                                    onSliderPointerDown={onSliderPointerDown}\n                                    onSliderCommit={onSliderCommit}\n                                    onOpenSmartBeat={() => onSectionChange(\'global\')}\n                                />\n',
                 replace: '',
             },
             {
@@ -163,11 +209,9 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
                 find: "                                            { label: t('options.subtitleContentRomanization'), value: 'romanization' },\n                                            { label: t('options.subtitleContentBoth'), value: 'both' },\n",
                 replace: '',
             },
-            {
-                what: 'custom font reveal block',
-                find: "                            <Reveal when={fontStyleValue === 'custom'}>\n                                <Row sub label={t('options.currentFont')}>\n                                    <Value tip={currentFontLabel}>{currentFontLabel}</Value>\n                                    <Button onClick={() => onFontStyleChange('custom')}>{t('options.chooseSystemFont')}</Button>\n                                </Row>\n                            </Reveal>\n",
-                replace: '',
-            },
+            // v0.4.0: the 当前字体 row is KEPT. In 0.7.22 it is the only place the panel surfaces the
+            // chosen family and a 选择自定义字体 button, and the shell now opens its own picker when
+            // `onFontStyleChange('custom')` fires — the reveal is exactly the hook for that.
             {
                 what: 'harmony subtitle group',
                 find: "                            <Group def={HARMONY_GROUP}>\n                                <ToggleRow\n                                    label={t('options.showHarmonySubtitle')}\n                                    note={t('options.showHarmonySubtitleDesc')}\n                                    checked={showHarmonySubtitle}\n                                    disabled={!onToggleShowHarmonySubtitle}\n                                    onChange={next => onToggleShowHarmonySubtitle?.(next)}\n                                />\n                                <Reveal when={showHarmonySubtitle}>\n                                    <ToggleRow\n                                        sub\n                                        label={t('options.harmonySubtitleBackground')}\n                                        note={t('options.harmonySubtitleBackgroundDesc')}\n                                        checked={harmonySubtitleBackground}\n                                        disabled={!onToggleHarmonySubtitleBackground}\n                                        onChange={next => onToggleHarmonySubtitleBackground?.(next)}\n                                    />\n                                </Reveal>\n                            </Group>\n",
@@ -251,16 +295,28 @@ const foliaSettingsSurgery = (): Plugin => ({
     },
 });
 
-export default defineConfig({
+ensureFoliaDeps();
+
+export default defineConfig(async () => ({
     base: './',
-    plugins: [foliaSettingsSurgery(), react(), foliaStubs(), debugWhoImports(), inlineCssIntoEntry(), tailwindcss()],
+    plugins: [
+        ...(await foliaVirtualModules()),
+        foliaSettingsSurgery(), react(), foliaStubs(), debugWhoImports(), inlineCssIntoEntry(), tailwindcss(),
+    ],
     resolve: {
         alias: [
             { find: /^@\//, replacement: `${foliaSrc}/` },
             { find: /^~\//, replacement: path.join(here, 'src') + '/' },
         ],
         // Folia's source has no node_modules of its own: every bare import resolves from this project.
-        dedupe: ['react', 'react-dom', 'framer-motion', 'lucide-react', 'i18next', 'react-i18next', 'zustand', 'react-colorful', 'react-window', 'dexie'],
+        // 0.7.22's style pictures pull the visualizer registry (and so three.js/pixi.js) into the
+        // settings bundle; those packages must resolve to this project's copies as well.
+        dedupe: [
+            'react', 'react-dom', 'framer-motion', 'lucide-react', 'i18next', 'react-i18next',
+            'zustand', 'react-colorful', 'react-window', 'dexie',
+            'three', '@react-three/fiber', '@react-three/drei', '@react-three/postprocessing',
+            'pixi.js', 'twgl.js', '@chenglou/pretext', 'blueimp-md5', 'wanakana',
+        ],
     },
     build: {
         outDir: 'dist',
@@ -282,4 +338,4 @@ export default defineConfig({
     },
     server: { port: 18090, strictPort: true },
     preview: { port: 18091, strictPort: true },
-});
+}));
