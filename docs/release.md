@@ -2,7 +2,7 @@
 
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
-Last verified: 2026-10-21 (v0.3.0 release artifact; host `spw-folia-host.exe` 134,144 B, WebView2 150.0.4078.83).
+Last verified: 2026-10-24 (v0.4.0 preview artifact; host `spw-folia-host.exe` 152,576 B, WebView2 150.0.4078.83).
 
 ## 1. What ships
 
@@ -11,12 +11,14 @@ packaging/
   web/                         # -> .spmod/web/            (the page the host loads offline)
     index.html                 #    Folia OBS browser-source entry (PWA tags removed)
     assets/…                   #    complete Folia web chunk graph incl. every lazy per-style chunk
+    preview.html               #    generated: live-preview iframe entry (patched index.html + preview shim)
+    _host/preview-shim.js      #    generated: child-document shim that stubs EventSource for the preview
     settings/settings-ui.js    # -> injected settings island (task-5 build)
     settings/styles/           #    inlined CSS is in the JS; these are extra assets
     settings/thumbs/*.jpg      #    real Folia style thumbnails (14 staged as of v0.3.0; 15 with 花火)
     _host/shim.js, overlay.js  #    audit copies of the scripts embedded in the exe
   native/                      # -> .spmod/native/ (plugin resolveHelper also accepts lib/)
-    spw-folia-host.exe         #    C# .NET Framework 4.8 helper (134,144 B as of v0.3.0)
+    spw-folia-host.exe         #    C# .NET Framework 4.8 helper (152,576 B as of v0.4.0)
     spw-folia-host.exe.config  #    PerMonitorV2 DPI + supportedRuntime v4.8
     Microsoft.Web.WebView2.Core.dll
     Microsoft.Web.WebView2.WinForms.dll
@@ -27,9 +29,15 @@ packaging/
     AUDIO-MIT.txt              #    WASAPI analyzer (MIT)
     WebView2-SDK-LICENSE.txt / WebView2-SDK-NOTICE.txt
   tools/                       # build + verification tooling (never shipped)
-    stage-web.mjs              # complete-dist staging (all chunks; SW/PWA excluded, guarded)
+    stage-web.mjs              # complete-dist staging (all chunks; SW/PWA excluded, guarded; settings dedupe)
+    apply-image-overrides.mjs  # overlay packaging/image-overrides/ onto the staged web tree
+    make-image-overrides.py    # regenerate the overrides from the upstream dist (needs Pillow)
     size-report.mjs            # size budget + top files
     verify-layout.mjs          # packaged end-to-end acceptance test
+  image-overrides/             # committed size-optimized copies of upstream images (never shipped as a tree)
+    MANIFEST.md
+    assets/…                   # 256-colour palette PNG / q88 JPEG, same names+formats as upstream
+    preview/…                  # the two generated preview covers
   testdata/default-settings.json  # settings tree fixture for the smoke test
   web-stage-report.json        # what was staged/excluded (audit)
   size-report.json             # size budget result
@@ -41,10 +49,18 @@ Current sizes (`packaging/size-report.json`, `bash packaging/build-package.sh` o
 
 | area | files | size |
 | --- | --- | --- |
-| `web/` (complete Folia dist + settings island + 2 host-script copies) | 1,898 | 22.37 MB |
-| `native/` (exe 134,144 B + config + 3 dlls) | 5 | 1.02 MB |
+| `web/` (complete Folia dist + settings island + 2 host-script copies) | 3,825 | 24.89 MB |
+| `native/` (exe 152,576 B + config + 3 dlls) | 5 | 1.03 MB |
 | `licenses/` | 7 | 0.05 MB |
-| **total** | **1,910** | **24.57 MB** (budget 25 MB: OK) |
+| **total** | **3,837** | **25.97 MB** (budget 25 MB: OVER by 0.97 MB) |
+
+The uncompressed staging total is text-heavy and over the historical 25 MB guard, but the shipped
+`.spmod` is **12,193,169 B (11.63 MiB)** as of `v0.4.0-preview.2` — the budget is a rough staging
+bloat guard, the artifact size is what users download. The growth comes from upstream Folia 0.7.22
+(19.54 → 20.01 MB of `assets/`) and the settings island now pulling the whole visualizer registry
+(1,950 files in `settings/assets`); two extra passes compensate ~7.3 MB:
+**settings-asset dedupe** (29 files / 4.00 MB shared with `web/assets/` are replaced by `/assets/…`
+references, see below) and **image overrides** (4.67 MB → 1.39 MB of illustrations/avatars/covers).
 
 The shipped web tree is the **complete** Folia production dist (every lazy chunk included), because
 Folia dynamic-imports per-style renderers on demand (`assets/VisualizerTempera-*.js`, …). An earlier
@@ -52,7 +68,9 @@ subset built from the cold-start offline closure caused a black window on non-de
 (`Failed to fetch dynamically imported module`), caught by task-13. `packaging/tools/stage-web.mjs`
 now copies the whole `poc/webview/dist/dist` tree and hard-fails if no per-style lazy chunk is present.
 Excluded only: the PWA/service-worker trio (`registerSW.js`, `sw.js`, `workbox-*`, `manifest.webmanifest`;
-the registration tag is removed from `index.html`) and local `.bak` backups.
+the registration tag is removed from `index.html`) and local `.bak` backups. It also generates
+`preview.html` + `_host/preview-shim.js` (the settings live-preview iframe) and performs the
+settings-asset dedupe described above.
 
 ## 2. Rebuild the package
 
@@ -70,15 +88,21 @@ Then assemble:
 bash packaging/build-package.sh
 ```
 
-The script (idempotent, ~20 s) does: stage-web → stage native → stage licenses (copies AGPL from
-`work/folia/folia-major-main/LICENSE`, extracts WebView2 `LICENSE.txt`/`NOTICE.txt` from the NuGet
-package) → `size-report.json` → `SHA256SUMS.txt`. It fails loudly if an input is missing.
+The script (idempotent, ~20 s) does: stage-web → image overrides → stage native → stage licenses
+(copies AGPL from `work/folia/folia-major-main/LICENSE`, extracts WebView2 `LICENSE.txt`/`NOTICE.txt`
+from the NuGet package) → `size-report.json` → `SHA256SUMS.txt`. It fails loudly if an input is
+missing; stale image overrides are reported as warnings (they only cover files that still exist).
 
-Staging rule of record: `packaging/tools/stage-web.mjs` reads
-`poc/webview/server/out/offline-report.json` (`loadedFiles`) and copies only that closure; it also
-patches `index.html` (removes the PWA service-worker `<script>` and `manifest` link) and copies the
-settings island + embedded-script audit copies. If the Folia dist changes, re-run the offline probe
-(`node poc/webview/server/probe-offline.mjs`) to regenerate the dependency report, then re-stage.
+Staging rule of record: `packaging/tools/stage-web.mjs` copies the **whole**
+`poc/webview/dist/dist` tree (see §1) instead of a cold-start closure, patches `index.html`
+(removes the PWA service-worker `<script>` and `manifest` link), generates `preview.html` +
+`_host/preview-shim.js`, copies the settings island and embedded-script audit copies, and dedupes
+the settings assets whose bytes match `web/assets/` (rewriting those URLs to `/assets/…`; the host
+consequently injects the settings island from the bundle origin so a root-absolute `/assets/` path
+resolves — see `HostForm.cs` `settingsInsideBundle` branch). `apply-image-overrides.mjs` then
+replaces the heavy illustrations/covers with the committed `packaging/image-overrides/` variants.
+If the Folia dist changes, re-run `python packaging/tools/make-image-overrides.py` (needs Pillow)
+and re-stage.
 
 ## 3. Assembling the final `.spmod`
 

@@ -68,6 +68,16 @@ issue #9 的启动成功提示噪音也在这一版移除；PR #10（多屏跟�
 - **播放页左上角退出按钮** —— 未开启「播放页透明背景」时，播放页左上角显示圆形 `×` 按钮（与右上角
   设置齿轮严格对称、同样的玻璃质感与淡出行为），点击即关闭 Folia 窗口；透明模式自动隐藏。
 - **PR #10：多屏跟随、Alt 跨屏拖动、呼出快捷键可配置** —— 已随本版合入（squash 为 `b30df5d`）。
+- **安装包体积优化** —— 发布产物从首个预览版的 **20.0 MB 降到 12.2 MB**（−39%，比 v0.3.1 的
+  12.4 MB 还小一点），主要做了两件事：
+  - 设置页资源去重：`web/settings/assets/` 里与 `web/assets/` 逐字节相同的 29 个图片（4.00 MB）不再
+    重复打包，引用改写成 `/assets/…`；设置岛（注入的设置页）改为从 bundle 同源加载，根绝对路径
+    `/assets/…` 才能正确解析；
+  - 图片重压缩：插图 / 头像改为 256 色调色板 PNG，预览封面改为 progressive JPEG（`packaging/image-overrides/`
+    + `apply-image-overrides.mjs`），4.67 MB → 1.39 MB；文件名与格式不变，所以不需要改任何动态资源 URL。
+  - 抵消项：上游 0.7.22 的 web 资源本身比 0.7.21 大 0.47 MB，插件类 +0.12 MB，宿主 +17 KB。
+  - 未压缩 staging 仍是 25.97 MB（主要是文本 JS，压缩进 zip 后只有 12.2 MB）；`size-report.json`
+    的 25 MB 预算仍是历史防膨胀阈值，现处于 OVER 状态，注释见 `docs/release.md`。
 
 ## 修复
 
@@ -94,8 +104,15 @@ issue #9 的启动成功提示噪音也在这一版移除；PR #10（多屏跟�
 - **构建**：`cd spw-folia && JAVA_HOME="C:/Program Files/Java/jdk-21.0.10" ./gradlew plugin -q --offline`
   → `build/libs/plugin-dev.spw.folia-0.4.0.spmod`（**205,707 字节**，manifest `Plugin-Version: 0.4.0`、
   `Plugin-Has-Config: true`、`Plugin-Permissions: class-transform,library-read,key-bindings`）。
-- **宿主**：`bash poc/webview/host/build.sh` → `spw-folia-host.exe` **151,552 字节**（含新的分层窗口
-  透明实现与 `IntroCurtain.cs`）。
+- **宿主**：`bash poc/webview/host/build.sh` → `spw-folia-host.exe` **152,576 字节**（含新的分层窗口
+  透明实现、`IntroCurtain.cs`，以及设置岛同源加载）。
+- **打包**：`bash packaging/build-package.sh` → 3,837 文件 / 25.97 MB（`web/` 24.89 MB、`native/`
+  1.03 MB、`licenses/` 0.05 MB）；其中设置页资源去重 29 个文件、4.00 MB，图片覆盖 4.67 MB → 1.39 MB。
+- **发布产物**：`dist/release/spw-folia-0.4.0-preview.2.spmod` **12,193,169 字节**
+  （sha256 `1c9816a992cd303a93b1b24e7601657c36d82247dceddf36e2e768c3e2e7e7cb`，3,896 条目）；
+  manifest `Plugin-Version: 0.4.0`、`Plugin-Has-Config: true`。
+- **打包后验收**：`node packaging/tools/verify-layout.mjs` → PASS（10 项检查全绿，
+  `avatarAssetStatus: 200`、`settingsScripts: 1`、`consoleErrors: 0`、fps 中位数 104）。
 - **本地验收（宿主探针 + 真实 SPW 日志）**：
   - 托盘右键菜单显示 `Folia`（位于「桌面歌词」之后），点击可开 / 关；
   - 两条透明快捷键在快捷键管理中显示，窗口关闭时切换会持久化，下次打开按该模式启动；
