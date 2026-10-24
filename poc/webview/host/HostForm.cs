@@ -1218,7 +1218,27 @@ namespace SpwFolia
                     // version query WebView2's HTTP disk cache can keep serving a stale settings-ui.js
                     // after a plugin upgrade. Tie the URL to the plugin version (protocol hello.bundleVersion).
                     string bundleVersion = string.IsNullOrEmpty(args.BundleVersion) ? "dev" : args.BundleVersion;
-                    string entryUrl = "https://" + Program.SettingsHost + "/" + args.SettingsEntry + "?v=" + Uri.EscapeDataString(bundleVersion);
+                    // v0.4.0: when the settings island lives inside the bundle (always true for the packaged
+                    // plugin) serve it from the bundle host instead of the separate settings host. The island
+                    // and the Folia page then share one origin, so the staging dedupe can point duplicated
+                    // style images at the absolute /assets/<name> URL (see packaging/tools/stage-web.mjs).
+                    string entryUrl;
+                    string settingsFull = Path.GetFullPath(args.SettingsDir);
+                    string bundleFull = string.IsNullOrEmpty(args.Bundle) ? null : Path.GetFullPath(args.Bundle);
+                    bool settingsInsideBundle = !string.IsNullOrEmpty(bundleFull)
+                        && settingsFull.StartsWith(bundleFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                    if (settingsInsideBundle)
+                    {
+                        string rel = settingsFull.Substring(bundleFull.Length + 1);
+                        entryUrl = "https://" + Program.BundleHost + "/" + EncodeBundleRelativePath(rel) + "/"
+                            + Uri.EscapeDataString(args.SettingsEntry) + "?v=" + Uri.EscapeDataString(bundleVersion);
+                    }
+                    else
+                    {
+                        // External --settings-dir: keep the dedicated settings host (fresh origin, no shared
+                        // /assets tree), which is only used by custom dev setups.
+                        entryUrl = "https://" + Program.SettingsHost + "/" + Uri.EscapeDataString(args.SettingsEntry) + "?v=" + Uri.EscapeDataString(bundleVersion);
+                    }
                     // Iframe guard: AddScriptToExecuteOnDocumentCreated runs in every frame, so without
                     // the top-window check the settings UI would mount a second time inside the live
                     // preview iframe (double overlay / React-root conflict).
@@ -1241,9 +1261,15 @@ namespace SpwFolia
             }
         }
 
-        private string ResolveUrl()
+        private static string EncodeBundleRelativePath(string rel)
         {
-            if (args.DemoConfig && string.IsNullOrEmpty(args.DevUrl) && string.IsNullOrEmpty(args.Url) && !string.IsNullOrEmpty(args.Bundle))
+            string[] parts = rel.Split('/', '\\');
+            for (int i = 0; i < parts.Length; i++) parts[i] = Uri.EscapeDataString(parts[i]);
+            return string.Join("/", parts);
+        }
+
+        private string ResolveUrl()
+        {            if (args.DemoConfig && string.IsNullOrEmpty(args.DevUrl) && string.IsNullOrEmpty(args.Url) && !string.IsNullOrEmpty(args.Bundle))
             {
                 return Program.DefaultBundleUrl;
             }

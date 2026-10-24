@@ -11,7 +11,8 @@
 //
 // --report defaults to packaging/web-stage-report.json (the release pipeline reads it); local plugin
 // staging passes a build/ path so a dev run cannot overwrite the production staging report.
-import { existsSync, mkdirSync, copyFileSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -98,6 +99,78 @@ let settingsFiles = 0;
   }
 })(settingsOut);
 
+// Settings-island dedupe: Folia's style pictures and avatars are emitted twice — once by the page
+// build (web/assets/<name>) and once by the settings-island build (web/settings/assets/<name>) —
+// with byte-identical content. Both trees are served from the same origin, so rewrite the island's
+// references to the absolute /assets/<name> URL and drop the duplicate file. This removes ~4 MB of
+// incompressible images from the .spmod without touching either bundle's own code.
+const settingsDedupe = { candidates: 0, rewrittenRefs: 0, removed: 0, savedBytes: 0, skipped: 0 };
+{
+  const sha = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+  const assetsIndex = new Map(); // sha256 -> absolute-relative asset path
+  for (const ent of readdirSync(join(out, 'assets'), { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    const f = join(out, 'assets', ent.name);
+    assetsIndex.set(sha(f), `assets/${ent.name}`);
+  }
+  const textFiles = [];
+  (function collectText(p) {
+    for (const ent of readdirSync(p, { withFileTypes: true })) {
+      const f = join(p, ent.name);
+      if (ent.isDirectory()) collectText(f);
+      else if (/\.(?:js|css|html)$/i.test(ent.name)) textFiles.push(f);
+    }
+  })(settingsOut);
+  const texts = new Map(textFiles.map((f) => [f, readFileSync(f, 'utf8')]));
+  const changed = new Set();
+  const duplicates = [];
+  (function collectDupes(p) {
+    for (const ent of readdirSync(p, { withFileTypes: true })) {
+      const f = join(p, ent.name);
+      if (ent.isDirectory()) { collectDupes(f); continue; }
+      const target = assetsIndex.get(sha(f));
+      if (target && target !== `settings/${relative(settingsOut, f).replace(/\\/g, '/')}`) {
+        duplicates.push({ file: f, name: ent.name, target });
+      }
+    }
+  })(settingsOut);
+  settingsDedupe.candidates = duplicates.length;
+  // A URL token that ends with "/<name>" (or equals it) is a reference to that asset; an absolute
+  // path is already correct. Rewriting to /assets/<name> keeps working from any island subdir.
+  const TOKEN = /[A-Za-z0-9._~/-]+/g;
+  for (const dupe of duplicates) {
+    let hits = 0;
+    for (const [f, text] of texts) {
+      if (!text.includes(dupe.name)) continue;
+      const next = text.replace(TOKEN, (tok) => {
+        if (tok === dupe.name || (tok.endsWith(`/${dupe.name}`) && !tok.startsWith('/'))) {
+          hits++;
+          return `/assets/${dupe.name}`;
+        }
+        return tok;
+      });
+      if (next !== text) { texts.set(f, next); changed.add(f); }
+    }
+    if (hits === 0) {
+      settingsDedupe.skipped++;
+      console.warn(`[stage-web] settings dedupe: kept ${dupe.name} (no reference found)`);
+      continue;
+    }
+    const size = statSync(dupe.file).size;
+    unlinkSync(dupe.file);
+    settingsDedupe.removed++;
+    settingsDedupe.savedBytes += size;
+    settingsDedupe.rewrittenRefs += hits;
+  }
+  for (const f of changed) writeFileSync(f, texts.get(f));
+  settingsFiles -= settingsDedupe.removed;
+  settingsBytes -= settingsDedupe.savedBytes;
+  if (settingsDedupe.removed > 0) {
+    console.log(`[stage-web] settings dedupe: ${settingsDedupe.removed} duplicate file(s), `
+      + `${(settingsDedupe.savedBytes / 1048576).toFixed(2)} MB, ${settingsDedupe.rewrittenRefs} reference(s) rewritten`);
+  }
+}
+
 // Host-injected scripts are embedded in the executable (C# resources) so they cannot go missing at
 // runtime; keep byte-identical copies under web/_host/ for source-offer/audit purposes.
 const hostSrc = resolve(ROOT, 'poc/webview/host');
@@ -161,6 +234,7 @@ const summary = {
   previewCovers,
   settingsFiles,
   settingsBytes,
+  settingsDedupe,
   totalBytes: bytes + settingsBytes,
   excluded: { swTrio: ['registerSW.js', 'sw.js', 'workbox-*.js', 'folia-cover-sw.js', 'manifest.webmanifest'], reason: 'PWA/service-worker files are not needed for a single local page load; registerSW.js tag removed from index.html' },
   missingFromDist: missing,
@@ -170,4 +244,4 @@ const summary = {
 const reportFile = resolve(ROOT, opt('report', 'packaging/web-stage-report.json'));
 mkdirSync(dirname(reportFile), { recursive: true });
 writeFileSync(reportFile, JSON.stringify(summary, null, 2));
-console.log(JSON.stringify({ webFiles: copied, webBytes: bytes, settingsFiles, settingsBytes, totalBytes: bytes + settingsBytes, missing: missing.length, indexHtmlPatched: summary.indexHtmlPatched, previewShimCopied, previewHtml, previewCovers }, null, 2));
+console.log(JSON.stringify({ webFiles: copied, webBytes: bytes, settingsFiles, settingsBytes, settingsDedupe, totalBytes: bytes + settingsBytes, missing: missing.length, indexHtmlPatched: summary.indexHtmlPatched, previewShimCopied, previewHtml, previewCovers }, null, 2));

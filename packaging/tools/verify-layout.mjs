@@ -107,7 +107,7 @@ function startFlow() {
 
   const shot = (name) => send({ t: 'command', command: 'screenshot', path: join(OUT, name) });
   const evalJs = (script) => send({ t: 'command', command: 'eval', script });
-  const probe = () => evalJs("JSON.stringify({hasUi: !!window.__SPW_FOLIA_SETTINGS_UI__, hasBridge: !!window.__SPW_FOLIA__, uiApi: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen), open: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen && window.__SPW_FOLIA__.ui.isSettingsOpen()), canvases: document.querySelectorAll('canvas').length, settingsScripts: [...document.scripts].map(s=>s.src).filter(s=>s.indexOf('spw-folia-settings.local')>=0).length})");
+  const probe = () => evalJs("JSON.stringify({hasUi: !!window.__SPW_FOLIA_SETTINGS_UI__, hasBridge: !!window.__SPW_FOLIA__, uiApi: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen), open: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen && window.__SPW_FOLIA__.ui.isSettingsOpen()), canvases: document.querySelectorAll('canvas').length, settingsScripts: [...document.scripts].map(s=>s.src).filter(s=>s.indexOf('/settings/settings-ui.js')>=0 || s.indexOf('spw-folia-settings.local')>=0).length, avatarAssetStatus: (function(){try{var x=new XMLHttpRequest();x.open('GET','/assets/avatar10-CEta-Hap.png',false);x.send();return x.status}catch(e){return 'err'}})()})");
   const esc = () => evalJs("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); JSON.stringify({esc:'dispatched'})");
 
   setTimeout(probe, 4200);                                             // probe1: first-run state

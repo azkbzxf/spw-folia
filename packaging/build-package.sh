@@ -26,6 +26,9 @@ echo "root: $ROOT"
 echo "-- staging web subset (dependency-report driven, no service worker)"
 node "$PKG/tools/stage-web.mjs" --dist "$DIST" --out "$PKG/web"
 
+echo "-- overlaying optimized illustrations (palette PNG / q88 JPEG, see image-overrides/MANIFEST.md)"
+node "$PKG/tools/apply-image-overrides.mjs" --web "$PKG/web"
+
 # ---------------------------------------------------------------- 2. native helper
 echo "-- staging native helper"
 rm -rf "$PKG/native"
