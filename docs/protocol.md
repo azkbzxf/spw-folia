@@ -25,7 +25,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 | `hello` | `protocol:1`, `pluginVersion`, `spwVersion`, `devUrl?`, `bundleDir?` | 启动握手；`devUrl` 存在时加载开发服务器（仅开发） |
 | `settings` | `settings: object` | 全量持久化设置（启动时一次；UI 每次改动后回传一次做确认） |
 | `state` | `posMs:int`, `durationMs:int`, `playing:bool`, `rate:number`, `tsMs:int64` | 播放时钟，建议 100ms 一次（≥20Hz）。页面按 `tsMs + (now-tsMs)*rate` 插值 |
-| `lyrics` | `lines:[{startMs,endMs,main,sub,cells:[{startMs,endMs,text}]}]`, `offsetMs:int`, `translationMode?` | 曲目/歌词变化时发送；空数组=无歌词 |
+| `lyrics` | `lines:[{startMs,endMs,main,sub,cells:[{startMs,endMs,text}]}]`, `offsetMs:int`, `translationMode?` | 曲目/歌词变化时发送；空数组=无歌词。**`cells` 是真实逐字时轴（SPW `LyricsLine.Cell`，绝对毫秒）**，v0.4.2 起页面侧 `toPublisherLyrics` 把它映射成 Folia 的 `words[]`（issue #13），缺失时才退回按字符均分的 `fallbackWords` |
 | `track` | `id`, `title`, `artist`, `album`, `durationMs`, `coverDataUrl?`, `coverPath?` | 封面优先 data URL（JPEG/PNG base64），否则宿主负责本地读取。宿主转发页面时同时给出 `coverUrl` 镜像（v0.1.2+，见 §1.1） |
 | `queue` | `mode:"circle"|"circle-end"|"repeat-one"|"random"`, `random:bool`, `index:int`, `items:[{id,title,artist,album}]` | v0.3.0+：当前播放队列快照。`random=true` 时 `items` 为随机队列且 `index` 对应随机队列位置，否则为顺序队列。首次连接后、播放队列/模式变化时发送（低频，无变化不重发）；播放进度不在此处 |
 | `config` | `config: object` | 可选覆盖：插件强制推送完整 Folia `ObsBrowserSourceConfig`（调试/兼容用，正常不用） |
@@ -61,6 +61,9 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 - `{"type":"log","level":"...","msg":"..."}`
 - `{"type":"beatDebug",...}`：可选
 - `{"type":"ui","settingsOpen":true|false}`：设置覆盖层开合状态（Shim 在捕获阶段拦截 `settingsUI` 特殊消息后发出；宿主据此在覆盖层打开期间强制显示光标，并保证 ESC 优先关闭覆盖层）
+- `{"type":"envCheck"}`（v0.4.2, issue #12）：「出现问题」面板请求宿主的环境自检，宿主回 §3.2 `envReport`
+- `{"type":"openLogFolder","path"?:"<dir>"}`（v0.4.2）：用资源管理器打开日志目录并选中 `spw-folia.log`；`path` 省略时宿主用自己的 exe 目录
+- `{"type":"openUrl","url":"https://…"}`（v0.4.2）：用默认浏览器打开反馈页；宿主只接受 `http`/`https`，其余一律拒绝并记 warn
 
 ### 3.2 宿主 → 页面（`chrome.webview.postMessage`，页面侧由 Shim.js 统一接收）
 | type | 负载 | Shim 行为 |
@@ -74,6 +77,27 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 | `audio` | `{power,bass,lowMid,mid,vocal,treble,spectrum:[...]}` | 转成 `audio` 事件，**已是 0..255 gamma 尺度**；spectrum 为 0..255 数组（1024 bins） |
 | `config` | `{config}` | 直接分发 `config` 事件（覆盖页面自算，调试用） |
 | `beat` | `{beatImpact,downbeatImpact}` | 可选：若 beat-FX 注入可用，Shim 负责 `.set()` 模块 MV |
+| `envReport` | 宿主环境自检对象（见 §3.5） | v0.4.2+：记入 `inputs.envReport` 并 `emit('envReport')`；设置 UI 的「出现问题」面板据此渲染 |
+
+### 3.5 环境自检报告（v0.4.2，issue #12）
+
+`HostForm.BuildEnvReport()` 产出的字段（全部 best-effort，取不到就是 `null`）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `hostVersion` / `pid` / `protocol` / `startedAtMs` | 辅助进程身份与已运行时长 |
+| `webView2` | `CoreWebView2Environment.GetAvailableBrowserVersionString()`；缺失时 `null`（对应 exit 3） |
+| `dotnet` | 注册表 `NET Framework Setup\NDP\v4\Full\Release`（4.8 = 528040，4.8.1 = 533320+） |
+| `os` / `os64` / `process64` | 系统版本与两个位数标志 |
+| `bundle` / `bundleIndex` | 页面 bundle 目录、`index.html` 是否存在（缺失 = exit 2） |
+| `settingsDir` / `settingsEntry` | 设置岛目录、`settings-ui.js` 是否存在 |
+| `userData` | WebView2 用户数据目录 |
+| `nativeFiles` | `{dir, present[], missing[]}`：与 exe 同目录的 5 个原生文件 |
+| `dpi` / `dpiAwareness` / `screen` | 窗口 DPI 与客户区尺寸 |
+| `transparent` / `audio` | 当前是否色键透明、音频采集源（WASAPI 回环失败时回落合成信号） |
+| `fps` / `statesReceived` / `framesPosted` / `droppedLogLines` | 运行期计数 |
+| `logPath` | 插件把宿主 stdout 镜像到的日志文件（`--log-file`），面板据此定位日志 |
+
 
 ### 3.3 注入全局（Shim.js 暴露，设置 UI 使用）
 ```ts

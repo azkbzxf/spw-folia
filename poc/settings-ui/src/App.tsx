@@ -2,7 +2,7 @@
  * the POC's configuration store (model/settings.ts) instead of Folia's persisted app store. */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Settings, X } from 'lucide-react';
+import { Settings, X, LifeBuoy } from 'lucide-react';
 import StudioWindow from '@/components/shared/StudioWindow';
 import VisPlaygroundSettingsPanel from '@/components/visualizer/window/VisPlaygroundSettingsPanel';
 import type { FontChoice } from '@/components/visualizer/window/FontTiles';
@@ -39,6 +39,8 @@ import {
     type HitRegion,
 } from '~/bridge';
 import PlayerBackgroundControl from '~/chrome/PlayerBackgroundControl';
+/* issue #12 增加日志功能: 「出现问题」 environment self-check + pre-filled feedback panel. */
+import ProblemReportPanel from '~/chrome/ProblemReportPanel';
 /* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar). */
 import PlaybackBar from '~/chrome/playback/PlaybackBar';
 import { useConfigPublisher } from '~/useConfigPublisher';
@@ -63,6 +65,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
     const [playerPanelOpen, setPlayerPanelOpen] = useState(false);
     /** v0.4.0: 自定义字体 picker, opened from the 字体 tile / 当前字体 row. */
     const [fontPickerOpen, setFontPickerOpen] = useState(false);
+    /** issue #12: 「出现问题」 environment self-check + feedback panel. */
+    const [problemPanelOpen, setProblemPanelOpen] = useState(false);
     const visualizerMode = state.visualizerMode;
     /** v0.1.7: with the player background transparent the page is click-through on its keyed pixels,
      *  so the chrome buttons must stay pinned on screen — otherwise they could never be clicked again. */
@@ -152,6 +156,10 @@ const App: React.FC<AppProps> = ({ injected }) => {
             push(document.querySelector('[data-spw-chrome="settings"]'));
             push(document.querySelector('[data-spw-chrome="player-background"]'));
             push(document.querySelector('[data-spw-chrome="player-background-panel"][data-open="true"]'));
+            /* issue #12: the 「出现问题」 button and its panel must stay clickable too, otherwise the
+             *  very control meant to help a broken setup would be unreachable in passthrough mode. */
+            push(document.querySelector('[data-spw-chrome="problem-report"]'));
+            push(document.querySelector('[data-spw-chrome="problem-report-panel"][data-open="true"]'));
             push(document.querySelector('[data-spw-settings-overlay="true"]'));
             reportHitRegions(rects);
         };
@@ -162,7 +170,7 @@ const App: React.FC<AppProps> = ({ injected }) => {
             window.clearTimeout(settle);
             window.removeEventListener('resize', collect);
         };
-    }, [state.transparentPlayerBackground, state.mousePassthrough, playerPanelOpen, open, chromeVisible]);
+    }, [state.transparentPlayerBackground, state.mousePassthrough, playerPanelOpen, problemPanelOpen, open, chromeVisible]);
 
     // v0.1.7: while the player-background panel is open it owns ESC (panel first, window second) —
     // window-capture + stopPropagation keeps both our settings listener and the host's Escape out.
@@ -177,6 +185,20 @@ const App: React.FC<AppProps> = ({ injected }) => {
         window.addEventListener('keydown', onKeyDown, true);
         return () => window.removeEventListener('keydown', onKeyDown, true);
     }, [playerPanelOpen]);
+
+    /* issue #12: same ESC ownership for the diagnostics panel — it is a modal-ish card over the
+     * player page, so the first Escape closes it and a second one closes the window. */
+    useEffect(() => {
+        if (!problemPanelOpen) return undefined;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            setProblemPanelOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+    }, [problemPanelOpen]);
 
     useEffect(() => {
         if (!open) return undefined;
@@ -348,6 +370,22 @@ const App: React.FC<AppProps> = ({ injected }) => {
             >
                 <Settings size={20} strokeWidth={1.75} />
             </button>
+            {/* issue #12: 「出现问题」 entry point next to the gear. The SPW 配置 page carries the same
+             *  action (`preference_config.json` button → FoliaPlugin.onReportProblem), which is the path
+             *  that still works when the player window itself fails to open. */}
+            <button
+                type="button"
+                className="spw-chrome-btn spw-chrome-btn--problem"
+                data-spw-chrome="problem-report"
+                data-visible={chromeAlwaysOn || (chromeVisible && !open) ? 'true' : 'false'}
+                data-flat={chromeAlwaysOn ? 'true' : 'false'}
+                aria-label="出现问题"
+                title="出现问题"
+                onClick={() => setProblemPanelOpen(value => !value)}
+            >
+                <LifeBuoy size={20} strokeWidth={1.75} />
+            </button>
+            <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
             {/* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar).
              *  Hidden while the settings overlay owns the stage; unmounts itself entirely under
              *  mouse passthrough so no pixels and no hit region remain there. */}

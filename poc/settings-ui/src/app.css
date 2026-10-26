@@ -125,6 +125,166 @@ body.spw-injected {
     right: auto;
 }
 
+/* issue #12 增加日志功能: the 「出现问题」 chrome button sits just left of the settings gear. */
+.spw-chrome-btn--problem {
+    right: 76px;
+}
+
+/* issue #12: the diagnostics panel under that button — environment rows, then the feedback actions.
+ * Same card language as the player-background panel so the chrome reads as one family. */
+.spw-problem-report {
+    position: fixed;
+    top: 76px;
+    right: 24px;
+    z-index: 2147483002;
+    width: 420px;
+    max-height: min(72vh, 620px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(18, 18, 20, 0.94);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+    color: #f4f4f5;
+    font: inherit;
+    font-size: 13px;
+    pointer-events: auto;
+}
+
+.spw-problem-report[data-flat='true'] {
+    /* colour-key window: backdrop-filter layers are dropped (docs/live-transparency.md §4.2) */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 20, 0.98);
+}
+
+.spw-problem-report__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.spw-problem-report__title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.spw-problem-report__icon {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.75);
+    cursor: pointer;
+}
+
+.spw-problem-report__icon:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.spw-problem-report__body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 8px 6px;
+}
+
+.spw-problem-report__row {
+    display: grid;
+    grid-template-columns: 16px 1fr;
+    gap: 2px 8px;
+    padding: 7px 8px;
+    border-radius: 10px;
+}
+
+.spw-problem-report__row[data-ok='false'] {
+    background: rgba(224, 163, 74, 0.08);
+}
+
+.spw-problem-report__label {
+    font-weight: 500;
+}
+
+.spw-problem-report__detail,
+.spw-problem-report__fix {
+    grid-column: 2;
+    color: rgba(244, 244, 245, 0.62);
+    word-break: break-all;
+}
+
+.spw-problem-report__fix {
+    color: #e0a34a;
+}
+
+.spw-problem-report__hint {
+    margin: 8px;
+    padding: 9px 10px;
+    border-radius: 10px;
+    background: rgba(224, 163, 74, 0.12);
+    color: #f0c07a;
+    line-height: 1.5;
+}
+
+.spw-problem-report__hint--ok {
+    background: rgba(127, 208, 138, 0.12);
+    color: #a6e0ae;
+}
+
+.spw-problem-report__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.spw-problem-report__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.05);
+    color: #f4f4f5;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.spw-problem-report__action:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.spw-problem-report__action:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.spw-problem-report__action--primary {
+    border-color: rgba(216, 176, 114, 0.6);
+    background: rgba(216, 176, 114, 0.18);
+    color: #f0d6ac;
+}
+
+.spw-problem-report__spin {
+    animation: spw-problem-spin 0.9s linear infinite;
+}
+
+@keyframes spw-problem-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 /* Big style preview: incoming frame fades in over the outgoing one (m03519). */
 @keyframes spw-preview-in {
     from {

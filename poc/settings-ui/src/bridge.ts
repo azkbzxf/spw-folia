@@ -5,7 +5,7 @@ import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 import type { Theme } from '@/types';
 import { useSettingsStore, snapshotFromState, applySnapshot, type SettingsSnapshot } from '~/model/settings';
 
-export type BridgeEventType = 'hello' | 'settings' | 'state' | 'lyrics' | 'track' | 'audio' | 'config' | 'beat' | 'settingsUI' | 'queue';
+export type BridgeEventType = 'hello' | 'settings' | 'state' | 'lyrics' | 'track' | 'audio' | 'config' | 'beat' | 'settingsUI' | 'queue' | 'envReport';
 
 export interface BridgeStateMessage {
     currentTime: number;
@@ -85,6 +85,8 @@ export interface SpwFoliaBridge {
         track?: BridgeTrackMessage | null;
         /** v0.3.0: last `queue` snapshot the host sent; may be absent on older shims. */
         queue?: PlaybackQueueSnapshot | null;
+        /** v0.4.2 (issue #12): last environment report the host produced; absent on older shims. */
+        envReport?: EnvReport | null;
     };
     /** protocol §7.5: overlay-only settings control surface the host drives (no page reload). */
     ui?: SettingsUiApi;
@@ -355,6 +357,78 @@ export const getBridge = (): SpwFoliaBridge => {
 };
 
 export const bridgeIsInjected = (): boolean => isInjected();
+
+/* ---------------------------------------------------------------------------------------------
+ * issue #12 增加日志功能 — 「出现问题」 diagnostics channel.
+ *
+ * The host owns the native half of the environment report (WebView2 runtime, .NET release, native
+ * files beside the helper, bundle/settings presence, writable user-data dir); the plugin owns the
+ * other half (SPW version, permissions, logs, feedback URL). The page only orchestrates: ask the
+ * host for `envReport`, merge it with what it can see itself, then either show the missing pieces or
+ * hand the assembled text to the host's browser/log-folder actions.
+ * ------------------------------------------------------------------------------------------- */
+
+/** The host's `envReport` payload (HostForm.BuildEnvReport); every field is best-effort. */
+export interface EnvReport {
+    hostVersion?: string;
+    pid?: number;
+    protocol?: string;
+    startedAtMs?: number;
+    webView2?: string | null;
+    dotnet?: string | null;
+    os?: string | null;
+    os64?: boolean;
+    process64?: boolean;
+    bundle?: string | null;
+    bundleIndex?: boolean;
+    settingsDir?: string | null;
+    settingsEntry?: boolean;
+    userData?: string | null;
+    nativeFiles?: { dir?: string | null; present?: string[]; missing?: string[] } | null;
+    dpi?: number;
+    dpiAwareness?: string | null;
+    screen?: string;
+    transparent?: boolean;
+    audio?: string | null;
+    fps?: number;
+    statesReceived?: number;
+    framesPosted?: number;
+    droppedLogLines?: number;
+    logPath?: string | null;
+}
+
+/** Request the native environment report; resolves to null when the host never answers. */
+export const requestEnvReport = (timeoutMs = 4000): Promise<EnvReport | null> => new Promise(resolve => {
+    if (!isInjected()) {
+        // Browser dev: no host, but the panel still works with what the page knows.
+        resolve(null);
+        return;
+    }
+    const timer = window.setTimeout(() => {
+        off();
+        resolve(null);
+    }, timeoutMs);
+    const off = bridgeOn<EnvReport>('envReport', report => {
+        window.clearTimeout(timer);
+        off();
+        resolve(report ?? null);
+    });
+    getBridge().emit('envCheck');
+});
+
+/** Ask the host to open Explorer in the log directory with the log file selected. */
+export const openLogFolder = (path?: string | null): void => {
+    getBridge().emit('openLogFolder', path ? { path } : {});
+};
+
+/** Ask the host to open an http(s) URL in the default browser (the host rejects other schemes). */
+export const openExternalUrl = (url: string): void => {
+    getBridge().emit('openUrl', { url });
+};
+
+/** The plugin's feedback URL (GitHub issue form) — kept here so the host and the page agree. */
+export const FEEDBACK_ISSUE_URL = 'https://github.com/azkbzxf/spw-folia/issues/new';
+
 
 export const bridgeOn = <T,>(type: string, listener: (payload: T) => void): (() => void) => {
     const bridge = getBridge();

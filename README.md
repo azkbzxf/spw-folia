@@ -39,6 +39,10 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
   窗口开着时按下立刻生效；打开该动作的「全局」开关后，Folia 窗口聚焦时也能用。
 - **入口与多屏** —— 迷你播放器「更多 → Folia」、最小化后右键托盘图标都能开 / 关；适配多显示器，
   **Alt + 左键**可跨屏拖动，呼出快捷键可自定义；打开时还有封面取色的过渡动画（默认关闭）。
+- **出问题时有据可查** —— SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」（播放页右上角救生圈按钮同效）
+  会逐项检查 .NET / WebView2 / 插件文件 / 权限 / 可写目录，缺哪项就提示哪项；环境齐全时打开已预填
+  环境信息与日志的反馈页，同时打开日志文件夹并选中日志文件。「播放页 → 详细日志」可打开更详细的
+  导航 / 页面 console / 卡顿记录。见 [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md)。
 - **不联网、不上传** —— 没有 HTTP 服务、没有外部请求，数据只在插件与本地辅助进程之间经
   stdin/stdout 传递；只读取播放状态与当前歌曲 / 歌词 / 封面，不写入音乐库。
 
@@ -59,7 +63,7 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 
 ## 使用方法
 
-1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.1-preview.1.spmod`；
+1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.2.spmod`；
    也可以直接在 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3825012802)
    订阅（Steam 版会在订阅后自动安装）。
 2. SPW → **设置 → 插件 / 创意工坊 → 导入插件**，选择该文件并启用；询问时授予 **class-transform**
@@ -101,7 +105,7 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖
 
 ## 版本
 
-当前 **v0.4.1-preview.1**。每个版本的 `.spmod` 与 SHA-256 校验值都在
+当前 **v0.4.2**。每个版本的 `.spmod` 与 SHA-256 校验值都在
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)；逐版变更与验收证据归档在
 [docs/archive/](docs/archive/)，仓库内不再重复。
 
@@ -109,6 +113,8 @@ v0.3.1 的发布产物已在 Windows 11 + 真实 SPW **1.19.0 与 1.19.2** 上�
 全屏渲染、0 页面错误、0 外部网络请求、16 分钟长稳、设置持久化、无残留辅助进程。v0.4.0 把样式
 扩到 **15 种**（新增「花火」）并加入随机样式池、自定义字体与托盘入口；v0.4.1 让设置页预览变成
 播放页的真实镜像（真实歌曲/歌词/背景/透明状态 + 真实时钟），并移除「预览文本」选项。
+v0.4.2 修掉三个已知问题：逐字歌词恢复 SPW 的真实时轴、凝彩样式在透明窗口下不再遮挡全屏、
+并加入「出现问题」环境自检与一键反馈（详见 [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md)）。
 
 ## 从源码构建
 
@@ -132,7 +138,7 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 bash packaging/build-package.sh     :: 暂存 packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
     --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.1-preview.1.spmod
+    --staging packaging --out dist/release --name spw-folia-0.4.2.spmod
 ```
 
 完整的打包流水线、payload 清单、大小预算与发布检查表见 [docs/release.md](docs/release.md)。

@@ -64,6 +64,20 @@ export const getStyleTransparencyCompat = (
 export const isTransparencySupported = (mode: StyleMode, context?: TransparencyCompatContext): boolean =>
     getStyleTransparencyCompat(mode, context) !== 'unsupported';
 
+/**
+ * Whether the style's **closing poster** has to be suppressed while the window is transparent.
+ *
+ * `tempera` (凝彩) ends a song on a full-bleed opaque tone ground with opaque discs behind the title
+ * (`buildTemperaCreditsPoster`) — a plate the colour key cannot cut, which is exactly the
+ * "遮挡全屏视野" in issue #11. There is no tuning key for that card; the only lever the renderer
+ * exposes is the song metadata it is built from (`hasTemperaCreditsMetadata` returns false without
+ * a title/artist/album, and `createTemperaPixiRuntime.drawCredits` then installs no poster at all).
+ * So the publisher withholds the metadata for this style while transparent. Nothing else reads
+ * `config.song` in the OBS surface — the lyric layout uses `lines[].fullText`, not the title.
+ */
+export const suppressesClosingPoster = (mode: StyleMode, context: TransparencyCompatContext): boolean =>
+    mode === 'tempera' && getStyleTransparencyCompat(mode, context) === 'tuned';
+
 /* ---------------------------------------------------------------------------------------------
  * Render-only overrides applied while the player window is transparent. They are merged into the
  * published `visualizerTunings` bundle (`publisher/config.ts`), never into the settings store, so
@@ -78,9 +92,30 @@ export const transparentStyleTuning = (
     if (getStyleTransparencyCompat(mode, context) !== 'tuned') return null;
     switch (mode) {
         case 'tempera':
-            // 35% paper wash + screentone dots (`temperaSceneBuilder.ts`), plus the post-process
-            // grain/vignette that are painted over the whole canvas.
-            return { showBlocks: false, postProcessGrain: 0, postProcessVignette: 0 };
+            // issue #11 凝彩未完全适配透明窗口. The shots themselves are already clean once
+            // `showBlocks` is off — the 35% paper wash, the screentone lattice and the whole
+            // composition/`blocks` container all hang off that one switch (alpha-probe measured
+            // text-only, docs/archive/verification-v0.2.0.md). What that probe never covered are the
+            // layers that are NOT gated by it, and they are what still covers the desktop:
+            //  - the closing poster (`buildTemperaCreditsPoster`): a full-bleed opaque tone ground
+            //    plus opaque discs, built once the last paragraph ends. `buildConfig` now blanks the
+            //    song metadata for this style while transparent, so the poster is never built.
+            //  - the paragraph-cut wipe block (`TemperaOverlay.drawWipe`): a screen-sized opaque
+            //    chevron that sweeps across on `block-wipe`; `enableTransitions:false` stops it.
+            //  - decor (motif, glyph shadows, watermark, ghost echoes, corner registration marks)
+            //    and the lens-distortion pass, which resamples the whole frame and reads as a curved
+            //    plate — the big arc in the issue screenshot.
+            //  - user artwork (`layerImages`), pasted at full opacity; frequency 0 keeps it out.
+            return {
+                showBlocks: false,
+                showDecor: false,
+                showCornerMarks: false,
+                enableTransitions: false,
+                postProcessGrain: 0,
+                postProcessVignette: 0,
+                postProcessLensDistortion: 0,
+                layerImageFrequency: 0,
+            };
         case 'lumiere':
             // 75% dark field (`lumiereDarkField.ts`) + the light field / dust / line art groups.
             return { darkField: 0, textOnly: true };

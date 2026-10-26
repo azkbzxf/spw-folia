@@ -152,6 +152,27 @@ webView.DefaultBackgroundColor = Color.Black;
 0.0%）与 16 项布尔构建产物回归断言（另加 3 组 tuning 覆盖参数比对）见 `docs/archive/verification-v0.2.0.md` §1；回归脚本
 `poc/webview/server/compat-regression.mjs`。
 
+## 4.6b v0.4.2：凝彩（tempera）补全透明覆盖（issue #11）
+
+v0.2.0 的 tempera 覆盖只关了 `showBlocks`（35% 纸雾 + 网点 + `blocks` 构图容器）、`postProcessGrain` 与
+`postProcessVignette`，alpha 探针当时也确实只量到「文字/线框」（`tempera-c` cov8 3.8%）。但真实播放页还有
+**几个不读 `showBlocks` 的图层**，它们在色键窗口下就是 issue #11 截图里那块遮住全屏的灰褐色板：
+
+| 图层 | 门控 | 透明期间的处置 |
+| --- | --- | --- |
+| 片尾海报 `buildTemperaCreditsPoster` | 只读歌曲元数据（`hasTemperaCreditsMetadata`） | `buildConfig` 在透明 + tempera 时**不发布** `song`/`songArtist`/`songAlbum`（`suppressesClosingPoster`），海报根本不建 |
+| 段落转场擦除块 `TemperaOverlay.drawWipe` | `enableTransitions` | 覆盖 `enableTransitions:false` |
+| 装饰（motif、字影、水印、残影）与角标 | `showDecor` / `showCornerMarks` | 覆盖 `showDecor:false`、`showCornerMarks:false` |
+| 镜头畸变后处理（整帧重采样，截图里那道大弧线） | `postProcessLensDistortion` | 覆盖 `0` |
+| 用户图片层（整幅不透明贴图） | `layerImageFrequency` | 覆盖 `0` |
+
+`showBlocks:false` 仍然保留：它是纸雾/网点/构图层唯一的开关，且 `temperaSceneFrame.ts` 的
+`requiresSceneRebuild` 会把覆盖当成真正的场景参数变化处理，所以切换透明时立刻重建、关掉后立刻还原。
+验收（真实宿主 + 真实 WebView2，`--window 1280x720`）：透明 + tempera 时发布的
+`visualizerTunings.tempera = {showBlocks:false, showDecor:false, showCornerMarks:false, enableTransitions:false,
+postProcessGrain:0, postProcessVignette:0, postProcessLensDistortion:0, layerImageFrequency:0}` 且
+`song/songArtist/songAlbum = null`；把透明关掉后同一份配置回到默认值并恢复元数据。
+
 ## 4.7 v0.2.2：穿透重构为系统级 shaped region（借鉴 SPW-island）
 
 v0.1.9 的「合成点击回放」只回放左键，右键/滚轮/悬停被整吞、拖拽必断，合成输入还会被提权窗口与反作弊拦截。
@@ -187,4 +208,5 @@ v0.2.2 借鉴 SPW-island 的 shaped input peer 思路（`WindowsGpuInput.kt`：�
 - 透明模式下 `backdrop-filter` 视觉退化（见 §4.2），但控件可点（见 §4.1）。
 - 透明窗口下 `monet` 与浅色主题的 `lumiere` 不可用（样式本体含无法去除的大面积半透明层，见 §4.6）：
   选中该样式会自动关闭透明背景；`tempera`/`lumiere`(暗色)/`pendolo`/`still` 在透明期间会自动精简，
-  视觉与不透明时略有差异。
+  视觉与不透明时略有差异。`tempera` 的透明精简在 v0.4.2 扩到关装饰/角标/转场/镜头畸变并隐藏片尾海报
+  （见 §4.6b），因此透明时凝彩只剩逐字歌词与线框，不再有整屏纸面。

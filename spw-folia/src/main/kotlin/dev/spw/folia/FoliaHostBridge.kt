@@ -87,6 +87,13 @@ internal class FoliaHostBridge(
      */
     @Volatile var curtainPalette: String? = null
 
+    /**
+     * issue #12 增加日志功能: spawn the helper with `--verbose-log`, which adds navigation lines and
+     * per-window stall warnings to the host log. Off by default; turned on from the 配置 page so a
+     * user reporting a problem can capture a detailed trace without living with the extra lines.
+     */
+    @Volatile var verboseLog: Boolean = false
+
     // Providers installed by FoliaPlugin; polled by the state pump.
     @Volatile var snapshotProvider: (() -> PlaybackSnapshot?)? = null
     @Volatile var lyricsProvider: (() -> String?)? = null
@@ -174,6 +181,13 @@ internal class FoliaHostBridge(
         val workDir = physicalFile(pluginPath.absoluteFile).also { it.mkdirs() }
         val stderrLog = File(workDir, "spw-folia-host.stderr.log")
         val stdoutLogFile = File(workDir, "spw-folia-host.stdout.log")
+        // issue #12 增加日志功能: the helper reports its own environment through the settings UI's
+        // 「出现问题」 flow, and that report names the log file the plugin mirrors its stdout into.
+        command += listOf("--log-file", stdoutLogFile.absolutePath)
+        // The 配置 page can ask for the fuller diagnostic stream (navigation, page console at every
+        // level, per-window stall lines). Off by default: the verbose lines are only worth it when
+        // somebody is going to read the log.
+        if (verboseLog) command += "--verbose-log"
         log("spawn cmdline: " + command.joinToString(" "))
         log("spawn cwd=$workDir")
         log("spawn exe=${exe.absolutePath} web=${web.absolutePath} settingsDir=${settingsDir?.absolutePath}")

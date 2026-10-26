@@ -66,6 +66,8 @@ namespace SpwFolia
         public bool Curtain = true; // v0.4.0: intro transition animation (--no-curtain disables it)
         public double CurtainDurationSec = 0.8; // v0.4.0: fade-in duration, clamped to 0.3-2.0
         public string CurtainPalette; // v0.4.0: cover-derived "#RRGGBB,#RRGGBB,…" for the curtain
+        public bool VerboseLog;     // issue #12: extra diagnostics (env report, page console, timings)
+        public string LogFile;      // issue #12: the plugin's host log path, reported in the env report
 
         public static CliArgs Parse(string[] argv)
         {
@@ -75,6 +77,8 @@ namespace SpwFolia
                 string arg = argv[i];
                 switch (arg)
                 {
+                    case "--verbose-log": a.VerboseLog = true; break;
+                    case "--log-file": a.LogFile = Next(argv, ref i); break;
                     case "--bundle": a.Bundle = Next(argv, ref i); break;
                     case "--fullscreen": a.Fullscreen = true; break;
                     case "--fps-log":
@@ -197,6 +201,12 @@ namespace SpwFolia
         {
             if (double.IsNaN(value) || double.IsInfinity(value)) return "0";
             return value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>JSON string literal, or `null` for a missing value (issue #12 env report).</summary>
+        public static string Str(string value)
+        {
+            return value == null ? "null" : "\"" + Escape(value) + "\"";
         }
 
         public static bool TryGet(Dictionary<string, object> obj, string key, out object value)
@@ -478,6 +488,17 @@ namespace SpwFolia
             return string.IsNullOrEmpty(overrideUrl) ? DefaultBundleUrl : overrideUrl;
         }
 
+        /// <summary>
+        /// issue #12: the file the plugin mirrors every host line into. `--log-file` is passed by the
+        /// plugin (it knows its install dir); standalone runs have none and simply report null.
+        /// </summary>
+        public static string LogFilePath()
+        {
+            return logFilePath;
+        }
+
+        private static string logFilePath;
+
         public static string ResourceText(string name)
         {
             using (Stream stream = typeof(Program).Assembly.GetManifestResourceStream(name))
@@ -533,6 +554,7 @@ namespace SpwFolia
             string dpiInit = DpiSupport.Init();
 
             CliArgs args = CliArgs.Parse(argv);
+            logFilePath = args.LogFile;
             JsonStdout log = new JsonStdout();
             log.Log("info", "dpi-init result=" + dpiInit + " awareness=" + DpiSupport.DescribeAwareness());
             int exitCode = 1;

@@ -11,7 +11,12 @@ import {
 } from '~/bridge';
 import { snapshotFromState, useSettingsStore } from '~/model/settings';
 import { onSystemSchemeChange, systemPrefersLight } from '~/model/theme';
-import { ConfigPublisher, type PublisherLyricLine, type PublisherTrack } from '~/publisher/config';
+import {
+    ConfigPublisher,
+    type PublisherLyricLine,
+    type PublisherTrack,
+    type PublisherWord,
+} from '~/publisher/config';
 import { sampleCover, themeFromSample, type CoverSample } from '~/publisher/deriveTheme';
 import { applyThemeFonts } from '~/publisher/themeFonts';
 import type { Theme } from '@/types';
@@ -19,6 +24,40 @@ import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 
 const isLyricLine = (value: unknown): value is { startMs: number; endMs: number; main: string } =>
     Boolean(value) && typeof value === 'object' && typeof (value as { main?: unknown }).main === 'string';
+
+/** One protocol karaoke cell (SPW `PlaybackExtensionPoint.LyricsLine.Cell`), absolute milliseconds. */
+interface ProtocolCell {
+    startMs: number;
+    endMs: number;
+    text: string;
+}
+
+const isProtocolCell = (value: unknown): value is ProtocolCell =>
+    Boolean(value) && typeof value === 'object'
+    && typeof (value as ProtocolCell).startMs === 'number'
+    && typeof (value as ProtocolCell).endMs === 'number'
+    && typeof (value as ProtocolCell).text === 'string';
+
+/**
+ * 逐字时轴 (issue #13). The plugin sends SPW's real per-cell karaoke timing as `cells`
+ * (protocol §1 `lines:[{startMs,endMs,main,sub,cells:[{startMs,endMs,text}]}]`), but this
+ * mapper used to drop them. Folia's word-by-word styles animate from `words`, so the publisher
+ * then fell back to `fallbackWords()`, which spreads a line's duration evenly over its
+ * characters — a fabricated timeline that visibly drifts from the audio on held notes and long
+ * words. Cells are absolute ms and already one glyph/word each, so they map 1:1 onto
+ * `PublisherWord`; empty-text cells are timing gaps and are skipped. When a line has no usable
+ * cells the `words` member stays absent and the even-split fallback still applies.
+ */
+const toPublisherWords = (line: unknown): PublisherWord[] | undefined => {
+    const cells = (line as { cells?: unknown }).cells;
+    if (!Array.isArray(cells)) return undefined;
+    const words: PublisherWord[] = [];
+    for (const cell of cells) {
+        if (!isProtocolCell(cell) || cell.text.length === 0) continue;
+        words.push({ text: cell.text, startMs: cell.startMs, endMs: cell.endMs });
+    }
+    return words.length > 0 ? words : undefined;
+};
 
 /** The `lyrics` event payload as the host page hands it over: our line shape, or Folia's LyricData. */
 const toPublisherLyrics = (payload: unknown): PublisherLyricLine[] | null => {
@@ -28,12 +67,14 @@ const toPublisherLyrics = (payload: unknown): PublisherLyricLine[] | null => {
     const mapped: PublisherLyricLine[] = [];
     for (const line of lines) {
         if (isLyricLine(line)) {
+            const words = toPublisherWords(line);
             mapped.push({
                 startMs: line.startMs,
                 endMs: line.endMs,
                 main: line.main,
                 ...(typeof (line as { sub?: unknown }).sub === 'string' ? { sub: (line as { sub: string }).sub } : {}),
                 ...(typeof (line as { id?: unknown }).id === 'string' ? { id: (line as { id: string }).id } : {}),
+                ...(words ? { words } : {}),
             });
             continue;
         }

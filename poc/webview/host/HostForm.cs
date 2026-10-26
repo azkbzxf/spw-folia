@@ -1205,6 +1205,21 @@ namespace SpwFolia
                 core.WebMessageReceived += OnWebMessageReceived;
                 core.NavigationCompleted += OnNavigationCompleted;
                 core.ProcessFailed += OnProcessFailed;
+                // issue #12 增加日志功能: with --verbose-log the host records navigation transitions.
+                // (The page's own console is mirrored by Shim.js, which has no SDK-version dependency:
+                // `CoreWebView2.ConsoleMessageReceived` does not exist in the bundled WebView2 SDK.)
+                if (args.VerboseLog)
+                {
+                    try
+                    {
+                        core.NavigationStarting += delegate(object s, CoreWebView2NavigationStartingEventArgs ev)
+                        {
+                            log.Log("verbose", "nav-start uri=" + (ev != null ? ev.Uri : "?")
+                                + " redirect=" + (ev != null && ev.IsRedirected ? "yes" : "no"));
+                        };
+                    }
+                    catch (Exception ex) { log.Error("verbose-hooks", ex); }
+                }
 
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(Program.ShimScript());
                 if (!args.NoOverlay && string.IsNullOrEmpty(args.SettingsDir))
@@ -1425,8 +1440,7 @@ namespace SpwFolia
                     + "\",\"msg\":\"" + JsonUtil.Escape(JsonUtil.GetString(msg, "msg") ?? "") + "\"}");
             }
             else if (type == "fps")
-            {
-                lastFps = JsonUtil.GetDouble(msg, "fps", lastFps);
+            {                lastFps = JsonUtil.GetDouble(msg, "fps", lastFps);
                 if (firstPageFrameAt == 0)
                 {
                     // v0.4.0: first frame the page itself reported after painting — the intro curtain
@@ -1467,6 +1481,171 @@ namespace SpwFolia
             {
                 log.Log("info", "eval-result " + (JsonUtil.GetString(msg, "value") ?? "null"));
             }
+            else if (type == "envCheck")
+            {
+                // issue #12: the settings UI's 「出现问题」 flow asks the host for the half of the
+                // environment only a native process can see (WebView2 runtime, .NET, the native
+                // files, the bundle, the writable user-data dir, GPU). Reply as `envReport`; the
+                // page merges it with what the plugin reported.
+                string report = BuildEnvReport();
+                log.Log("info", "env-check requested -> " + report.Length + "B");
+                PostToPage("{\"type\":\"envReport\",\"report\":" + report + "}");
+            }
+            else if (type == "openLogFolder")
+            {
+                // issue #12: Explorer in the plugin dir with the log selected. The plugin owns the
+                // canonical log dir, but the host knows the bundle/user-data paths, and the button
+                // must also work when the plugin side is unavailable.
+                OpenLogFolder(JsonUtil.GetString(msg, "path"));
+            }
+            else if (type == "openUrl")
+            {
+                // issue #12: open the pre-filled feedback page in the default browser. Only http(s)
+                // is accepted — the page is untrusted input from a web bundle.
+                OpenExternalUrl(JsonUtil.GetString(msg, "url"));
+            }
+        }
+
+        // ------------------------------------------------------------- diagnostics (#12)
+
+        /// <summary>
+        /// The native half of the environment report, as a JSON object the settings UI can render.
+        /// Never throws: every probe is wrapped, and an unavailable value reports as "unknown".
+        /// </summary>
+        private string BuildEnvReport()
+        {
+            StringBuilder sb = new StringBuilder(1024);
+            sb.Append('{');
+            sb.Append("\"hostVersion\":\"").Append(JsonUtil.Escape(args.BundleVersion ?? "dev")).Append('"');
+            sb.Append(",\"pid\":").Append(Process.GetCurrentProcess().Id);
+            sb.Append(",\"protocol\":").Append(Program.ProtocolVersion);
+            sb.Append(",\"startedAtMs\":").Append(clock.ElapsedMilliseconds);
+            string runtime = null;
+            try { runtime = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch (Exception) { }
+            sb.Append(",\"webView2\":").Append(JsonUtil.Str(runtime));
+            sb.Append(",\"dotnet\":").Append(JsonUtil.Str(ReadDotNetRelease()));
+            sb.Append(",\"os\":").Append(JsonUtil.Str(Environment.OSVersion.VersionString));
+            sb.Append(",\"os64\":").Append(Environment.Is64BitOperatingSystem ? "true" : "false");
+            sb.Append(",\"process64\":").Append(Environment.Is64BitProcess ? "true" : "false");
+            sb.Append(",\"bundle\":").Append(JsonUtil.Str(args.Bundle));
+            sb.Append(",\"bundleIndex\":").Append(File.Exists(Path.Combine(args.Bundle ?? "", "index.html")) ? "true" : "false");
+            sb.Append(",\"settingsDir\":").Append(JsonUtil.Str(args.SettingsDir));
+            sb.Append(",\"settingsEntry\":").Append(File.Exists(Path.Combine(args.SettingsDir ?? "", args.SettingsEntry ?? "")) ? "true" : "false");
+            sb.Append(",\"userData\":").Append(JsonUtil.Str(DefaultUserDataDir()));
+            sb.Append(",\"nativeFiles\":").Append(NativeFilesJson());
+            sb.Append(",\"dpi\":").Append(DpiValue());
+            sb.Append(",\"dpiAwareness\":").Append(JsonUtil.Str(DpiSupport.DescribeAwareness()));
+            sb.Append(",\"screen\":\"").Append(ClientSize.Width).Append('x').Append(ClientSize.Height).Append('"');
+            sb.Append(",\"transparent\":").Append(transparencyActive ? "true" : "false");
+            sb.Append(",\"audio\":").Append(JsonUtil.Str(audio.Name));
+            sb.Append(",\"fps\":").Append(JsonUtil.Num(lastFps));
+            sb.Append(",\"statesReceived\":").Append(Interlocked.Read(ref stateCount));
+            sb.Append(",\"framesPosted\":").Append(totalFramesPosted);
+            sb.Append(",\"droppedLogLines\":").Append(log.DroppedLines());
+            sb.Append(",\"logPath\":").Append(JsonUtil.Str(Program.LogFilePath()));
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        private static string DefaultUserDataDir()
+        {
+            return Path.Combine(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "spw-folia"),
+                "webview");
+        }
+
+        /// <summary>.NET Framework 4.x `Release` from the registry (4.8 = 528040, 4.8.1 = 533320+).</summary>
+        private static string ReadDotNetRelease()
+        {
+            try
+            {
+                using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.LocalMachine
+                    .OpenSubKey("SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full"))
+                {
+                    if (key == null) return null;
+                    object value = key.GetValue("Release");
+                    return value == null ? null : Convert.ToString(value, Inv);
+                }
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>The five files that must sit beside the helper, and whether each one is there.</summary>
+        private string NativeFilesJson()
+        {
+            string exeDir = null;
+            try { exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName); }
+            catch (Exception) { }
+            if (string.IsNullOrEmpty(exeDir)) return "null";
+            string[] names = new string[] {
+                "spw-folia-host.exe",
+                "spw-folia-host.exe.config",
+                "Microsoft.Web.WebView2.Core.dll",
+                "Microsoft.Web.WebView2.WinForms.dll",
+                "WebView2Loader.dll",
+            };
+            StringBuilder sb = new StringBuilder(256);
+            sb.Append("{\"dir\":").Append(JsonUtil.Str(exeDir)).Append(",\"present\":[");
+            bool first = true;
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (!File.Exists(Path.Combine(exeDir, names[i]))) continue;
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append(JsonUtil.Str(names[i]));
+            }
+            sb.Append("],\"missing\":[");
+            first = true;
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (File.Exists(Path.Combine(exeDir, names[i]))) continue;
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append(JsonUtil.Str(names[i]));
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+
+        /// <summary>Explorer in <paramref name="dir"/> with the first log file selected.</summary>
+        private void OpenLogFolder(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dir))
+                {
+                    string exeDir = null;
+                    try { exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName); }
+                    catch (Exception) { }
+                    dir = exeDir;
+                }
+                if (string.IsNullOrEmpty(dir)) { log.Log("warn", "open-log-folder: no directory"); return; }
+                string logFile = Path.Combine(dir, "spw-folia.log");
+                string arguments = File.Exists(logFile)
+                    ? "/select,\"" + logFile + "\""
+                    : "\"" + dir + "\"";
+                Process.Start("explorer.exe", arguments);
+                log.Log("info", "open-log-folder dir=" + dir + " selected=" + File.Exists(logFile));
+            }
+            catch (Exception ex) { log.Error("open-log-folder", ex); }
+        }
+
+        /// <summary>Opens an http(s) URL in the user's default browser; anything else is rejected.</summary>
+        private void OpenExternalUrl(string url)
+        {
+            try
+            {
+                Uri uri;
+                if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri)
+                    || (uri.Scheme != "https" && uri.Scheme != "http"))
+                {
+                    log.Log("warn", "open-url rejected: " + (url ?? "null"));
+                    return;
+                }
+                Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+                log.Log("info", "open-url " + uri.AbsoluteUri.Length + " chars host=" + uri.Host);
+            }
+            catch (Exception ex) { log.Error("open-url", ex); }
         }
 
         // ---------------------------------------------------------------- 60 Hz drive loop (§3.2)
@@ -2126,6 +2305,8 @@ namespace SpwFolia
             string line = "{\"t\":\"fps\""
                 + ",\"fps\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "fps", 0))
                 + ",\"longFrames\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "longFrames", 0))
+                + ",\"stallFrames\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "stallFrames", 0))
+                + ",\"worstFrameMs\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "worstFrameMs", 0))
                 + ",\"heapMB\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "heapMB", 0))
                 + ",\"canvases\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "canvases", 0))
                 + ",\"dpr\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "dpr", 0))
@@ -2133,6 +2314,16 @@ namespace SpwFolia
                 + ",\"h\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "h", 0))
                 + ",\"atMs\":" + clock.ElapsedMilliseconds + "}";
             log.WriteLine(line);
+            // issue #12: a stall is what users report as "卡顿/掉帧"; one log line when a window had
+            // frames over 100 ms makes it findable in spw-folia-host.stdout.log without the fps stream.
+            double stalls = JsonUtil.GetDouble(msg, "stallFrames", 0);
+            if (stalls > 0)
+            {
+                log.Log("warn", "page-stall frames=" + JsonUtil.Num(stalls)
+                    + " worstFrameMs=" + JsonUtil.Num(JsonUtil.GetDouble(msg, "worstFrameMs", 0))
+                    + " fps=" + JsonUtil.Num(JsonUtil.GetDouble(msg, "fps", 0))
+                    + " atMs=" + clock.ElapsedMilliseconds);
+            }
             if (!string.IsNullOrEmpty(args.FpsLogPath))
             {
                 try

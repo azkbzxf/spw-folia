@@ -11,7 +11,7 @@ import {
     BACKGROUND_TUNING_DEFAULTS,
     DEFAULT_COMMON_BACKGROUND,
 } from '~/model/settings';
-import { transparentStyleTuning } from '~/model/transparencyCompat';
+import { suppressesClosingPoster, transparentStyleTuning } from '~/model/transparencyCompat';
 import { normalizeRandomModes } from '~/model/settings';
 import { parseFontFamilyStack } from './themeFonts';
 import { DEFAULT_THEME } from './deriveTheme';
@@ -194,6 +194,12 @@ export const buildConfig = ({ settings, track, theme, subtitleTheme, isDaylight,
         ? 'translation'
         : subtitle.subtitleContentMode as SubtitleContentMode;
     const coverUrl = track?.coverUrl ?? null;
+    // issue #11: 凝彩 ends a song on an opaque full-bleed closing poster that the colour-key window
+    // cannot cut through. Its only lever is the song metadata it is built from, so while the window
+    // is transparent this style publishes no title/artist/album and the poster is never built
+    // (`suppressesClosingPoster` in model/transparencyCompat.ts explains the derivation).
+    const closingPosterHidden = settings.transparentPlayerBackground === true
+        && suppressesClosingPoster(settings.styleId as StyleMode, { isDaylight });
     // v0.4.0 (Folia 0.7.22): the lyric font and the 随机歌词样式 pool travel in the config. The page
     // maps both onto its own stores (`lyricsFontStyle`/`lyricsCustomFontFamily` →
     // handleSetLyricsCustomFont({source:'system'}), `randomVisualizerModes` →
@@ -223,9 +229,9 @@ export const buildConfig = ({ settings, track, theme, subtitleTheme, isDaylight,
         activePlaybackContext: 'main',
         stageSource: null,
         hasTrack: Boolean(track),
-        song: track ? { id: track.id, name: track.title } : null,
-        songArtist: track?.artist ?? null,
-        songAlbum: track?.album ?? null,
+        song: track && !closingPosterHidden ? { id: track.id, name: track.title } : null,
+        songArtist: closingPosterHidden ? null : (track?.artist ?? null),
+        songAlbum: closingPosterHidden ? null : (track?.album ?? null),
         coverUrl,
         lyrics,
         theme: theme ?? DEFAULT_THEME,

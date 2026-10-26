@@ -10,6 +10,26 @@
           "title": "打开过渡动画",
           "summary": "打开 Folia 时显示一段封面取色的淡入动画（0.8 秒），遮住加载和透明切换的瞬间，减少闪烁。",
           "default_value": false
+        },
+        {
+          "type": "switch",
+          "key": "verboseLog",
+          "title": "详细日志",
+          "summary": "在辅助进程日志里额外记录页面导航、页面 console 输出与卡顿（>100ms 的帧）。排查问题时打开；下次打开 Folia 生效。",
+          "default_value": false
+        }
+      ]
+    },
+    {
+      "title": "支持与反馈",
+      "config": "support.json",
+      "preferences": [
+        {
+          "type": "button",
+          "title": "出现问题",
+          "summary": "检查运行环境（.NET / WebView2 / 插件文件 / 权限），缺少时逐个提示；环境齐全时打开已预填环境信息与日志的反馈页面，同时打开日志文件夹并选中日志文件。",
+          "arrow_type": "none",
+          "on_click": "dev.spw.folia.FoliaPlugin.onReportProblem"
         }
       ]
     }

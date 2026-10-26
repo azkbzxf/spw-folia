@@ -45,7 +45,7 @@
   var lastFps = 0;
   var sources = [];
   var settings = {};
-  var inputs = { state: null, lyrics: null, track: null, queue: null, audio: null, hello: null, beat: null, ui: null };
+  var inputs = { state: null, lyrics: null, track: null, queue: null, audio: null, hello: null, beat: null, ui: null, envReport: null };
   var lastClockSentAt = 0;
 
   function post(msg) {
@@ -87,18 +87,43 @@
   window.addEventListener('unhandledrejection', function (e) {
     post({ type: 'log', level: 'error', msg: 'rejection: ' + String((e && e.reason) || 'unknown') });
   });
+  // issue #12 增加日志功能: the page's own diagnostics were invisible outside devtools — only
+  // console.error was mirrored, so a warning (Folia logs style/tuning problems through console.warn)
+  // or an informational load step never reached spw-folia-host.stdout.log. Mirror warn and info too,
+  // at their own level, and keep the volume bounded (one line per call, deduped by text, info capped
+  // at 200 distinct messages) so the log stays readable in a feedback report.
+  var consoleSeen = {};
+  var consoleInfoCount = 0;
   (function () {
-    var orig = console.error;
-    if (!orig) return;
-    console.error = function () {
-      try {
-        var parts = [];
-        for (var i = 0; i < arguments.length && i < 6; i++) parts.push(String(arguments[i]));
-        post({ type: 'log', level: 'error', msg: 'console: ' + parts.join(' ').slice(0, 6000) });
-      } catch (e) { }
-      return orig.apply(console, arguments);
-    };
+    function mirror(level, name, limit) {
+      var orig = console[name];
+      if (!orig) return;
+      console[name] = function () {
+        try {
+          var parts = [];
+          for (var i = 0; i < arguments.length && i < 6; i++) {
+            var a = arguments[i];
+            parts.push(a instanceof Error ? String(a.message) : String(a));
+          }
+          var text = parts.join(' ').slice(0, 4000);
+          var key = level + '|' + text.slice(0, 200);
+          if (consoleSeen[key]) return orig.apply(console, arguments);
+          consoleSeen[key] = 1;
+          if (level === 'info') { if (++consoleInfoCount > limit) return orig.apply(console, arguments); }
+          post({ type: 'log', level: level, msg: 'console.' + name + ': ' + text });
+        } catch (e) { }
+        return orig.apply(console, arguments);
+      };
+    }
+    mirror('error', 'error', 1e9);
+    mirror('warn', 'warn', 1e9);
+    mirror('info', 'info', 200);
   })();
+
+  // Long-frame reporting: a stalled main thread is the usual shape of a "卡住/掉帧" report, and a
+  // bare fps number does not say when it happened. The rAF meter below counts `stallFrames`
+  // (>100 ms) and remembers `worstFrameMs` per 1 s window; the host turns a non-zero stall count
+  // into a `page-stall` log line (HostForm.WriteFpsSample).
 
   // ---------------------------------------------------------------- SSE emulation
 
@@ -272,6 +297,12 @@
         applyUiAction(msg.action);
         emitLocal('ui', msg);
         break;
+      case 'envReport':
+        // issue #12: the host's half of the 「出现问题」 environment report. The settings panel
+        // subscribes to this event through the bridge (bridge.requestEnvReport).
+        inputs.envReport = msg.report || null;
+        emitLocal('envReport', msg.report || null);
+        break;
       case 'beat':
         inputs.beat = msg;
         emitLocal('beat', msg);
@@ -303,6 +334,11 @@
       else if (type === 'action') post({ type: 'action', name: (payload && payload.name) || payload });
       else if (type === 'log') post({ type: 'log', level: (payload && payload.level) || 'info', msg: (payload && payload.msg) || '' });
       else if (type === 'control') post(Object.assign({ type: 'control' }, payload || {}));
+      /* issue #12: the diagnostics actions carry flat protocol fields (docs/protocol.md §3.1), so
+       * flatten the payload the same way `control` does instead of nesting it under `payload`. */
+      else if (type === 'envCheck') post({ type: 'envCheck' });
+      else if (type === 'openLogFolder') post({ type: 'openLogFolder', path: (payload && payload.path) || null });
+      else if (type === 'openUrl') post({ type: 'openUrl', url: (payload && payload.url) || null });
       else post({ type: type, payload: payload });
       emitLocal(type, payload);
     },
@@ -396,10 +432,19 @@
   var windowStart = 0;
   var lastFrame = 0;
   var longFrames = 0;
+  // issue #12: separate the "just over one vsync" jitter from real stalls, and remember the worst
+  // frame of the window, so a lag report can be matched to a moment instead of only an average fps.
+  var stallFrames = 0;
+  var worstFrameMs = 0;
   function tick(t) {
     if (!windowStart) { windowStart = t; lastFrame = t; }
     frames += 1;
-    if (lastFrame && t - lastFrame > 25) longFrames += 1;
+    if (lastFrame) {
+      var dt = t - lastFrame;
+      if (dt > 25) longFrames += 1;
+      if (dt > 100) stallFrames += 1;
+      if (dt > worstFrameMs) worstFrameMs = dt;
+    }
     lastFrame = t;
     var elapsed = t - windowStart;
     if (elapsed >= 1000) {
@@ -411,6 +456,8 @@
         type: 'fps',
         fps: lastFps,
         longFrames: longFrames,
+        stallFrames: stallFrames,
+        worstFrameMs: Math.round(worstFrameMs),
         heapMB: heapMB,
         canvases: document.querySelectorAll('canvas').length,
         dpr: window.devicePixelRatio,
@@ -421,6 +468,8 @@
       frames = 0;
       windowStart = t;
       longFrames = 0;
+      stallFrames = 0;
+      worstFrameMs = 0;
     }
     requestAnimationFrame(tick);
   }

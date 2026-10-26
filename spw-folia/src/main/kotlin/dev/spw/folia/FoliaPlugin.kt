@@ -105,6 +105,14 @@ class FoliaPlugin(
     @Volatile
     private var transitionAnimationEnabled: Boolean = false
 
+    /**
+     * issue #12 增加日志功能: 配置 page switch `verboseLog` (default off). When on, the helper is
+     * spawned with `--verbose-log` so the log carries navigation transitions, page console lines at
+     * every level and per-window stall warnings. Read at spawn time like the animation switch.
+     */
+    @Volatile
+    private var verboseLogEnabled: Boolean = false
+
     /** Last cover the palette was derived from (track id + data URL hash) and the palette itself. */
     private var curtainPaletteCache: Pair<String, String>? = null
 
@@ -473,14 +481,39 @@ class FoliaPlugin(
             return
         }
         readTransitionAnimation(manager.getConfig())
-        val listener = Consumer<ConfigHelper> { helper -> readTransitionAnimation(helper) }
+        readVerboseLog(manager.getConfig())
+        val listener = Consumer<ConfigHelper> { helper ->
+            readTransitionAnimation(helper)
+            readVerboseLog(helper)
+        }
         runCatching { manager.addConfigChangeListener(listener) }
             .onSuccess {
                 curtainConfigManager = manager
                 curtainConfigListener = listener
-                log("config listener registered keys=$TRANSITION_ANIMATION_KEY")
+                log("config listener registered keys=$TRANSITION_ANIMATION_KEY,$VERBOSE_LOG_KEY")
             }
             .onFailure { log("config listener registration failed: ${it::class.java.name}: ${it.message}") }
+    }
+
+    /**
+     * issue #12: mirrors the 配置 page's 详细日志 switch into the helper spawn (`--verbose-log`).
+     *
+     * Same plumbing as [readTransitionAnimation] and the same caveat: it is read at spawn time, so
+     * flipping it affects the next Folia open. Kept a separate key so a user who needs a trace can
+     * turn it on without also re-enabling the opening animation.
+     */
+    private fun readVerboseLog(helper: ConfigHelper) {
+        val enabled = try {
+            helper.get(VERBOSE_LOG_KEY, false) as? Boolean ?: false
+        } catch (t: Throwable) {
+            log("verbose log read failed: ${t::class.java.name}: ${t.message}")
+            false
+        }
+        if (enabled != verboseLogEnabled) {
+            log("config $VERBOSE_LOG_KEY=$enabled (host --verbose-log=${if (enabled) "on" else "off"})")
+        }
+        verboseLogEnabled = enabled
+        bridge.verboseLog = enabled
     }
 
     private fun readTransitionAnimation(helper: ConfigHelper) {
@@ -751,7 +784,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.4.1"
+        const val PLUGIN_VERSION = "0.4.2"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -774,6 +807,9 @@ class FoliaPlugin(
         /** v0.4.0: 配置 page switch declared in `preference_config.json` (config.json). */
         private const val TRANSITION_ANIMATION_KEY = "transitionAnimation"
 
+        /** issue #12: 配置 page switch that turns on the host's `--verbose-log` diagnostic stream. */
+        private const val VERBOSE_LOG_KEY = "verboseLog"
+
         /**
          * Fade-in window of the opening animation, milliseconds.
          *
@@ -793,6 +829,39 @@ class FoliaPlugin(
 
         fun logStatic(message: String) {
             instance?.log(message)
+        }
+
+        /** issue #12: lets [FoliaDiagnostics] toast from the 配置 page button (no plugin instance needed). */
+        fun toastStatic(text: String, type: WorkshopApi.Ui.ToastType) {
+            val target = instance
+            if (target != null) target.toast(text, type)
+            else runCatching { WorkshopApi.ui.toast(text, type) }
+        }
+
+        /**
+         * issue #12 增加日志功能: `preference_config.json` 「出现问题」button target.
+         *
+         * SPW resolves `on_click` as `<class>.<method>` and calls it with no arguments, so this has to
+         * live in the companion object as a static method (see the workshop API example's
+         * `MainPlugin.onExampleButtonClick`). Everything it needs comes from the running instance;
+         * with no instance (button pressed while the plugin is stopped) it degrades to a toast.
+         */
+        @JvmStatic
+        @JvmName("onReportProblem")
+        fun onReportProblem() {
+            val target = instance
+            if (target == null) {
+                runCatching {
+                    WorkshopApi.ui.toast("spw-folia 插件未启动，无法检查环境", WorkshopApi.Ui.ToastType.Warning)
+                }
+                return
+            }
+            val pluginPath = File(target.pluginContext.pluginPath)
+            FoliaDiagnostics.onReportProblem(
+                pluginPath = pluginPath,
+                spwVersion = target.pluginContext.spwVersion,
+                pluginVersion = target.pluginContext.pluginVersion,
+            )
         }
     }
 }
