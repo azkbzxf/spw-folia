@@ -1,4 +1,4 @@
-# v0.4.2 验收记录（issue #11 / #12 / #13）
+# v0.4.2 / v0.4.3 验收记录（issue #11 / #12 / #13）
 
 日期：2026-10-26 · 机器：Windows 11 x64 build 26300 · WebView2 150.0.4078.83 · .NET Framework 4.8.1 (Release 534296)
 产物：`spw-folia/build/libs/plugin-dev.spw.folia-0.4.2.spmod`（229,792 B）、`spw-folia-host.exe` 160,768 B、
@@ -105,3 +105,22 @@
   去掉底板后标题的可读性没有保障，因此选择不显示（与 `monet`/浅色 `lumiere` 归为不可用的思路一致）。
 * `page-stall` 的阈值（100 ms）与 fps 窗口（1 s）是经验值，若要更细的卡顿画像需要接 `PerformanceObserver`。
 * 详细日志只影响**下一次**打开 Folia（开关在 spawn 时读取），页面上没有即时切换入口。
+
+## 6. v0.4.3 日志复查（发布后）
+
+用户贴回真实会话日志（SPW 1.19.2、3200×2000 @ 173 DPI、透明 + 鼠标穿透开启），逐行核对后发现 4 个
+问题，均已修复：
+
+| 日志现象 | 根因 | 修复 |
+| --- | --- | --- |
+| `console.warn:     at bt (…createSonnetPixiRuntime…)`（只有堆栈、没有正文） | PixiJS 的弃用警告是 `groupCollapsed('%c…%c%s', …)` + `warn(stack)` + `groupEnd()` 三段式；`Shim.js` 只镜像了 `warn`，于是正文（第一条）丢失、只剩第二条的堆栈 | 也镜像 `groupCollapsed`/`group`/`groupEnd`，并实现 `%s`/`%c` 占位符：标签单独成行，组内堆栈带 `标签: ` 前缀 |
+| `open-log-folder dir=…\spw-folia-host.stdout.log selected=False` | 面板传的是 `logPath`（**文件**，来自 `--log-file`），宿主把它当目录 | 文件 → 选中所属目录里的该文件；目录 → 选中其中的 `spw-folia.log` |
+| `transparency mouse=catcher drag=on/off` 刷了 104 行 | 每次在热区内按下/松开各写一行，级别是 `info` | 降为 `debug` |
+| `webview scale` 从未出现（`dpr=1` 而 `winDpi=173`） | `docs/protocol.md` §8 要求「按目标屏 DPI 设置 `RasterizationScale`」，但代码只设了 `Bounds`。实测该值默认已由初始窗口尺寸推出并**恰好等于 1.802**（3200/1.802≈1776、2000/1.802≈1110），所以本次画面并不模糊；但换到不同 DPI 显示器后不会更新 | 新增 `ApplyRasterizationScale`：反射取 `CoreWebView2Controller.RasterizationScale`，在 `nav-done` 与每次几何变化后对齐 `DpiForWindow`，值不变时不打日志 |
+
+**DPI 的实测结论**（避免误判）：默认与 `--force-dsf 1` 两组的逐像素梯度能量为 3.183 vs 3.049（基本相同），
+capture 尺寸都是 3200×2000 级别——画面是原生分辨率渲染，`dpr=1` 只是 WebView2 用 `RasterizationScale`
+在合成层缩放的正常表现。因此**不把 `dpr=1` 当 bug 处理**，只补上换屏后的 scale 同步。
+
+复查用的探针脚本留在 `.tmp-issues/`（`probe-console2.mjs`、`probe-fixes.mjs`、`probe-cmp.mjs`），
+均为真实宿主 + 真实 WebView2。

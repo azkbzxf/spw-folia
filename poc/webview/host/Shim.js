@@ -92,32 +92,79 @@
   // or an informational load step never reached spw-folia-host.stdout.log. Mirror warn and info too,
   // at their own level, and keep the volume bounded (one line per call, deduped by text, info capped
   // at 200 distinct messages) so the log stays readable in a feedback report.
+  //
+  // v0.4.2a: PixiJS reports deprecations through `console.groupCollapsed(...)` + `console.warn(stack)`
+  // + `console.groupEnd()`. The first call carries the actual message, the second carries only a stack,
+  // so mirroring `warn` alone produced a log line that was nothing but "at bt (...)" frames. Mirror
+  // groupCollapsed/groupEnd too: they keep the message and its frames together in one line, and the
+  // `group` bookkeeping lets the stack lines be appended to the message they belong to instead of
+  // becoming separate, meaningless entries.
   var consoleSeen = {};
   var consoleInfoCount = 0;
+  var consoleGroup = [];
   (function () {
-    function mirror(level, name, limit) {
+    function fmt(args, max) {
+      if (!args || args.length === 0) return '';
+      var first = args[0];
+      // Devtools-style format string: `%s` consumes the next argument, `%c` is styling and is
+      // dropped. PixiJS reports deprecations as `console.groupCollapsed('%c…%c%s', styleA, styleB,
+      // message)`, so without this the label was a wall of CSS.
+      if (typeof first === 'string' && first.indexOf('%') >= 0 && args.length > 1) {
+        var next = 1;
+        var text = first.replace(/%[scdifoO]/g, function (token) {
+          if (token === '%c') return '';
+          var value = args[next++];
+          if (value === undefined) return token;
+          return value instanceof Error ? String(value.message) : String(value);
+        });
+        return text.slice(0, max || 4000);
+      }
+      var parts = [];
+      for (var i = 0; i < args.length && i < 6; i++) {
+        var a = args[i];
+        parts.push(a instanceof Error ? String(a.message) : String(a));
+      }
+      return parts.join(' ').slice(0, max || 4000);
+    }
+    function emit(level, name, text, bare) {
+      var key = level + '|' + text.slice(0, 200);
+      if (consoleSeen[key]) return;
+      consoleSeen[key] = 1;
+      if (level === 'info') { if (++consoleInfoCount > 200) return; }
+      // `bare` = the text already carries its own context (the group label itself).
+      var prefix = (!bare && consoleGroup.length) ? consoleGroup.join(' / ') + ': ' : '';
+      post({ type: 'log', level: level, msg: 'console.' + name + ': ' + prefix + text });
+    }
+    function mirror(level, name) {
+      var orig = console[name];
+      if (!orig) return;
+      console[name] = function () {
+        try { emit(level, name, fmt(arguments)); } catch (e) { }
+        return orig.apply(console, arguments);
+      };
+    }
+    mirror('error', 'error');
+    mirror('warn', 'warn');
+    mirror('info', 'info');
+    // Groups: the label is the message, the following console.warn is the stack belonging to it.
+    ['group', 'groupCollapsed'].forEach(function (name) {
       var orig = console[name];
       if (!orig) return;
       console[name] = function () {
         try {
-          var parts = [];
-          for (var i = 0; i < arguments.length && i < 6; i++) {
-            var a = arguments[i];
-            parts.push(a instanceof Error ? String(a.message) : String(a));
-          }
-          var text = parts.join(' ').slice(0, 4000);
-          var key = level + '|' + text.slice(0, 200);
-          if (consoleSeen[key]) return orig.apply(console, arguments);
-          consoleSeen[key] = 1;
-          if (level === 'info') { if (++consoleInfoCount > limit) return orig.apply(console, arguments); }
-          post({ type: 'log', level: level, msg: 'console.' + name + ': ' + text });
+          var label = fmt(arguments);
+          if (label) { consoleGroup.push(label); emit('warn', name, label, true); }
         } catch (e) { }
         return orig.apply(console, arguments);
       };
+    });
+    var origEnd = console.groupEnd;
+    if (origEnd) {
+      console.groupEnd = function () {
+        try { consoleGroup.pop(); } catch (e) { }
+        return origEnd.apply(console, arguments);
+      };
     }
-    mirror('error', 'error', 1e9);
-    mirror('warn', 'warn', 1e9);
-    mirror('info', 'info', 200);
   })();
 
   // Long-frame reporting: a stalled main thread is the usual shape of a "卡住/掉帧" report, and a

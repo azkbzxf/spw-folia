@@ -15,6 +15,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using System.Web.Script.Serialization;
@@ -37,6 +38,9 @@ namespace SpwFolia
         private readonly System.Windows.Forms.Timer exitTimer = new System.Windows.Forms.Timer();
 
         private WebView2 webView;
+        /** WinForms WebView2 keeps its controller here; `RasterizationScale` lives on the controller. */
+        private static readonly FieldInfo webViewControllerField =
+            typeof(WebView2).GetField("_coreWebView2Controller", BindingFlags.NonPublic | BindingFlags.Instance);
         // v0.1.11: cross-thread flags. The stdin background thread reads webviewReady/navDone and
         // teardown (CloseWith) races the UI thread, so all of them are volatile. Every WebView2 call
         // is UI-thread-only now: under WebView2 Runtime 155 the WinForms `CoreWebView2` getter throws
@@ -802,7 +806,10 @@ namespace SpwFolia
             {
                 if (catcherDragActive == dragging) return;
                 catcherDragActive = dragging;
-                log.Log("info", "transparency mouse=catcher drag=" + (dragging ? "on" : "off"));
+                // Every click inside the passthrough hot zones raises on+off, so this is `debug`:
+                // at `info` a single click wrote two lines and a session log filled with
+                // "catcher drag=on/off" (104 of them in one real run) instead of actual problems.
+                log.Log("debug", "transparency mouse=catcher drag=" + (dragging ? "on" : "off"));
                 ApplyInputCatcherRegion();
             }
             catch (Exception ex) { log.Error("transparency-mouse", ex); }
@@ -1068,8 +1075,64 @@ namespace SpwFolia
                         + " client=" + client.Width + "x" + client.Height
                         + " webview=" + webView.Bounds.Width + "x" + webView.Bounds.Height);
                 }
+                ApplyRasterizationScale(reason);
             }
             catch (Exception ex) { log.Error("layout", ex); }
+        }
+
+        /// <summary>
+        /// Pins WebView2's rasterization scale to the window's real monitor DPI.
+        ///
+        /// docs/protocol.md §8 has always required this ("宿主按目标屏 DPI 设置 WebView2
+        /// `RasterizationScale`/`Bounds`，避免模糊"), but only `Bounds` was ever set. Without an
+        /// explicit scale WebView2 derives one from the *initial* window size, and a fullscreen
+        /// borderless Form is resized in `OnHandleCreated`/`ApplyWindowGeometry` before the controller
+        /// exists — so the page ended up rendered at a 1.0 device-pixel ratio on a 173-DPI monitor:
+        /// `page-viewport w=1776 h=1110 dpr=1 client=3200x2000` (the real log). The whole Folia canvas
+        /// was drawn at 1776x1110 and stretched over 3200x2000, i.e. visibly soft.
+        ///
+        /// The controller exposes `RasterizationScale` directly; the WinForms wrapper keeps it in a
+        /// private `_coreWebView2Controller` field and does not surface it, so read it reflectively.
+        /// Every failure path is non-fatal: a missing controller simply keeps the previous scale.
+        /// </summary>
+        private void ApplyRasterizationScale(string reason)
+        {
+            try
+            {
+                if (webView == null) return;
+                object controller = webViewControllerField == null ? null : webViewControllerField.GetValue(webView);
+                if (controller == null)
+                {
+                    log.Log("debug", "webview-scale skip reason=no-controller at=" + reason);
+                    return;
+                }
+                double target = MonitorScale();
+                if (target <= 0.5 || target > 4.0)
+                {
+                    log.Log("warn", "webview-scale skip reason=bad-target target=" + JsonUtil.Num(target));
+                    return;
+                }
+                PropertyInfo scaleProperty = controller.GetType().GetProperty("RasterizationScale");
+                if (scaleProperty == null)
+                {
+                    log.Log("warn", "webview-scale skip reason=no-property type=" + controller.GetType().Name);
+                    return;
+                }
+                object current = scaleProperty.GetValue(controller, null);
+                double currentScale = current == null ? 0 : Convert.ToDouble(current, Inv);
+                if (Math.Abs(currentScale - target) < 0.001)
+                {
+                    log.Log("info", "webview scale=" + JsonUtil.Num(target) + " unchanged reason=" + reason);
+                    return;
+                }
+                scaleProperty.SetValue(controller, target, null);
+                log.Log("info", "webview scale=" + JsonUtil.Num(target)
+                    + " was=" + JsonUtil.Num(currentScale)
+                    + " reason=" + reason
+                    + " winDpi=" + DpiSupport.DpiForWindow(Handle)
+                    + " deviceDpi=" + DpiValue());
+            }
+            catch (Exception ex) { log.Error("webview-scale", ex); }
         }
 
         protected override void OnLoad(EventArgs e)
@@ -1296,6 +1359,9 @@ namespace SpwFolia
             navDone = true;
             navDoneAt = clock.ElapsedMilliseconds;
             shotAtTick = navDoneAt + args.ShotAtMs;
+            // The controller only exists once WebView2 has initialised, and every earlier geometry
+            // pass ran before that — so the rasterization scale is pinned here, after the page is up.
+            ApplyRasterizationScale("nav-done");
             log.Log(e.IsSuccess ? "info" : "error",
                 "nav-done success=" + e.IsSuccess + " status=" + e.WebErrorStatus
                 + " atMs=" + navDoneAt
@@ -1607,25 +1673,56 @@ namespace SpwFolia
             return sb.ToString();
         }
 
-        /// <summary>Explorer in <paramref name="dir"/> with the first log file selected.</summary>
-        private void OpenLogFolder(string dir)
+        /// <summary>
+        /// Explorer in the log directory with the log file selected (issue #12).
+        ///
+        /// The page passes `logPath` from the env report, which is a **file** (`--log-file`); treating
+        /// it as a directory produced `dir=…\spw-folia-host.stdout.log selected=False` and Explorer
+        /// opened nothing. Accept either a file or a directory: a file is selected in its parent, a
+        /// directory is opened and its first known log file selected when present.
+        /// </summary>
+        private void OpenLogFolder(string path)
         {
             try
             {
-                if (string.IsNullOrEmpty(dir))
+                if (string.IsNullOrEmpty(path))
                 {
                     string exeDir = null;
                     try { exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName); }
                     catch (Exception) { }
-                    dir = exeDir;
+                    path = exeDir;
                 }
-                if (string.IsNullOrEmpty(dir)) { log.Log("warn", "open-log-folder: no directory"); return; }
-                string logFile = Path.Combine(dir, "spw-folia.log");
-                string arguments = File.Exists(logFile)
-                    ? "/select,\"" + logFile + "\""
+                if (string.IsNullOrEmpty(path)) { log.Log("warn", "open-log-folder: no path"); return; }
+
+                string dir;
+                string select = null;
+                if (File.Exists(path))
+                {
+                    dir = Path.GetDirectoryName(path);
+                    select = path;
+                }
+                else if (Directory.Exists(path))
+                {
+                    dir = path;
+                    // Prefer the plugin log, then the host mirror this helper itself writes.
+                    string[] candidates = new string[] { "spw-folia.log", "spw-folia-host.stdout.log" };
+                    for (int i = 0; i < candidates.Length; i++)
+                    {
+                        string candidate = Path.Combine(dir, candidates[i]);
+                        if (File.Exists(candidate)) { select = candidate; break; }
+                    }
+                }
+                else
+                {
+                    log.Log("warn", "open-log-folder: path missing " + path);
+                    return;
+                }
+
+                string arguments = select != null
+                    ? "/select,\"" + select + "\""
                     : "\"" + dir + "\"";
                 Process.Start("explorer.exe", arguments);
-                log.Log("info", "open-log-folder dir=" + dir + " selected=" + File.Exists(logFile));
+                log.Log("info", "open-log-folder dir=" + dir + " selected=" + (select ?? "none"));
             }
             catch (Exception ex) { log.Error("open-log-folder", ex); }
         }

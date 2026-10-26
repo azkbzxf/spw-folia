@@ -73,7 +73,7 @@ colour theming.
 
 ## Usage
 
-1. Download `spw-folia-0.4.2.spmod` from [Releases](https://github.com/azkbzxf/spw-folia/releases);
+1. Download `spw-folia-0.4.3.spmod` from [Releases](https://github.com/azkbzxf/spw-folia/releases);
    you can also subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3825012802)
    (the Steam build installs itself after subscribing).
 2. SPW → **Settings → Plugins / Workshop → Import plugin**, pick the file and enable it. Grant the
@@ -121,7 +121,7 @@ troubleshooting live in [docs/runtime-requirements.md](docs/runtime-requirements
 
 ## Versions
 
-Currently **v0.4.2**. The `.spmod` and its SHA-256 checksum for every release are on
+Currently **v0.4.3**. The `.spmod` and its SHA-256 checksum for every release are on
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases); per-version notes and acceptance
 evidence are archived in [docs/archive/](docs/archive/) rather than repeated here.
 
@@ -158,7 +158,7 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 bash packaging/build-package.sh     :: stages packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
     --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.2.spmod
+    --staging packaging --out dist/release --name spw-folia-0.4.3.spmod
 ```
 
 The full pipeline, payload inventory, size budget and release checklist are in

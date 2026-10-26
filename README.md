@@ -63,7 +63,7 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 
 ## 使用方法
 
-1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.2.spmod`；
+1. 从 [Releases](https://github.com/azkbzxf/spw-folia/releases) 下载 `spw-folia-0.4.3.spmod`；
    也可以直接在 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3825012802)
    订阅（Steam 版会在订阅后自动安装）。
 2. SPW → **设置 → 插件 / 创意工坊 → 导入插件**，选择该文件并启用；询问时授予 **class-transform**
@@ -105,7 +105,7 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。完整依赖
 
 ## 版本
 
-当前 **v0.4.2**。每个版本的 `.spmod` 与 SHA-256 校验值都在
+当前 **v0.4.3**。每个版本的 `.spmod` 与 SHA-256 校验值都在
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)；逐版变更与验收证据归档在
 [docs/archive/](docs/archive/)，仓库内不再重复。
 
@@ -138,7 +138,7 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 bash packaging/build-package.sh     :: 暂存 packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
     --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.2.spmod
+    --staging packaging --out dist/release --name spw-folia-0.4.3.spmod
 ```
 
 完整的打包流水线、payload 清单、大小预算与发布检查表见 [docs/release.md](docs/release.md)。

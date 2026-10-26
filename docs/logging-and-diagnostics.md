@@ -36,7 +36,11 @@ Status: 已实现并通过真实宿主 + 真实 WebView2 验收（2026-10-26）�
 | 行 | 出处 | 用途 |
 | --- | --- | --- |
 | `console.warn: …` / `console.info: …` | `Shim.js` 新增的 console 镜像（此前只有 `console.error`） | Folia 页面/设置岛用 `console.warn` 报样式与调参问题，以前只在 devtools 里可见；info 限 200 条去重，避免刷屏 |
+| `console.groupCollapsed: …` | 同上，v0.4.3 | PixiJS 的弃用警告是 `groupCollapsed('%c…%c%s', …)` + `warn(stack)` + `groupEnd()` 三段式；只镜像 `warn` 会得到一条纯 `at bt (…)` 堆栈、没有正文。现在组标签单独成行，组内的堆栈行带 `组标签: ` 前缀，能看出它属于哪条警告；`%c` 样式占位符被丢弃、`%s` 正确插值 |
 | `page-stall frames=N worstFrameMs=… fps=…` | 宿主 `WriteFpsSample` + `Shim.js` 的 `stallFrames`/`worstFrameMs` | 用户说的「卡顿/掉帧」变成可检索的一行；`>100 ms` 才算 stall，与普通的 25 ms 抖动分开 |
+| `transparency mouse=catcher drag=on/off` | 宿主（v0.4.3 起为 **debug** 级） | 每次在热区内按下/松开都会各写一行；放在 `info` 级时一次点击就是两条，实测一轮会话刷了 104 行，把真正的异常淹掉了 |
+| `webview scale=… was=… reason=…` | 宿主 `ApplyRasterizationScale`（v0.4.3） | WebView2 的 `RasterizationScale` 会按显示器 DPI 更新（默认值由初始窗口尺寸推出）；换到不同 DPI 的显示器后若不重设，画面会被拉伸。日志只在值真的变化时打一行 |
+| `open-log-folder dir=… selected=…` | 宿主（v0.4.3 修正） | 面板传的是**日志文件路径**（`--log-file`），旧实现把它当目录用，于是 `selected=False` 且资源管理器打不开；现在文件→选中所属目录里的它，目录→选中其中的日志文件 |
 | `nav-start uri=… redirect=…` | 宿主（仅 `--verbose-log`） | 导航链路（含设置岛注入后的跳转） |
 | `env-check requested -> NB` / `open-log-folder …` / `open-url …` | 宿主 | 自检与反馈动作的留痕，便于确认用户真的点到了按钮 |
 | `verbose` 级别行 | 宿主 | 只在 `--verbose-log` 下出现 |
