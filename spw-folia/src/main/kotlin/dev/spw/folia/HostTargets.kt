@@ -101,10 +101,28 @@ internal object HostTargets {
      * Known host builds, newest first. The first profile whose classes and method signatures
      * validate wins; a profile is never applied on faith.
      *
+     *  - `1.19.3` (Steam, 2026-10-30): verified from `app/ffmpeg-x64.dll` — the whole file facade
+     *    was renamed again (`घ`/`ะ`/`Ը` → `ɦ`/`ל`/`त`), which is why the flyout item vanished for
+     *    users on that build. Signatures and the palette are unchanged.
      *  - `1.19.2` (Steam, 2026-10): verified by extracting `ffmpeg-x64.dll` and scanning classes.
      *  - `1.19.0` (Store / dev23 pairing): the original v0.1–v0.3 target.
      */
     private val PROFILES: List<MenuTarget> = listOf(
+        MenuTarget(
+            menuClass = "androidx.compose.ui.\u0266",              // ɦ — PlayerMoreMenuFlyoutKt
+            addItemsMethod = "\u037F",                              // Ϳ
+            addItemsParams = listOf(
+                TRACK, MEDIA_ITEM,
+                "androidx.compose.ui.\u05DC",                       // ל — PopupState
+                NAVIGATOR, STATE,
+                "androidx.compose.ui.\u0924",                       // त — MenuFlyoutScope
+            ),
+            scopeClass = "androidx.compose.ui.\u0924",
+            scopeBridge = "\u037F",
+            popupStateClass = "androidx.compose.ui.\u05DC",
+            popupDismiss = "\u0529",
+            origin = "profile:1.19.3",
+        ),
         MenuTarget(
             menuClass = "androidx.compose.ui.\u0918",              // घ — PlayerMoreMenuFlyoutKt
             addItemsMethod = "\u037F",                              // Ϳ
@@ -358,7 +376,13 @@ internal object HostTargets {
             if (!params[2].startsWith("androidx.compose.ui.")) continue
             if (!params[5].startsWith("androidx.compose.ui.")) continue
             out += MenuTarget(
-                menuClass = cls.name,
+                // `ParsedClass.name` is the raw `this_class` value, i.e. the JVM *internal* form
+                // with '/' separators (`androidx/compose/ui/ɦ`). Every consumer of `menuClass`
+                // (validateMenu's Class.forName, the hook registrar, the cache file) expects the
+                // binary dotted form, so convert here — before v0.4.4 this was passed through raw,
+                // which made validateMenu throw ClassNotFoundException and the whole scan report
+                // "found no flyout helper" on every unknown host build.
+                menuClass = cls.name.replace('/', '.'),
                 addItemsMethod = method.name,
                 addItemsParams = params,
                 scopeClass = "",

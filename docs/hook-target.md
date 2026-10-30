@@ -23,14 +23,14 @@ in `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` (owner: hook-poc). D
 
 ## Resolution layers (v0.3.1+)
 
-SPW is R8-obfuscated, so **every release renames the classes and methods we touch** — 1.19.2 kept the
-structure but renamed `ē`/`ন`/`Ⴈ` to `घ`/`Ը`/`ะ`. The plugin therefore resolves its targets at
-runtime (`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`):
+SPW is R8-obfuscated, so **every release renames the classes and methods we touch** — 1.19.2 renamed
+`ē`/`ন`/`Ⴈ` to `घ`/`Ը`/`ะ`, and 1.19.3 renamed those again to `ɦ`/`ל`/`त`. The plugin therefore
+resolves its targets at runtime (`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`):
 
 | layer | when | cost |
 | --- | --- | --- |
 | `host-targets.json` cache (keyed by `spwVersion`) | every start after the first success on that build | ~0 |
-| built-in profile (`PROFILES`: 1.19.2, 1.19.0) | known builds | ~0 |
+| built-in profile (`PROFILES`: 1.19.3, 1.19.2, 1.19.0) | known builds | ~0 |
 | structural classpath scan | unknown build — background thread, does not stall start-up | ~0.5–2 s once |
 
 Every layer is **validated by reflection** before use (helper signature + scope bridge + palette
@@ -52,19 +52,31 @@ Two host facts the scan works around:
 | --- | --- | --- | --- | --- |
 | 1.19.0 | `androidx.compose.ui.ē` (U+0113) | `Ϳ` | `androidx.compose.ui.ন` (U+09A8) / `Ϳ` | `androidx.compose.ui.Ⴈ` (U+10A8) / `ԩ` |
 | 1.19.2 | `androidx.compose.ui.घ` (U+0918) | `Ϳ` | `androidx.compose.ui.Ը` (U+0538) / `Ϳ` | `androidx.compose.ui.ะ` (U+0E30) / `ԩ` |
+| 1.19.3 | `androidx.compose.ui.ɦ` (U+0266) | `Ϳ` | `androidx.compose.ui.त` (U+0924) / `Ϳ` | `androidx.compose.ui.ל` (U+05DC) / `ԩ` |
 
-Verified on 1.19.2 (Steam build) from `…/Salt Player for Windows/app/ffmpeg-x64.dll`:
-`घ.Ϳ(Track, PiscesMediaItem, ะ, Navigator, State, Ը)Unit`, scope impl `ʎ$Ϳ` (items list field `Ϳ`),
-flyout content colour still `ʰ.Ԩ(composer).Ԩ()`. The **playback-controls** reflection
-(`FoliaPlaybackControls.kt`) needed no change — `PlaybackQueueState`'s field order and
-`com.xuncorp.spc.core.queue.Ϳ` survived the rename.
+Verified on 1.19.3 (Steam build, 2026-10-30) from the same `ffmpeg-x64.dll`:
+`ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)Unit`, scope impl `গ$Ϳ` (items list field `Ϳ`),
+flyout content colour still `ʰ.Ԩ(composer).Ԩ()`; playback-controls and tray reflection unchanged.
+
+**The classpath scan had a latent bug until v0.4.5.** `menuCandidates()` passed
+`ParsedClass.name` — the raw `this_class` value, i.e. the JVM *internal* form with `/` separators
+(`androidx/compose/ui/ɦ`) — straight into `MenuTarget.menuClass`. `validateMenu()` then called
+`Class.forName()` on that dotted-expected string, threw `ClassNotFoundException`, and the scan
+reported `found no flyout helper` on **every** unknown host build. Every build so far had a
+built-in profile, so the bug never showed; 1.19.3 renamed all three classes and exposed it
+(the scan found the candidate but could not validate it). Fixed by
+`cls.name.replace('/', '.')` at the construction site.
+
+The **playback-controls** reflection (`FoliaPlaybackControls.kt`) needed no change in 1.19.2 or
+1.19.3 — `PlaybackQueueState`'s field order and `com.xuncorp.spc.core.queue.Ϳ` survived both
+renames.
 
 Log lines to look for in `spw-folia.log`:
 
 ```
-host menu profile:1.19.2: androidx.compose.ui.घ.Ϳ(Track, PiscesMediaItem, ะ, Navigator, State, Ը)
-hookMethod installed: … (profile:1.19.2)
-Folia item appended (scope=androidx.compose.ui.ʎ$Ϳ, bridge=Ϳ)
+host menu profile:1.19.3: androidx.compose.ui.ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)
+hookMethod installed: … (profile:1.19.3)
+Folia item appended (scope=androidx.compose.ui.গ$Ϳ, bridge=Ϳ)
 ```
 
 `unsupported SPW version …` appears only below 1.19.0. An unknown newer build logs
