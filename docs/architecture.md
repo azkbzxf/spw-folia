@@ -8,7 +8,8 @@ faithfully as possible. Publish to GitHub (`azkbzxf/spw-folia`, topic `salt-play
 Related docs (authoritative order):
 - `docs/protocol.md` — **implementation contract v1** for plugin↔host↔page (frozen; changes require Lead approval).
 - `docs/archive/re-host.md` — SPW host RE facts, local plugin install/test loop, build env.
-- `docs/hook-target.md` — exact SPW 1.19.0 hook target for the 更多 menu + fallbacks.
+- `docs/hook-target.md` — exact SPW hook target for the 更多 menu, the structural-discovery chain
+  (v0.4.6+), the known-profile regression baselines and fallbacks.
 - `docs/folia-spec/README.md` (+ style-map / settings-ui / tunings / runtime-contracts / fullscreen-shell / assets) —
   Folia behavior spec extracted from source (15 styles, settings, audio scale, theme, transitions).
 - Implementation docs: `docs/host-app.md`, `docs/settings-ui-impl.md`, `docs/audio-timeline.md`.
@@ -38,7 +39,7 @@ Related docs (authoritative order):
 ```
 Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-host.exe (per fullscreen session)
   spw-folia plugin (.spmod, PF4J, Kotlin)                    C# WinForms + WebView2
-  ├─ MenuHook      appendContent on 更多 menu                ├─ fullscreen borderless window (DPI, multi-monitor)
+  ├─ MenuHook      hookMethod on 更多 builder                ├─ fullscreen borderless window (DPI, multi-monitor)
   ├─ PlaybackBridge PlaybackExtensionPoint                   ├─ loads web/ (virtual host spw-folia.local)
   ├─ Timeline      1Hz→60Hz position interpolation           ├─ injects Shim.js → settings UI bundle → assets
   ├─ ConfigStore   settings JSON in workshop/data/<id>/      ├─ WASAPI loopback → 0..255 FFT/bands/power (~30-60Hz)
@@ -94,8 +95,11 @@ Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-
   append `dev.spw.folia` to `enabled.txt`, pre-grant
   `{"dev.spw.folia":{"reviewed":["class-transform","library-read","key-bindings"],"granted":["class-transform","library-read","key-bindings"]}}`
   in `permissions.json`, restart SPW, check `logs.txt`.
-- Version guard: hook targets are SPW-1.19.0-specific (`docs/hook-target.md`); on startup verify target classes
-  exist, else toast/log and no-op gracefully.
+- Version guard: hook targets are resolved at runtime by `HostTargets` — cache → known profile
+  (regression baseline / fast path) → structural discovery of the host bytecode → legacy classpath
+  scan, every layer gated by reflection validation (`docs/hook-target.md`). Below
+  `HostTargets.Version.MIN_SUPPORTED` (1.19.0) the hook is refused with a log line; an unknown newer
+  build is resolved on a background thread instead of being refused.
 
 ## 6. Fidelity requirements (from Folia spec)
 
@@ -119,11 +123,17 @@ Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-
 
 ## 8. Risks
 
-- **Menu hook stability**: appendContent relies on obfuscated names/param names; pinned to SPW 1.19.0; runtime
-  validation + clear error. Fallback: hook `ē.Ϳ(...)` item-adding helper (hookMethod) or (last resort) a
-  key-binding-opened window.
+- **Menu hook stability**: `hookMethod` matches JVM names + parameter types, so it survives Kotlin
+  renames; the *obfuscated* names are resolved at runtime (cache → known profile → structural
+  discovery over the host bytecode, v0.4.6+), and every result is reflection-validated before use.
+  A page-structure rewrite (no `BlurPopupMenu`-shaped popup, or a flyout that no longer takes
+  `Track`/`PiscesMediaItem`) still breaks discovery — it then fails loudly and the item is simply
+  absent, never mis-injected. Fallback: legacy classpath scan, then `replaceComposable` / a
+  key-binding-opened window (see `docs/hook-target.md`).
 - **Dist self-containment**: Folia dist may reference CDN fonts/assets — bundle locally, verify offline (spike).
 - **WebView2 availability**: system runtime 150.x present; loader dll bundled; fallback message if missing.
 - **Beat FX**: requires sensor model or injected module MVs; degrade gracefully.
 - **Audio loopback**: exclusive-mode/ASIO output may yield silence → host falls back to static/breathing values.
-- **Obfuscation drift**: future SPW versions break hooks → version pin + graceful refusal.
+- **Obfuscation drift**: R8 renames no longer break the hook (structural discovery, v0.4.6+); what
+  still breaks it is a *structural* rewrite of the page. The bytecode index costs ~1.3–1.5 s on
+  1.19.3, so it runs only on the background worker and is cached per host build.

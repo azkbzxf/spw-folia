@@ -12,41 +12,59 @@ The flyout hook is described first; the tray hook is the section
 
 ## 更多 弹层（mini-player）：`hookMethod` on the item-adding helper
 
-Status: **version-independent since v0.3.1** (2026-10-23). The obfuscated names below are *data*, not
-code: `HostTargets` resolves them per host build and caches the result, so a new SPW patch release no
-longer needs a plugin release.
+Status: **version-independent since v0.3.1** (2026-10-23); **structure-discovered since v0.4.6**
+(2026-10-30). The obfuscated names below are *data*, not code: `HostTargets` resolves them per host
+build and caches the result, so a new SPW patch release no longer needs a plugin release. Since
+v0.4.6 an unknown build does not need a hand-written profile at all — `HostMenuDiscovery` derives the
+targets from the host's own bytecode by *shape* (see 「结构发现」 below).
 
 The working approach is **`hookMethod` on the host's item-adding helper**; the originally planned
 `appendContent` is **impossible on this R8-obfuscated host build** (root cause below). Implemented
 in `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` (owner: hook-poc). Deep background:
 `docs/archive/re-host.md`.
 
-## Resolution layers (v0.3.1+)
+## Resolution layers (v0.4.6+)
 
 SPW is R8-obfuscated, so **every release renames the classes and methods we touch** — 1.19.2 renamed
-`ē`/`ন`/`Ⴈ` to `घ`/`Ը`/`ะ`, and 1.19.3 renamed those again to `ɦ`/`ל`/`त`. The plugin therefore
-resolves its targets at runtime (`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`):
+`ē`/`ন`/`Ⴈ` to `घ`/`Ը`/`ะ`, and 1.19.3 renamed those again to `ɦ`/`ל`/`त`. Up to v0.4.5 each rename
+meant: decompile by hand → extract the new names → add a profile → ship a plugin release. v0.4.6
+replaces that with **structural discovery**, which reads the host's bytecode and finds the targets by
+shape, so an R8 rename alone no longer needs a plugin release.
 
-| layer | when | cost |
-| --- | --- | --- |
-| `host-targets.json` cache (keyed by `spwVersion`) | every start after the first success on that build | ~0 |
-| built-in profile (`PROFILES`: 1.19.3, 1.19.2, 1.19.0) | known builds | ~0 |
-| structural classpath scan | unknown build — background thread, does not stall start-up | ~0.5–2 s once |
+The plugin resolves its targets at runtime (`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`),
+cheapest layer first:
 
-Every layer is **validated by reflection** before use (helper signature + scope bridge + palette
-getter), so a stale name is never trusted. The scan finds the helper by shape —
-`(Track, PiscesMediaItem, <PopupState>, Navigator, State, <MenuFlyoutScope>)` is unique in the host
-and three of those types are not obfuscated — then splits the two `androidx.compose.ui.*` parameters
-by looking for the interface that carries the Kotlin default-argument item bridge.
+| # | layer | when | cost |
+| --- | --- | --- | --- |
+| 1 | `host-targets.json` cache (keyed by `spwVersion`) | every start after the first success on that build | ~0 |
+| 2 | built-in profile (`PROFILES`: 1.19.3, 1.19.2, 1.19.0) | known builds — **regression baseline + zero-cost fast path**, no longer the adaptation mechanism | ~0 (53–57 ms measured, including validation) |
+| 3 | **structural discovery** (`HostMenuDiscovery` over `HostBytecodeIndex`) | unknown build — **the primary path**, background thread only | ~1.3–1.5 s index once per build, cached afterwards |
+| 4 | legacy classpath `scan()` (hand-rolled class parser, pure reflection) | second opinion when structural discovery fails | ~0.5–2 s once |
+| — | **reflection guard** (`validateMenu` / `validatePalette`) | **every** layer's result, before use | ~0 |
 
-Two host facts the scan works around:
+`quickLoad()` (inside `start()`) only runs layers 1–2 and returns `false` when neither validates, so
+`start()` never pays for bytecode indexing. `deepResolve()` (background worker) runs layer 3 and falls
+back to layer 4.
+
+Every layer is **validated by reflection** before use — helper signature (`hookMethod`'s exact
+parameter list), scope bridge (`MenuFlyoutScope.item(onClick, content)` as a static
+`(self, Function0, Function2)V`), palette getter — so a stale name is never trusted. A structural
+result is *additionally* cross-checked against any built-in profile that still validates: on a known
+build both paths must agree exactly, and a disagreement is logged as a `WARNING` instead of being
+silently averaged.
+
+Two host facts the whole resolution chain works around:
 
 - **The jar's zip entry names cannot be trusted.** Several entries are stored under a name that
   differs from the class they contain (`androidx/compose/ui/Ϡ.class` holds `…/ϡ`), so candidates are
-  identified by the `this_class` parsed out of the class file, never by the entry path.
-- **`java.class.path` is a single polyglot jar** (`app/ffmpeg-x64.dll`), readable with `ZipFile`.
+  identified by the `this_class` parsed out of the class file, never by the entry path. Both the index
+  and the legacy scan honour this.
+- **`java.class.path` is a single polyglot jar** (`app/ffmpeg-x64.dll`, 111 MB, 42147 classes,
+  readable with `ZipFile`). Structural discovery prefers the host class's own code source
+  (`HostBytecodeIndex.read(hostClass)`) and only falls back to `java.class.path` when that is
+  unreadable.
 
-### Known profiles
+### Known profiles — regression baseline, not the adaptation mechanism
 
 | build | menu facade | helper | MenuFlyoutScope (bridge) | PopupState (dismiss) |
 | --- | --- | --- | --- | --- |
@@ -54,18 +72,38 @@ Two host facts the scan works around:
 | 1.19.2 | `androidx.compose.ui.घ` (U+0918) | `Ϳ` | `androidx.compose.ui.Ը` (U+0538) / `Ϳ` | `androidx.compose.ui.ะ` (U+0E30) / `ԩ` |
 | 1.19.3 | `androidx.compose.ui.ɦ` (U+0266) | `Ϳ` | `androidx.compose.ui.त` (U+0924) / `Ϳ` | `androidx.compose.ui.ל` (U+05DC) / `ԩ` |
 
+**These rows are kept on purpose, but their job has changed.** Since v0.4.6 a profile is:
+
+- a **regression baseline** — on a build we already pinned, structural discovery must reproduce it
+  character for character; a mismatch is logged as a warning, which turns "did the discovery logic
+  regress?" into a single log line instead of a bug report;
+- a **zero-cost fast path** — on a known build `quickLoad()` resolves from the profile without
+  touching bytecode at all (measured 53–57 ms including reflection validation), so users on a pinned
+  build never pay the index cost;
+- **no longer the adaptation mechanism** — an unknown build needs no new row. Adding a profile is
+  now optional housekeeping (pin a build to skip its first index), never a prerequisite for a
+  release.
+
 Verified on 1.19.3 (Steam build, 2026-10-30) from the same `ffmpeg-x64.dll`:
 `ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)Unit`, scope impl `গ$Ϳ` (items list field `Ϳ`),
 flyout content colour still `ʰ.Ԩ(composer).Ԩ()`; playback-controls and tray reflection unchanged.
 
-**The classpath scan had a latent bug until v0.4.5.** `menuCandidates()` passed
-`ParsedClass.name` — the raw `this_class` value, i.e. the JVM *internal* form with `/` separators
+**The classpath scan had a latent bug until v0.4.5** — kept as history, because it explains the log
+lines users may still find in older reports, and because it is the reason the *legacy* scan is now
+layer 4 rather than the main path. `menuCandidates()` passed `ParsedClass.name` — the raw
+`this_class` value, i.e. the JVM *internal* form with `/` separators
 (`androidx/compose/ui/ɦ`) — straight into `MenuTarget.menuClass`. `validateMenu()` then called
 `Class.forName()` on that dotted-expected string, threw `ClassNotFoundException`, and the scan
 reported `found no flyout helper` on **every** unknown host build. Every build so far had a
 built-in profile, so the bug never showed; 1.19.3 renamed all three classes and exposed it
 (the scan found the candidate but could not validate it). Fixed by
 `cls.name.replace('/', '.')` at the construction site.
+
+v0.4.6 sidesteps this whole failure mode: structural discovery does its own one-way conversion from
+internal to binary names (`HostMenuDiscovery` emits dotted names only, and `popupStateClass` strips the
+`L…;` descriptor wrapper), and its result still goes through the same `validateMenu()` guard. The
+legacy scan remains only as the layer-4 second opinion for builds where the JDK class-file API cannot
+parse the host image.
 
 The **playback-controls** reflection (`FoliaPlaybackControls.kt`) needed no change in 1.19.2 or
 1.19.3 — `PlaybackQueueState`'s field order and `com.xuncorp.spc.core.queue.Ϳ` survived both
@@ -79,16 +117,152 @@ hookMethod installed: … (profile:1.19.3)
 Folia item appended (scope=androidx.compose.ui.গ$Ϳ, bridge=Ϳ)
 ```
 
-`unsupported SPW version …` appears only below 1.19.0. An unknown newer build logs
-`scanning the host classpath in the background`, then either the resolved target or
-`could not locate the 更多 flyout`.
+An unknown build logs the structural path instead (real output, 1.19.3, 2026-10-30):
+
+```
+host structural index: com.xuncorp.pisces.PiscesMediaItem: 28058 method bodies (1313ms)
+host structural matches regression baseline profile:1.19.3
+host menu structural: androidx.compose.ui.ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त) scope=androidx.compose.ui.त.Ϳ (1313ms, 28058 bodies)
+host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.Ԩ
+```
+
+`host structural matches regression baseline …` is the line that makes a known build self-checking:
+absent it, look for `WARNING: structural discovery disagrees with <profile>`, which prints both
+candidates' names **and** their `scopeParameter`/`popupParameter` indices. When discovery fails
+outright, `lastDiagnostics` carries the per-role candidate census
+(`structural(indexMs=… bodies=… candidates=[owner=1,popup=1,…])`) plus the discovery's own diagnostic
+lines — that is the block to ask a user for.
+
+## 结构发现（structural discovery，v0.4.6+）
+
+这是 v0.4.6 的主路径：不读任何混淆名，改为**解析宿主自己的字节码、按结构约束逐个角色定位**。
+实现分两层，都在 `spw-folia/src/main/kotlin/dev/spw/folia/`：
+
+| 文件 | 职责 |
+| --- | --- |
+| `HostBytecodeIndex.kt` | 只读索引：用 JDK 25 的 `java.lang.classfile` API 解析宿主 jar，建立「方法体 → 调用点 / 字段访问」的调用图。**从不加载或初始化宿主类**，只读字节。 |
+| `HostMenuDiscovery.kt` | 在索引上跑发现链，输出 6 个必需角色 + 2 个可选角色，全部是点分二进制名。 |
+
+设计来源是 SPW-Lyrics（<https://github.com/GaBoron/SPW-Lyrics>，`integration/hostui/HostBytecodeIndex.java` +
+`HostPlayerMenuDiscovery.java`）；它的 `docs/开发说明.md`「主窗口 Hook 与动态发现」一节明确写了同一套纪律
+（联合结构约束、候选必须唯一、每次启用重新扫描）。
+
+### 发现链（每一步只写结构约束，不含混淆名）
+
+| # | 角色 | 结构约束 | 1.19.3 命中 |
+| --- | --- | --- | --- |
+| 1 | `owner`（菜单 facade 类） | 唯一一个「方法体里调用了 `com/xuncorp/voxzen/service/PlaybackController#releaseAudioEngine`」的方法的 owner。宿主在弹层里「释放音频引擎」，这个业务调用点不会被改名。 | `androidx.compose.ui.ɦ` |
+| 2 | `popup`（弹出菜单调用点） | `owner` 的所有方法体中，descriptor 恰为 `(Function0, Function2, Function1, Composer, I, I)V` 的唯一调用点（`BlurPopupMenu(...)` 的形状）。 | `com/xuncorp/voxzen/ui/component.Ԭ` |
+| 3 | `entry`（菜单入口方法） | `owner` 里唯一一个「方法体包含上述 popup 调用」的方法。 | `ɦ.ɦ(PopupState, Composer, I)V` |
+| 4 | `popupStateType` | `entry` 参数表里唯一一个「以 `L` 开头且不是 `Landroidx/compose/runtime/Composer;`」的类型。 | `Landroidx/compose/ui/ל;` |
+| 5 | `itemBridge` | `owner` 所有调用中，`parameterCount==3`、第 0 参自指（`L<callee.owner>;`）、第 1 参 `Function0`、第 2 参 `Function2`、返回 `V`，且**全局唯一**。这是 `MenuFlyoutScope` 上的 Kotlin 默认参数 bridge —— 它的 owner 就是 scope 接口本身。 | `त.Ϳ` |
+| 6 | `builder`（要 hook 的方法） | 见下节「为什么要收紧 builder 规则」。 | `ɦ.Ϳ(...)Unit` |
+| 7 | `scopeParameter` / `popupParameter` | `builder` 参数表里 `L<scope>;` 与 `popupStateType` 的**下标**，供 hook 回调取参。 | 5 / 2 |
+| 8 | `dismiss` | `owner` 里满足「1 个参数 == `popupStateType`、返回 `Lkotlin/Unit;`」的方法体中，调用 owner 为 `popupStateType` 且 descriptor `()V` 的唯一调用。 | `ԩ` |
+| 9 | `label`（可选） | `owner` 所有调用里 descriptor 为 `(String, Modifier, Function2, Z, Composer, I, I)V` 的唯一调用（宿主原生行渲染，用于对齐样式）。失败降级 `null`。 | 命中 |
+| 10 | `palette`（可选） | 全库中唯一的访问器：static、descriptor 以 `(Landroidx/compose/runtime/Composer;)Landroidx/compose/ui/` 开头并以 `;` 结尾；返回类型 `X` 有 ≥5 个 `MutableState` 字段、≥5 个非 static `()J` getter；内容色 = 名为 `Ԩ`(U+0528) 的 getter，否则退化为第 2 个 getter。失败降级 `null`。 | `androidx.compose.ui.ʹ.Ԩ()` via `androidx.compose.ui.ʰ.Ԩ` |
+
+1.19.3 上 6 个必需角色**全部唯一命中**，且与手写 profile 逐字符一致
+（U+0266 / U+037F / U+0924 / U+037F / U+05DC / U+0529）。
+
+### 纪律：候选必须唯一，不唯一就报错
+
+每一步都是 `unique(...)`：候选数 != 1 就抛 `IllegalStateException`，消息带**角色名 + 候选数量**，
+绝不 best-effort 挑一个。理由是错的后果不对称 —— 在宿主里调错方法会静默污染弹层，而抛错只是
+「这一版没有 Folia 项 + 一条可读日志」。异常被 `HostTargets.structuralResolve` 捕获、记日志、
+退回第 4 层 `scan()`，**不会**让插件启动失败。
+
+可选角色（`label` / `palette`）走另一条纪律：失败或候选不唯一时降级为 `null` 并写诊断行
+（`FoliaMenuItem` 有常量颜色兜底），只有「必需角色」才允许整体失败。
+
+### 为什么要收紧 SPW-Lyrics 的 builder 规则
+
+SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参数里没有 `Composer` + 方法体
+调用了 itemBridge」。**这条规则在 SPW 1.19.3 上有 15 个候选** —— 它对 SPW 自己的菜单结构约束太弱，
+照抄过来完全不可用。
+
+v0.4.6 的收紧版在同样四个条件之外，还要求参数表里**同时**出现下面六个锚点：
+
+| 锚点 | 为什么它不会被 R8 改名 |
+| --- | --- |
+| `com/xuncorp/voxzen/data/entity/Track` | 宿主业务实体 |
+| `com/xuncorp/pisces/PiscesMediaItem` | 第三方播放库类型 |
+| `com/xuncorp/voxzen/ui/navigation/Navigator` | 宿主导航类型 |
+| `androidx/compose/runtime/State` | Compose 运行时类型 |
+| `L<itemBridge.owner>;`（scope） | 由第 5 步推导，不是硬编码 |
+| `popupStateType` | 由第 3–4 步推导，不是硬编码 |
+
+六个锚点里只有后两个是「推导出来的」，其余四个是 R8 不会动的库/业务类型。加完后 1.19.3 上
+**唯一命中**，且解出的 6 个码点与 profile 逐字符一致。
+
+### 性能与线程红线
+
+真实 1.19.3 宿主（`app/ffmpeg-x64.dll`，111 MB，**42147 个 class**）实测：
+
+| 指标 | 实测值 |
+| --- | --- |
+| 索引到的**方法体**数 | **28058**（约 2.8 万；预筛只解析引用了 Compose runtime 的类） |
+| 索引耗时 | **1313 ms**（多次运行区间约 **1.3–1.5 s**） |
+| 发现本身（索引建好之后） | 约 70–92 ms |
+| 已知版本走 profile（对照） | 53–57 ms，**零字节码成本** |
+
+**红线：约 1.3–1.5 s 的索引绝不允许进 `start()` 同步路径。** 它只在 `deepResolve()` 里跑，而
+`deepResolve()` 只由 `installHookForHostBuild()` 起的 `spw-folia-target-resolve` 守护线程调用；
+`quickLoad()`（唯一在 `start()` 内被调用的解析入口）只碰缓存与 profile。索引结果写入
+`host-targets.json`，**同一版本之后每次启动都是零成本**，不会重复索引。
+
+索引可协作取消（`HostBytecodeIndex.read(source, isCancelled)` 轮询线程中断标志），宿主退出时
+不会留下一个还在啃 111 MB zip 的线程。
+
+### 边界（如实写）
+
+- **能适应重命名。** 宿主下一次 R8 把 `ɦ`/`ל`/`त` 再改成别的字形，发现链不受影响 —— 它一个
+  混淆名都不读。这正是本方案要解决的问题。
+- **不能适应页面结构重构。** 如果宿主不再用 `BlurPopupMenu` 这类弹层（第 2 步的形状变了），
+  或者「更多」弹层不再从 `Track` / `PiscesMediaItem` 取数（第 6 步的锚点没了），结构约束就会
+  失效：候选不唯一或为零 → 抛错 → 退回 `scan()` → 仍失败则记 `could not locate the 更多 flyout`
+  并让 Folia 项缺失（其余功能不受影响）。**这种情况需要重新适配，不是自动就能活的。**
+  SPW-Lyrics 自己也承认这条边界（其 `docs/常见问题.md`：「动态发现能适应重命名，但不保证任意
+  页面结构变化后都能继续接入」）。
+- **不做 best-effort。** 见上「纪律」一节。
+
+### 缓存文件 `host-targets.json`（v0.4.6 新增字段）
+
+结构发现的结果写进同一份缓存（`pluginDir/host-targets.json`），带 `origin: "structural"`，
+并额外记录诊断数据：
+
+```json
+{"spwVersion":"1.19.3",
+ "menu":{"class":"androidx.compose.ui.ɦ","method":"Ϳ","params":[6 项],"scope":"androidx.compose.ui.त",
+         "bridge":"Ϳ","popup":"androidx.compose.ui.ל","dismiss":"ԩ",
+         "scopeParameter":5,"popupParameter":2,"label":"…","origin":"structural"},
+ "structural":{"indexMs":1313,"bodies":28058,
+   "candidateCounts":{"owner":1,"popup":1,"entry":1,"popupState":1,"itemBridge":1,
+                      "builder":1,"scopeParameter":1,"popupParameter":1,"dismiss":1,
+                      "label":1,"palette":1},
+   "diagnostics":[…9 行…]},
+ "paletteTarget":{"accessor":"androidx.compose.ui.ʰ","accessorMethod":"Ԩ",
+                  "palette":"androidx.compose.ui.ʹ","color":"Ԩ","origin":"structural"}}
+```
+
+两个实现细节值得记下来，它们都是踩过的坑：
+
+- **调色板的键叫 `paletteTarget` 而不是 `palette`。** 项目自带的 `Json.rawField` 不做层级区分，
+  只返回**第一个**文本匹配，而 `structural.candidateCounts` 里也有一个 `palette` 键（候选计数）——
+  同名会读出数字而不是对象。读取侧仍兼容旧缓存里的 `palette` 键，但只在它的值真的是对象时采用。
+- **缓存命中仍要 `validateMenu` / `validatePalette`。** 缓存可能来自另一个宿主版本或一个有 bug 的
+  发行版，不校验就等于信任磁盘上的字符串。
 
 ## What the menu is
 
 The 更多 button in the mini player opens a `PopupState` flyout rendered by `PlayerMoreMenuFlyout`
 (original file: `com/xuncorp/voxzen/ui/player/popup/PlayerMoreMenuFlyout.kt`, runtime file facade
-`androidx.compose.ui.ē`, ē = U+0113). It shows 4 items: 播放速度 / 桌面歌词 / 歌词翻译(checked) /
-释放音频引擎 (screenshot 2).
+`androidx.compose.ui.ē` in 1.19.0 — `घ` in 1.19.2, `ɦ` in 1.19.3). It shows 4 items: 播放速度 /
+桌面歌词 / 歌词翻译(checked) / 释放音频引擎 (screenshot 2).
+
+*The glyphs in this section are the 1.19.0 ones because that is the build the decompilation was
+done on. What matters for v0.4.6 is the **shape**: the same roles are rediscovered on any build by
+structure alone — see 「结构发现」 above.*
 
 Decompiled: `work/host/dec_more/androidx/compose/ui/ē.kt`. Its composable (line ~96) calls the
 Blur.kt file facade `com.xuncorp.voxzen.ui.component.Ԭ` (Ԭ = U+052C):
@@ -132,8 +306,11 @@ WorkshopApi.hookRegistrar.hookMethod(
     ),
     object : MethodHook() {
         override fun after(call: MethodHookParam) {
-            val scope = call.args[5]            // MenuFlyoutScope
-            appendItem(scope, call.args[2])     // dedupe + reflect bridge below
+            // v0.4.6: indices come from the resolved target (scopeParameter/popupParameter), not
+            // from a hardcoded args[5]/args[2]. The 1.19.x profiles carry 5 and 2; structural
+            // discovery derives them from the builder's parameter list.
+            val scope = call.args[target.scopeParameter]        // MenuFlyoutScope
+            appendItem(scope, call.args[target.popupParameter]) // dedupe + reflect bridge below
         }
     }
 )
@@ -152,8 +329,12 @@ bridge.invoke(null, scope, onClick, content)
 ```
 
 - Dedupe: the scope implementation keeps items in a mutable list field `Ϳ` (U+037F); use it as a
-  `WeakHashMap` key so recomposition does not add duplicate items.
+  `WeakHashMap` key so recomposition does not add duplicate items. The field is found **by type**
+  (first non-static `java.util.List` field), not by name, so a rename cannot break it.
 - Dismiss: `PopupState.ԩ()` (ԩ = U+0529) = no-arg void method, resolved reflectively.
+- Argument indices: read from `MenuTarget.scopeParameter` / `.popupParameter`, and range-checked
+  against `call.args.size` before use — a reshuffled signature logs
+  `after: argument indices out of range …` instead of silently feeding us the wrong argument.
 - Compile requirements: plugin applies `org.jetbrains.kotlin.plugin.compose` (Kotlin 2.4.20) and
   declares `compileOnly` compose runtime/foundation/material3 (`androidx.compose.*` classes are
   host-provided; **never bundle** a second Compose runtime in `lib/`).
@@ -308,6 +489,11 @@ parameter types and do not need parameter names).
 
 ## Re-derivation recipes (if the target changes with an SPW update)
 
+**Since v0.4.6 you normally do not need any of this.** Structural discovery resolves an unknown build
+by itself; these recipes are only for (a) pinning a new build with an optional profile, (b)
+diagnosing a discovery failure (i.e. the host's page structure really changed), or (c) hand-verifying
+a discovery result.
+
 1. Class-name→original-source map: `work/host/smap.json` (17,661 obfuscated classes → `.kt` file names).
    `PlayerMoreMenuFlyout.kt → androidx/compose/ui/ē.class`, `Blur.kt → com/xuncorp/voxzen/ui/component/Ԭ.class`.
 2. Extract classes: Python `zipfile` on
@@ -319,15 +505,33 @@ parameter types and do not need parameter names).
    `ParseMeta.java` / `ListMethods.java` / `ResolveTest.java` (compile+run against the polyglot jar
    directly), dumps `work/host/d2_dump.txt`, `work/host/blur_d2_strings.txt`.
 5. All jar entries: `work/host/entries.txt`.
+6. **Faster than 1–5 for a new build: read the plugin log.** `host structural index: … (N method
+   bodies, Mms)` then `host menu structural: …` already gives the dotted names and the parameter list.
+   Only if the log shows a discovery failure do you need the decompile recipes above — and then the
+   useful artifact is `lastDiagnostics` (the per-role candidate census), not the names.
 
 ## Codepoints (copy-paste safety)
 
 | glyph | codepoint | name / role |
 |---|---|---|
-| ē | U+0113 | PlayerMoreMenuFlyoutKt file facade |
+| ē | U+0113 | PlayerMoreMenuFlyoutKt file facade (1.19.0) |
+| ঘ | U+0918 | PlayerMoreMenuFlyoutKt file facade (1.19.2) |
+| ɦ | U+0266 | PlayerMoreMenuFlyoutKt file facade (1.19.3) |
 | Ԭ | U+052C | Blur.kt file facade |
-| ন | U+09A8 | MenuFlyoutScope interface |
+| ন | U+09A8 | MenuFlyoutScope interface (1.19.0) |
+| Ը | U+0538 | MenuFlyoutScope interface (1.19.2) |
+| त | U+0924 | MenuFlyoutScope interface (1.19.3) |
 | Ϳ | U+037F | shared obfuscated JVM method name (builder helper, scope item bridge, list field) |
 | ઠ | U+0AA0 | host menu-item content lambda factories |
-| Ⴈ | U+10A8 | PopupState |
+| Ⴈ | U+10A8 | PopupState (1.19.0) |
+| ะ | U+0E30 | PopupState (1.19.2) |
+| ל | U+05DC | PopupState (1.19.3) |
 | ԩ | U+0529 | PopupState.dismiss() |
+| ʰ | U+02B0 | palette accessor facade (`ʰ.Ԩ(composer).Ԩ()`) |
+| Ԩ | U+0528 | palette accessor method **and** content-colour getter |
+| ʹ | U+0374 | palette object class |
+
+Since v0.4.6 these glyphs are **only regression baselines and copy-paste aids**. No code path
+*requires* them: structural discovery derives every name from bytecode structure, so a build with
+entirely different glyphs still resolves. Treat the table as "what the discovery must reproduce on
+these three builds", not as a lookup the plugin depends on.

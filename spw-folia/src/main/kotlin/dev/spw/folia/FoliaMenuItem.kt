@@ -68,40 +68,67 @@ internal fun FoliaMenuItemContent() {
  * the same two calls the host's `MenuFlyoutItemCompat` makes for its default `contentColor`. Both
  * are resolved per host build by [HostTargets] (and cached), so this keeps working when an SPW
  * update renames the palette classes.
+ *
+ * This used to be two `by lazy` vals, which was a **time-order bug**: [HostTargets.palette] is
+ * resolved on `start()` for known builds but only filled in later (background thread, structural
+ * discovery) for an unknown host build. If the first composition happened before that — and it
+ * does, the flyout can be opened within milliseconds of start-up — the lazy initialiser saw `null`,
+ * and the cached `null` was then returned forever: the injected item kept the hardcoded dark
+ * fallback colour on a light flyout even though the palette had been resolved correctly afterwards.
+ *
+ * Resolving per palette *instance* keeps the reflection cost out of the hot path (one lookup per
+ * resolved target, not per recomposition) while staying correct when the target appears late, and
+ * also when [HostTargets.reset] swaps in a different target for another host build.
  */
-private val paletteAccessorMethod: Method? by lazy {
-    runCatching {
-        val target = HostTargets.palette ?: return@runCatching null
-        Class.forName(target.accessorClass)
-            .getDeclaredMethod(target.accessorMethod, androidx.compose.runtime.Composer::class.java)
-            .apply { isAccessible = true }
-    }.getOrNull()
-}
+private class PaletteReflection(val accessor: Method, val color: Method)
 
 /**
- * The palette's content colour, packed as a Compose [Color] long. The palette stores its colours in
- * `MutableState` fields, so reading it during composition also subscribes us to theme changes.
+ * Cache slot for [paletteReflection]. [value] is null when the lookup already failed for [target],
+ * so a host build whose palette classes cannot be reflected is not retried on every recomposition.
  */
-private val paletteColorMethod: Method? by lazy {
-    runCatching {
-        val target = HostTargets.palette ?: return@runCatching null
-        Class.forName(target.paletteClass)
-            .getDeclaredMethod(target.colorMethod)
-            .apply { isAccessible = true }
-    }.getOrNull()
+private class PaletteCache(val target: HostTargets.PaletteTarget, val value: PaletteReflection?)
+
+private val paletteReflectionLock = Any()
+
+@Volatile
+private var paletteReflectionCache: PaletteCache? = null
+
+/** Current host palette reflection, or null when the palette has not been resolved yet. */
+private fun paletteReflection(): PaletteReflection? {
+    val target = HostTargets.palette ?: return null
+    paletteReflectionCache?.let { cached ->
+        if (cached.target === target) return cached.value
+    }
+    synchronized(paletteReflectionLock) {
+        val current = HostTargets.palette ?: return null
+        paletteReflectionCache?.let { cached ->
+            if (cached.target === current) return cached.value
+        }
+        val resolved = runCatching {
+            PaletteReflection(
+                accessor = Class.forName(current.accessorClass)
+                    .getDeclaredMethod(current.accessorMethod, androidx.compose.runtime.Composer::class.java)
+                    .apply { isAccessible = true },
+                color = Class.forName(current.paletteClass)
+                    .getDeclaredMethod(current.colorMethod)
+                    .apply { isAccessible = true },
+            )
+        }.getOrNull()
+        paletteReflectionCache = PaletteCache(current, resolved)
+        return resolved
+    }
 }
 
 /** Current host flyout content colour, or null when the host theme API is unavailable. */
 @Composable
 private fun hostFlyoutContentColor(): Color? {
-    val readPalette = paletteAccessorMethod ?: return null
-    val readColor = paletteColorMethod ?: return null
+    val reflection = paletteReflection() ?: return null
     // `currentComposer` is a @Composable read, so it must happen outside runCatching
     // (the Compose compiler rejects composable calls inside it).
     val composer = currentComposer
     return runCatching {
-        val palette = readPalette.invoke(null, composer) ?: return null
-        Color((readColor.invoke(palette) as Long).toULong())
+        val palette = reflection.accessor.invoke(null, composer) ?: return null
+        Color((reflection.color.invoke(palette) as Long).toULong())
     }.getOrNull()
 }
 

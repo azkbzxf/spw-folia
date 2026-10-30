@@ -214,8 +214,9 @@ class FoliaPlugin(
      * Installs the flyout hook on this host build.
      *
      * Known builds (cache + profiles) resolve instantly and are hooked before `start()` returns —
-     * the historical behaviour. An unknown build needs a classpath scan of the host jar, so it runs
-     * on a background thread to keep the host UI start-up free of a one-off 1-2 s stall; the
+     * the historical behaviour, and still the fastest path because it costs zero bytecode work. An
+     * unknown build needs a structural index of the host archive (~1.4 s on 1.19.3, 42k classes), so
+     * it runs on a background thread to keep host UI start-up free of that one-off stall; the
      * registration is retried because the hook API only accepts the starting/started plugin.
      */
     private fun installHookForHostBuild() {
@@ -225,9 +226,16 @@ class FoliaPlugin(
             installHook()
             return
         }
-        log("host build $version matched no known profile; scanning the host classpath in the background")
+        log("host build $version matched no known profile; indexing the host bytecode in the background")
+        // The host class locates its own code source, which is more reliable than `java.class.path`
+        // (a single polyglot `ffmpeg-x64.dll` on shipped builds). Read lazily inside the worker so a
+        // missing or odd WorkshopApi instance can never break `start()`.
         val worker = Thread({
-            val target = HostTargets.deepResolve(dir, version, ::log)
+            val hostClass = runCatching { WorkshopApi.instance.javaClass }.getOrElse { failure ->
+                log("host class unavailable for structural discovery: ${failure::class.java.name}: ${failure.message}")
+                null
+            }
+            val target = HostTargets.deepResolve(dir, version, hostClass, ::log)
             if (target == null) {
                 log("WARNING: could not locate the 更多 flyout in ${pluginContext.spwVersion}; the Folia menu item will be missing")
                 return@Thread
@@ -325,16 +333,25 @@ class FoliaPlugin(
                     override fun after(call: MethodHookParam) {
                         try {
                             val args = call.args
-                            if (args.size < 6) {
-                                log("after: unexpected args size ${args.size}")
+                            // The indices come from the resolved target: the profiles carry the
+                            // 1.19.x constants (5 / 2) and structural discovery derives them from
+                            // the builder's parameter list, so a reshuffled signature cannot
+                            // silently feed us the wrong argument.
+                            val scopeIndex = target.scopeParameter
+                            val popupIndex = target.popupParameter
+                            if (scopeIndex !in args.indices || popupIndex !in args.indices) {
+                                log(
+                                    "after: argument indices out of range " +
+                                        "(scope=$scopeIndex popup=$popupIndex args=${args.size}, ${target.origin})"
+                                )
                                 return
                             }
-                            val scope = args[5]
+                            val scope = args[scopeIndex]
                             if (scope == null) {
                                 log("after: null MenuFlyoutScope")
                                 return
                             }
-                            appendFoliaItem(scope, args[2], target)
+                            appendFoliaItem(scope, args[popupIndex], target)
                         } catch (t: Throwable) {
                             log("after hook error: ${t::class.java.name}: ${t.message}")
                         }
@@ -784,7 +801,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.4.5"
+        const val PLUGIN_VERSION = "0.4.6"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
