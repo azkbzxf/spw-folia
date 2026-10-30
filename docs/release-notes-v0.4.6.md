@@ -128,11 +128,17 @@ host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.
 `structural` 块带 `indexMs` / `bodies` / 每角色 `candidateCounts`（本轮 11 个角色全部 = 1）/
 9 行 `diagnostics`。
 
-### 5. 构建
+### 5. 构建与发布包
 
 - `./gradlew compileKotlin` 通过；`./gradlew plugin` 通过
-- 产物 `spw-folia/build/libs/plugin-dev.spw.folia-0.4.6.spmod`
+- Gradle 产物 `spw-folia/build/libs/plugin-dev.spw.folia-0.4.6.spmod`
   sha256 `136821fbe4b41f13e172d1b91420346886a28da6ffc662d9b63961ac13d3ce8a`
+- 发布包 `dist/release/spw-folia-0.4.6.spmod`（12,476,192 B / 11.90 MB）
+  sha256 `fc06fd0724a4a6e8785bd912217c88c228aa1c234437d94e750c59a5f0619805`
+- 本次是**兼容性发布**：用 `packaging/tools/splice-compat-release.py` 以已发布的
+  `spw-folia-0.4.5.spmod` 为基线，只替换 `classes/`。脚本断言 3832 个非 `classes/` 条目
+  （`web/`、`native/`、`licenses/` 等）**CRC 全部未变**，丢弃 67 个旧 class、新增 85 个
+- `node packaging/tools/verify-layout.mjs` 通过（10 项 checks 全 true）
 - Manifest：`Plugin-Version: 0.4.6`、`Plugin-Permissions: class-transform,library-read,key-bindings`
 - 产物内含 `HostBytecodeIndex*` / `HostMenuDiscovery*`，**未**打包 kotlin/androidx
 
