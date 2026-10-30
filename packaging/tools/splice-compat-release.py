@@ -1,30 +1,58 @@
-"""Splice the freshly built plugin classes onto the v0.3.0 release payload.
+"""Splice freshly built plugin classes onto a previously published release payload.
 
-v0.3.1 is a compatibility-only release: web/, native/ and licenses/ must stay byte-identical to
-the accepted v0.3.0 artifact (packaging/native + packaging/web in this checkout are older than what
-shipped in v0.3.0, so re-staging them would regress the helper exe and the settings island).
+Compatibility-only release: web/, native/ and licenses/ must stay byte-identical to the accepted
+base artifact. Re-staging them from this checkout would silently regress the helper exe / settings
+island when packaging/ is older than what shipped.
+
+Usage:
+  python packaging/tools/splice-compat-release.py \
+      --base dist/release/spw-folia-0.4.3.spmod \
+      --classes spw-folia/build/libs/plugin-dev.spw.folia-0.4.5.spmod \
+      --out dist/release/spw-folia-0.4.5.spmod \
+      --version 0.4.5 \
+      --payload-note "v0.4.3 (web/native/licenses unchanged)"
 """
+import argparse
 import hashlib
 import json
 import sys
 import zipfile
 from pathlib import Path
 
-BASE = Path("dist/release/spw-folia-0.3.0-ref.spmod")
-CLASSES = Path("spw-folia/build/libs/plugin-dev.spw.folia-0.3.1.spmod")
-OUT = Path("dist/release/spw-folia-0.3.1.spmod")
 STAMP = (2026, 1, 1, 0, 0, 0)
+PERMISSIONS = "class-transform,library-read,key-bindings"
 
 
 def main() -> int:
-    base = zipfile.ZipFile(BASE)
-    classes = zipfile.ZipFile(CLASSES)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", required=True, help="previously published .spmod")
+    ap.add_argument("--classes", required=True, help="Gradle-built .spmod (classes/ only used)")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--version", required=True)
+    ap.add_argument("--payload-note", default="")
+    args = ap.parse_args()
 
-    kept = [(i, base.read(i.filename)) for i in base.infolist() if not i.filename.startswith("classes/")]
-    replaced = [(i, base.read(i.filename)) for i in base.infolist() if i.filename.startswith("classes/")]
+    base_path = Path(args.base)
+    classes_path = Path(args.classes)
+    out_path = Path(args.out)
+
+    if not base_path.is_file():
+        print("ERROR: base not found: %s" % base_path, file=sys.stderr)
+        return 2
+    if not classes_path.is_file():
+        print("ERROR: classes not found: %s" % classes_path, file=sys.stderr)
+        return 2
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    base = zipfile.ZipFile(base_path)
+    classes = zipfile.ZipFile(classes_path)
+
+    kept = [(i, base.read(i.filename)) for i in base.infolist()
+            if not i.filename.startswith("classes/")]
+    dropped = [i.filename for i in base.infolist() if i.filename.startswith("classes/")]
     new = [(i, classes.read(i.filename)) for i in classes.infolist()]
 
-    with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as out:
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as out:
         for info, data in kept:
             zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
             zi.compress_type = zipfile.ZIP_DEFLATED
@@ -36,36 +64,58 @@ def main() -> int:
             zi.external_attr = 0o644 << 16
             out.writestr(zi, data)
 
-    digest = hashlib.sha256(OUT.read_bytes()).hexdigest()
-    size = OUT.stat().st_size
-    print("wrote %s (%d B, %.2f MB, sha256=%s)" % (OUT, size, size / 1048576, digest))
-    print("kept %d payload entries, dropped %d old classes, added %d new classes"
-          % (len(kept), len(replaced), len(new)))
+    data = out_path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    size = len(data)
 
-    # Verify every payload entry kept its CRC.
+    # Every non-classes/ entry must keep its CRC.
     a = {i.filename: i.CRC for i in base.infolist() if not i.filename.startswith("classes/")}
-    b = zipfile.ZipFile(OUT)
-    bb = {i.filename: i.CRC for i in b.infolist() if not i.filename.startswith("classes/")}
-    if a != bb:
+    b = {i.filename: i.CRC for i in zipfile.ZipFile(out_path).infolist()
+         if not i.filename.startswith("classes/")}
+    if a != b:
         print("ERROR: payload entries changed", file=sys.stderr)
-        print(set(a.items()) ^ set(bb.items()), file=sys.stderr)
+        print(set(a.items()) ^ set(b.items()), file=sys.stderr)
         return 1
-    print("payload verified: %d/%d entries identical" % (len(a), len(a)))
+
+    # Manifest version must be the new one.
+    manifest = {}
+    with zipfile.ZipFile(out_path) as z:
+        for name in z.namelist():
+            if name.endswith("META-INF/MANIFEST.MF"):
+                for line in z.read(name).decode("utf-8", "replace").splitlines():
+                    if ": " in line and not line.startswith(" "):
+                        k, v = line.split(": ", 1)
+                        manifest[k.strip()] = v.strip()
+                break
+    if manifest.get("Plugin-Version") != args.version:
+        print("ERROR: manifest Plugin-Version=%r, expected %r"
+              % (manifest.get("Plugin-Version"), args.version), file=sys.stderr)
+        return 1
+    if "class-transform" not in manifest.get("Plugin-Permissions", ""):
+        print("ERROR: manifest lacks class-transform", file=sys.stderr)
+        return 1
 
     meta = {
-        "file": OUT.name,
+        "file": out_path.name,
         "sizeBytes": size,
         "sizeMB": round(size / 1048576, 2),
         "sha256": digest,
-        "entries": len(b.infolist()),
-        "pluginId": "dev.spw.folia",
-        "pluginClass": "dev.spw.folia.FoliaPlugin",
-        "pluginVersion": "0.3.1",
-        "pluginName": "spw-folia",
-        "permissions": "class-transform,library-read",
-        "payload": "v0.3.0 (web/native/licenses unchanged)",
+        "entries": len(zipfile.ZipFile(out_path).infolist()),
+        "pluginId": manifest.get("Plugin-Id"),
+        "pluginClass": manifest.get("Plugin-Class"),
+        "pluginVersion": manifest.get("Plugin-Version"),
+        "pluginName": manifest.get("Plugin-Name"),
+        "permissions": PERMISSIONS,
+        "payload": args.payload_note,
     }
-    (OUT.parent / (OUT.name + ".json")).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    (out_path.parent / (out_path.name + ".json")).write_text(
+        json.dumps(meta, indent=2), encoding="utf-8")
+    (out_path.parent / (out_path.name + ".sha256")).write_text(
+        "%s *%s\n" % (digest, out_path.name), encoding="utf-8")
+
+    print("wrote %s (%d B, %.2f MB, sha256=%s)" % (out_path, size, size / 1048576, digest))
+    print("kept %d payload entries (all CRC identical), dropped %d old classes, added %d new"
+          % (len(kept), len(dropped), len(new)))
     print(json.dumps(meta, indent=2))
     return 0
 
