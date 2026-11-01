@@ -321,8 +321,10 @@ host/page errors = 0
 `fullscreen-chrome.jpg`（视觉器 + 右上 ⚙）、`transparent-background.jpg`、
 `menu-folia.png`、`style-grid.png`。
 
-> `docs/images/style-grid.png` 目前是 v0.3.x 时期拍的 **14 格**截图（缺「花火」），
-> 需要重拍一张 15 格版本替换。
+> `style-grid.png` 由 `node poc/settings-ui/scripts/make-style-grid.mjs` 从**运行中的设置页**截取
+> （Dev 服务器 + Edge，等 15 张缩略图全部解码后才拍），所以格子数、顺序与标签始终与
+> `STYLE_MODE_SHELF_ORDER` 一致。换样式、改货架顺序或重拍缩略图后需重跑该脚本。
+> `alt` 文案与图片说明都不要写死格子数，否则又要手工同步。
 
 ## 10. 验收清单
 

@@ -69,7 +69,7 @@ and you can also float the lyrics transparently over the desktop.
   <img src="docs/images/transparent-background.jpg" width="49%" alt="Transparent playback page: lyrics composited onto the desktop">
   <img src="docs/images/style-grid.png" width="49%" alt="All lyric styles at a glance">
 </p>
-<div align="center"><sub>Fullscreen page · Folia settings · Transparent playback page · Lyric styles (style grid shot on v0.3.x, still missing Hanabi)</sub></div>
+<div align="center"><sub>Fullscreen page · Folia settings · Transparent playback page · Lyric styles</sub></div>
 
 > Want the whole tour at once? The [**promo site**](https://azkbzxf.github.io/spw-folia/) has the
 > scrolling demo, every style at full size, and a
