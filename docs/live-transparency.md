@@ -1,6 +1,5 @@
-# 播放页透明背景 — 宿主窗口透明机制（v0.1.7 契约）
+# 播放页透明背景 — 宿主窗口透明机制
 
-日期：2026-10-19
 范围：`poc/settings-ui/src/chrome/PlayerBackgroundControl.tsx`（新控件）、`poc/settings-ui/src/model/settings.ts`、
 `poc/settings-ui/src/publisher/config.ts`、`poc/settings-ui/src/App.tsx`、`poc/settings-ui/src/app.css`、
 `poc/webview/host/HostForm.cs`、`poc/webview/host/Program.cs`。跨仓依据：Folia 的
@@ -199,7 +198,8 @@ v0.2.2 借鉴 SPW-island 的 shaped input peer 思路（`WindowsGpuInput.kt`：�
 
 - 键色是纯洋红 `rgb(255,0,255)`：页面若恰好绘制该像素会被挖空（当前 Folia 主题/歌词不会产生该纯色；属于可接受风险）。
 - 透明就是「透到桌面/其它窗口」，不是 OBS 浏览器的 alpha 源——OBS 场景请直接用 Folia 的浏览器源，或用窗口捕获。
-- 仅主屏全屏（与 v0.1.0 起一致）；多屏选择未实现。
+- 全屏窗口开在 **SPW 窗口所在的那块屏幕**上（按父进程 PID 定位，见 `host-app.md` §3），不是系统主屏；
+  **Alt + 左键**可拖到其它屏幕并铺满该屏。没有显示器选择器；`Screen.PrimaryScreen` 只在父进程定位失败时兜底。
 - 透明模式默认会捕获鼠标（v0.1.8 的输入捕获窗口）；要操作下层窗口请打开面板里的「鼠标穿透（操作桌面）」，
   或按 Ctrl+Alt+B / ESC 退出透明。打开穿透后仅热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，
   其余位置的点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口（v0.2.2，见 §4.7）。

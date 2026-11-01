@@ -1,11 +1,9 @@
-# 播放条控制通道（v0.3.0 增补）实现契约
+# 播放条控制通道实现契约
 
-> 用户请求（2026-10-21）：把 v0.3.0 底部播放条中原本无法点击的按钮全部变为可点击、有实际作用，
-> 包括最右侧的随机播放与播放列表。保持 0.3.0 版本号；先本地验收，不自动上架 GitHub。
+> 底部播放条的按钮全部可点击：播放 / 暂停、上一首 / 下一首、拖动进度、随机 / 循环模式、打开队列点选切歌。
 >
 > 线协议以 `docs/protocol.md` 为准（§1 `queue`、§2 `control`、§3.1 `control`、§3.2 `queue`、§3.4）。
-> 本文档记录 **宿主内部反射映射**、各层实现契约、文件所有权与验收标准。所有层并行开发，
-> 由 Lead 负责协议文档、集成构建与端到端验收。
+> 本文档记录 **宿主内部反射映射**、各层实现契约与文件所有权。
 
 ## 1. 数据流
 
@@ -184,4 +182,4 @@ Class PiscesMediaItem = "com.xuncorp.pisces.PiscesMediaItem"
 3. Lead 集成：`bash packaging/build-package.sh` → 生成 `dist/release/spw-folia-0.3.0.spmod`；
    `bash spw-folia/scripts/install-local.sh --restart`；真实 SPW 打开视觉器：按钮可点、暂停/继续/上下首/
    拖动进度/随机切换/列表切歌均生效，`%APPDATA%` 插件日志无反射错误；截图存档 `research/settings-ui/`。
-4. 更新 `docs/archive/verification-v0.3.0.md` 与 `docs/archive/release-notes-v0.3.0.md`（Lead 负责）。
+4. 证据见 `docs/archive/verification-v0.3.0.md`；发布说明见 GitHub Releases 的 v0.3.0。

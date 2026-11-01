@@ -1,10 +1,9 @@
-# spw-folia — Folia lyric visualizer for Salt Player for Windows
+# spw-folia — a Folia lyric visualizer plugin for Salt Player for Windows
 
 Brings the [Folia](https://github.com/chthollyphile/folia-major) lyric visualizer into **Salt Player
 for Windows (SPW)**: the `Folia` entry in the mini player's **More** menu opens a borderless,
-fullscreen mode that runs Folia's **own** rendering code (all 15 lyric styles), driven by whatever
-SPW is playing — plus a desktop transparent overlay, a frame-accurate Folia settings page and cover
-colour theming.
+fullscreen mode that shows lyrics with Folia's own 15 lyric styles, driven by whatever is playing —
+and you can also float the lyrics transparently over the desktop.
 
 [![Release](https://img.shields.io/github/v/release/azkbzxf/spw-folia)](https://github.com/azkbzxf/spw-folia/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
@@ -13,46 +12,52 @@ colour theming.
 
 [中文](README.md) | **English**
 
-<p align="center"><img src="docs/images/style-lumiere.jpg" width="92%" alt="The lumiere style: golden stardust and glowing lyrics"></p>
+<p align="center"><img src="docs/images/style-lumiere.jpg" width="92%" alt="The Lumiere style: golden stardust and glowing lyrics"></p>
 
 ## Features
 
-- **Real Folia, not a re-implementation** — the plugin embeds Folia 0.7.22's production OBS browser
-  source output, so all 15 styles are Folia's original code: motion, glow, per-character timing,
-  backgrounds and transitions match Folia pixel for pixel.
-- **15 styles, one click away** — Sonnet · Tempera · Lumiere · Hanabi · Classic · Cadenza · Partita ·
-  Fume · Tilt · Claddagh · Monet · Pendolo · Cappella · Diorama · Still. Check several of them into a
-  random pool and each song gets a different style (no repeats back to back); the dice button on the
-  playback bar rerolls on the spot.
-- **Perfectly in sync with the player** — per-character lyrics, translation subtitles, play / pause /
-  seek / speed, plus WASAPI loopback analysis that makes the visuals react to the music.
-- **A playback bar you can actually use** — every button works: play / pause, previous / next,
-  seeking, shuffle / repeat, and a queue panel you can click to jump around.
-- **Settings page, 1:1 with Folia** — the "Lyric Style" window reuses Folia's own React components;
-  the large preview on the left mirrors the player page **frame by frame**: the same same-origin
-  iframe renderer, the same player-page config and the same real clock, including the transparent
-  state; every slider is reflected live.
+- **It runs Folia itself, not an imitation** — the plugin embeds the browser-side rendering build of
+  Folia 0.7.22, so the animation, glow, per-character timing and transitions of all 15 styles come
+  from Folia's own code.
+- **15 styles, a click away** — Sonnet · Tempera · Lumiere · Hanabi · Luminous · Mindscape ·
+  Partita · Fume · Tilt · Claddagh · Monet · Pendolo · Cappella · Diorama · Still. Tick a few of
+  them into a random pool and each song gets a different style without repeating back to back; the
+  dice button on the playback bar rerolls on the spot.
+- **It follows the music** — per-character lyrics and translation subtitles stay in sync through
+  play / pause / seek / speed changes, and the picture also reacts to how loud the music is.
+- **A playback bar you can actually click** — play / pause, previous / next, dragging the progress
+  bar, shuffle / repeat, plus a play queue you can click to switch tracks.
+- **The settings page is Folia's own UI** — it reuses Folia's components, and the large preview on
+  the left shows the real song, lyrics, background and transparency state; drag any slider and you
+  see the result immediately.
 - **Custom fonts and subtitles** — import a font pack (`.ttf` / `.otf` / `.woff` / `.woff2`, up to
-  50 MB each) or pick from system fonts; weight, size, auto-weight, overall opacity, subtitle style
-  and background, upcoming-lyric blur and more are all adjustable.
+  50 MB each) or pick from the system fonts; weight, size, auto-weight, overall opacity, subtitle
+  style and background, upcoming-lyric blur and more are all adjustable.
 - **Cover colour theming** — theme, background and accent colours derive from the current track's
   cover art and change as the song changes.
-- **Desktop transparency overlay** — the round button panel at the bottom right of the fullscreen
-  page toggles **transparent playback page**: the window becomes genuinely transparent and leaves
-  only lyrics and effects composited over the desktop or other windows — ideal for streaming or OBS
-  overlays. The second row, **mouse passthrough**, lets you keep working while the lyrics stay on
-  screen, and **Ctrl+Alt+B** restores opacity at any time.
-- **Transparency shortcuts** — two re-bindable actions in SPW's shortcut manager, `Toggle transparent
-  playback page` (default **Ctrl+Alt+G**) and `Toggle transparent playback page + mouse passthrough`
-  (default **Ctrl+Alt+Shift+G**). They act immediately while the window is open; enable the action's
-  *global* switch to use it while the Folia window has focus.
-- **Entries and multi-monitor** — open / close from the mini player's **More → Folia** or by
-  right-clicking the tray icon; multi-monitor aware, **Alt + left-click** drags the window across
-  screens, and the summon shortcut is configurable. An optional cover-coloured open transition is
-  available (off by default).
-- **No network, no uploads** — there is no HTTP server and no external request; data only travels
-  between the plugin and its local helper process over stdin/stdout. Playback state, current track,
-  lyrics and cover art are read, never written.
+- **Transparent desktop overlay** — the round button panel at the bottom right of the fullscreen
+  page turns on **transparent playback page**: only lyrics and effects stay on top of the desktop or
+  other windows, which suits live streaming / OBS overlays. A second row, **mouse passthrough**,
+  appears with it so you can keep using the computer while the lyrics stay put. **Ctrl+Alt+B**
+  restores opacity at any time.
+- **Re-bindable shortcuts** — SPW's shortcut manager lists three actions: `Open / close Folia
+  lyrics` (default **Ctrl+Alt+F**), `Transparent playback page: on / off` (default **Ctrl+Alt+G**)
+  and `Transparent playback page + mouse passthrough: on / off` (default **Ctrl+Alt+Shift+G**).
+  Turn on the action's **global** switch to use it while the window has focus.
+- **Entries wherever you need them** — open / close from the mini player's **More → Folia** or by
+  right-clicking the tray icon after minimising; the window opens on the screen where the SPW
+  window is, and **Alt + left-click** drags it to another screen and fills it. An optional
+  cover-coloured fade-in on opening is available (off by default, see SPW's **Mod management →
+  Config**).
+- **Something to go on when it breaks** — SPW's **Mod management → Config → Support & feedback →
+  Something's wrong** (the life-buoy button at the top right of the playback page does the same)
+  checks .NET / WebView2 / plugin files / permissions / writable directories item by item and names
+  whichever is missing; when the environment is complete it opens a feedback page pre-filled with
+  environment info and logs, with the log file selected. See
+  [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md).
+- **No network, no uploads** — no network requests at runtime; data only travels between the plugin
+  and its local helper process. Only playback state and the current track / lyrics / cover art are
+  read; your music library is never written to.
 
 ## Screenshots
 
@@ -62,89 +67,92 @@ colour theming.
 </p>
 <p align="center">
   <img src="docs/images/transparent-background.jpg" width="49%" alt="Transparent playback page: lyrics composited onto the desktop">
-  <img src="docs/images/style-grid.png" width="49%" alt="All 15 lyric styles at a glance">
+  <img src="docs/images/style-grid.png" width="49%" alt="All lyric styles at a glance">
 </p>
-<div align="center"><sub>Fullscreen page · Folia settings · Transparent playback page · 15 lyric styles (style grid shot on v0.3.x, still missing Hanabi)</sub></div>
+<div align="center"><sub>Fullscreen page · Folia settings · Transparent playback page · Lyric styles (style grid shot on v0.3.x, still missing Hanabi)</sub></div>
 
 > Want the whole tour at once? The [**promo site**](https://azkbzxf.github.io/spw-folia/) has the
 > scrolling demo, every style at full size, and a
 > [48-second recorded walkthrough](https://azkbzxf.github.io/spw-folia/#film) — all footage rendered
 > by the plugin itself.
 
-## Usage
+## Install & usage
 
-1. Download `spw-folia-0.4.3.spmod` from [Releases](https://github.com/azkbzxf/spw-folia/releases);
-   you can also subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3825012802)
-   (the Steam build installs itself after subscribing).
-2. SPW → **Settings → Plugins / Workshop → Import plugin**, pick the file and enable it. Grant the
-   **class-transform** ("hook") permission when asked — the menu hook needs it; also grant
-   **key-bindings** ("shortcuts") for the transparency shortcuts (you can grant it later on the
-   plugin's permission page and restart SPW).
+1. Download the latest `.spmod` package from
+   [Releases](https://github.com/azkbzxf/spw-folia/releases); you can also subscribe on the
+   [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3825012802) (the Steam
+   build installs itself after subscribing).
+2. SPW → **Settings → Plugins / Workshop → Import plugin**, pick the downloaded `.spmod` and enable
+   it, then grant the three permissions listed under **Permissions** below when asked (a missed one
+   can also be granted later on the plugin's permission page, followed by an SPW restart).
 3. Restart SPW when the plugin manager asks.
 4. Play a song, open the mini player's **More** (…) menu → **Folia**.
 
-The first run opens the Folia settings window; afterwards the visualizer opens directly (⚙ opens
-settings, ESC closes settings first and then the window). Settings are stored in SPW's plugin data
-directory.
-
-To float the lyrics over the desktop: the round button panel at the bottom right of the fullscreen
-page → turn on **transparent playback page**; turn on **mouse passthrough** as well when you want to
-keep using the computer, and press **Ctrl+Alt+B** to restore opacity. Both toggles can be bound to
-your own keys in SPW's shortcut manager (defaults **Ctrl+Alt+G** / **Ctrl+Alt+Shift+G**).
-
 <p align="center"><img src="docs/images/menu-folia.png" width="240" alt="The Folia entry in SPW's More menu"></p>
+
+**Inside the playback page**: ⚙ at the top right or **F1** opens / closes settings; **ESC** closes
+settings first and then the window. Settings are stored in SPW's plugin data directory.
+
+**To float the lyrics over the desktop**: the round button panel at the bottom right of the
+fullscreen page → turn on **transparent playback page**; turn on **mouse passthrough** as well when
+you want to keep using the computer. **Ctrl+Alt+B** restores opacity, and both toggles can be bound
+to your own keys (see Features).
 
 ## Compatibility
 
-**Requires**: Windows 10/11 x64 · **Salt Player for Windows 1.19.0 or newer** (1.19.0 and 1.19.2 are
-accepted) · WebView2 Runtime (bundled on Windows 11; install "Microsoft Edge WebView2 Runtime" on
-Windows 10) · .NET Framework 4.8 (bundled since Windows 10 1903). The full dependency matrix and crash
-troubleshooting live in [docs/runtime-requirements.md](docs/runtime-requirements.md).
+**Requires**: Windows 10/11 x64 · **Salt Player for Windows 1.19.0 or newer** (confirmed on 1.19.0,
+1.19.2 and 1.19.3) · WebView2 Runtime (bundled on Windows 11; install "Microsoft Edge WebView2
+Runtime" on Windows 10) · .NET Framework 4.8 (bundled since Windows 10 1903). The full dependency
+matrix and crash troubleshooting live in [docs/runtime-requirements.md](docs/runtime-requirements.md).
 
-**Permissions**: enabling the plugin asks for **class-transform** (menu hook) and **key-bindings**
-(transparency shortcuts); if you miss one, grant it on the plugin's permission page and restart SPW.
+**Permissions**:
+
+| Permission | Purpose | Without it |
+| --- | --- | --- |
+| `class-transform` | Insert the Folia entry into the **More** menu | No Folia in the menu |
+| `library-read` | Read the current track's cover art and lyrics | Nothing to render or colour from |
+| `key-bindings` | Register the summon and transparency shortcuts | Everything else works, just no shortcuts |
 
 ### Known limitations
 
-- **No smart-beat beat effects** — Folia's OBS interface does not expose beat events, and the beat
-  model (~133 MB) lives in Folia's Electron main process, not in its web bundle. With smart beat off
-  (Folia's default) every style renders exactly as it does in Folia. All inert settings controls have
-  been removed; the list of what remains is in
+- **No "smart beat" beat effects** — beat detection runs in Folia's desktop main process, while the
+  plugin uses its browser-side rendering part and therefore gets no beat events. Effects that depend
+  on beats (push-in on the beat, ripples, the Pendolo drum head, Hanabi blooming on the beat, etc.)
+  do not trigger; a style's own animation is unaffected. All controls that would have no effect have
+  been removed from the settings page — for what remains see
   [docs/known-inert-settings.md](docs/known-inert-settings.md).
-- **Windows only** — the helper depends on WebView2 and Windows WASAPI.
-- **Follows SPW patch releases** — the menu hook resolves the host class names at runtime (built-in
-  profiles for known builds, a structural scan of the host jar plus a per-version cache for unknown
-  ones), so 1.19.x patch releases work without a plugin update; anything below 1.19.0 is refused
-  explicitly and logged (see [docs/hook-target.md](docs/hook-target.md)).
-- Read-only with respect to your library: playback state, current track, lyrics and cover art are
-  read, never written.
+- **Windows only** — the helper process depends on WebView2 and the Windows audio interfaces.
+- **Transparency is colour keying, not an alpha channel** — what shows through is the desktop or
+  other windows, so it is not suitable as a transparent source for OBS (for an OBS scene, use
+  Folia's browser source or window capture directly). The Monet style and light-theme Lumiere
+  contain large areas that cannot be keyed out, so turning one of them on turns transparency off
+  automatically.
+- **The window follows SPW** — the fullscreen window opens on the screen where the SPW window is;
+  use **Alt + left-click** to drag it to another screen and fill that one.
+- **It follows SPW versions** — the host class names for the menu hook are resolved at runtime:
+  known versions hit directly, unknown ones are cached after scanning the structure of the host jar,
+  so a renamed SPW build usually does not need a plugin update — but if the host restructures the
+  flyout itself, a re-adapter is still needed. Anything below `1.19.0` is explicitly refused and
+  logged (see [docs/hook-target.md](docs/hook-target.md)).
+- Only playback state and the current track / lyrics / cover art are read; your music library is
+  never written to.
 
 ## Versions
 
-Currently **v0.4.3**. The `.spmod` and its SHA-256 checksum for every release are on
-[GitHub Releases](https://github.com/azkbzxf/spw-folia/releases); per-version notes and acceptance
-evidence are archived in [docs/archive/](docs/archive/) rather than repeated here.
-
-The v0.3.1 artifact was accepted end to end on Windows 11 against a real SPW 1.19.0 **and 1.19.2**:
-menu entry → fullscreen rendering, 0 page errors, 0 external network requests, a 16-minute soak,
-persisted settings and no orphaned helper processes. v0.4.0 brings the style count to **15** (with
-Hanabi) plus the random style pool, custom fonts and the tray entry. v0.4.1 turns the settings-page
-preview into a frame-accurate mirror of the player page (real song/lyrics/background/transparency
-plus the real playback clock) and removes the “preview text” option. v0.4.2 fixes three known
-issues: word-by-word lyrics now use SPW's real per-cell timeline, 凝彩 (tempera) no longer covers the
-whole screen in a transparent window, and a 「出现问题」 environment self-check with one-click
-feedback was added (see [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md)).
+Currently **v0.4.6**. The install package, SHA-256 checksum and release notes for every version are
+on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases).
 
 ## Build from source
 
 Toolchain: JDK 25, Gradle 9.8 (wrapper included), Kotlin 2.4.20, Node 24 + pnpm (settings UI), and
 the Windows-bundled `csc.exe` (.NET Framework 4.8) for the native helper. No .NET SDK and no Android
-SDK required.
+SDK required. Packaging also needs the browser-side build of upstream Folia 0.7.22 under
+`poc/webview/dist/dist`.
 
 ```bat
 :: 1) Plugin (Kotlin, via the official SPW workshop Gradle plugin)
 cd spw-folia
-gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.1.spmod
+gradlew.bat plugin          :: -> build/libs/plugin-dev.spw.folia-0.4.6.spmod
 
 :: 2) Native helper (C# + WebView2)
 cd ..\poc\webview\host
@@ -157,8 +165,8 @@ pnpm install && pnpm build  :: -> dist/settings-ui.js
 :: 4) Assemble the distributable .spmod (plugin classes + staged web bundle + native process + licenses)
 bash packaging/build-package.sh     :: stages packaging/{web,native,licenses} + SHA256SUMS
 python packaging/tools/assemble-release.py ^
-    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.1.spmod ^
-    --staging packaging --out dist/release --name spw-folia-0.4.3.spmod
+    --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.6.spmod ^
+    --staging packaging --out dist/release --name spw-folia-0.4.6.spmod
 ```
 
 The full pipeline, payload inventory, size budget and release checklist are in
@@ -170,7 +178,7 @@ The full pipeline, payload inventory, size budget and release checklist are in
 [Audio & timeline](docs/audio-timeline.md) · [Settings UI](docs/settings-ui-impl.md) ·
 [Transparency mechanism](docs/live-transparency.md) · [Folia spec](docs/folia-spec/) ·
 [Packaging & release](docs/release.md) · [Runtime requirements](docs/runtime-requirements.md) ·
-[Licensing](docs/licensing.md)
+[Logging & diagnostics](docs/logging-and-diagnostics.md) · [Licensing](docs/licensing.md)
 
 ## Links & feedback
 
@@ -186,7 +194,7 @@ The full pipeline, payload inventory, size budget and release checklist are in
 
 - [Folia](https://github.com/chthollyphile/folia-major) by chthollyphile (AGPL-3.0) — the whole
   visualizer, settings UI and web bundle come from Folia's work (v0.7.22).
-- The Salt Player for Windows workshop plugin API, by Moriafly.
+- The [Salt Player for Windows](https://saltplayer.com/) workshop plugin API, by Moriafly.
 - [spw-island (Dynamic Lyrics Island for SPW)](https://github.com/gaboron/spw-island) — used as a
   behavioural reference only (GPL-3.0); no code was copied.
 - Microsoft Edge WebView2 SDK, .NET Framework, Kotlin/Compose, React/Vite.

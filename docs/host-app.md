@@ -1,449 +1,351 @@
-# spw-folia-host — native fullscreen host (protocol v1 implementation)
+# spw-folia-host — 原生全屏宿主（protocol v1 实现）
 
-`spw-folia-host.exe` is the native helper that the `spw-folia` Kotlin plugin spawns when the user
-opens Folia mode. It owns a borderless fullscreen window, hosts Folia's production OBS visualizer
-bundle in WebView2, forwards the plugin's protocol-v1 JSON lines into the page (via an injected
-shim), captures WASAPI loopback audio and pushes it to the page, and reports lifecycle/errors back
-to the plugin on stdout. It contains **no music/business logic** — the plugin is the single source
-of truth. Contract: `docs/protocol.md`. Spike/decision background: `docs/archive/webview-spike.md`.
+`spw-folia-host.exe` 是 `spw-folia` Kotlin 插件在用户打开 Folia 模式时 spawn 的原生辅助进程。
+它持有一个无边框全屏窗口，在 WebView2 里承载 Folia 的生产 OBS 视觉器 bundle，把插件的协议 v1
+JSON 行经由注入的 shim 转发进页面，采集 WASAPI 环回音频并推给页面，再把生命周期与错误回报给插件。
+它**不含任何音乐/业务逻辑**——插件是唯一真源。契约见 [`protocol.md`](protocol.md)。
 
-Source: `poc/webview/host/` — `Program.cs` (CLI, JSON helpers, stdout writer, main),
-`HostForm.cs` (window, WebView2, timer tick, stdin loop, screenshots), `AudioProvider.cs`
-(synthetic / stdin / WASAPI-loopback seam), `Shim.js` (injected, EventSource bridge +
-`window.__SPW_FOLIA__`), `Overlay.js` (injected placeholder HUD), `build.sh`, `driver.mjs`
-(protocol-v1 test driver), `app.manifest`. Audio: `poc/audio/native/*.cs` (MIT, task-4) is copied
-to `poc/webview/host/audio/` and compiled in.
+源码：`poc/webview/host/` — `Program.cs`（CLI、JSON 辅助、stdout 写出、main）、
+`HostForm.cs`（窗口、WebView2、定时器 tick、stdin 循环、截图）、`AudioProvider.cs`
+（synthetic / stdin / WASAPI 环回的接缝）、`Shim.js`（注入：EventSource 桥 + `window.__SPW_FOLIA__`）、
+`Overlay.js`（注入的占位 HUD）、`PreviewShim.js`（设置页预览 iframe 用）、`IntroCurtain.cs`
+（v0.4.0 开屏转场）、`MonitorSupport.cs` / `DpiSupport.cs`（多显示器与 DPI）、`build.sh`、
+`driver.mjs`（协议 v1 测试驱动）、`app.manifest`。音频实现来自 `poc/audio/native/*.cs`
+（本项目原创，MIT），构建时拷到 `poc/webview/host/audio/` 一起编译。
 
 ---
 
-## 1. Build
+## 1. 构建
 
-No .NET SDK, no MSBuild: the C# 5 in-box compiler is enough (Windows 11 has it).
+不需要 .NET SDK，也不需要 MSBuild：Windows 自带的 C# 5 编译器（in-box `csc.exe`）就够。
 
 ```bash
 cd poc/webview/host
 bash build.sh
 ```
 
-`build.sh` does:
+`build.sh` 做这些事：
 
-1. `csc.exe` = `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` (v4.0.319, C# 5 language
-   level; no interpolation/`?.`/expression bodies — async/await is fine).
-2. `export MSYS2_ARG_CONV_EXCL='*'` and convert every path with `cygpath -w` (MSYS otherwise
-   mangles `/out:` into a POSIX path — `error CS2001`).
-3. Regenerate `DefaultConfig.json` from `poc/webview/shared/demoData.mjs` (embedded demo config).
-4. Compile: `-target:exe -platform:x64 -optimize+ -define:LOOPBACK`, embed
-   `Shim.js`/`Overlay.js`/`DefaultConfig.json` as resources, reference
+1. `csc.exe` = `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`（v4.0.319，C# 5 语言级别；
+   没有字符串插值 / `?.` / 表达式体——async/await 可用）。
+2. `export MSYS2_ARG_CONV_EXCL='*'` 并把每个路径过 `cygpath -w`（否则 MSYS 会把 `/out:` 当
+   POSIX 路径处理，报 `error CS2001`）。
+3. 从 `poc/webview/shared/demoData.mjs` 重新生成 `DefaultConfig.json`（内嵌的演示配置）。
+4. 编译：`-target:exe -platform:x64 -optimize+ -define:LOOPBACK -win32manifest:app.manifest`，
+   把 `Shim.js`/`Overlay.js`/`DefaultConfig.json` 作为资源嵌入，引用
    `System.dll System.Core.dll System.Windows.Forms.dll System.Drawing.dll
-   System.Web.Extensions.dll` (JavaScriptSerializer = the JSON parser) and the WebView2 SDK dlls
-   from `poc/webview/tools/sdk/`; sources = `Program.cs HostForm.cs AudioProvider.cs
-   DpiSupport.cs audio/{AudioInterop,SpectrumAnalyzer,FoliaAudioMapper,SharedAudioRing,LoopbackAnalyzer}.cs`.
-5. Write `build/spw-folia-host.exe.config` (`supportedRuntime v4.8`, PerMonitorV2 DPI awareness,
-   `EnableWindowsFormsHighDpiAutoResizing`) and copy `Microsoft.Web.WebView2.Core.dll`,
-   `Microsoft.Web.WebView2.WinForms.dll`, `WebView2Loader.dll` next to the exe.
+   System.Web.Extensions.dll`（JavaScriptSerializer 就是 JSON 解析器）以及
+   `poc/webview/tools/sdk/` 里的 WebView2 SDK dll；源码 = `Program.cs DpiSupport.cs MonitorSupport.cs
+   HostForm.cs IntroCurtain.cs AudioProvider.cs
+   audio/{AudioInterop,SpectrumAnalyzer,FoliaAudioMapper,SharedAudioRing,LoopbackAnalyzer}.cs`。
+5. 写出 `build/spw-folia-host.exe.config`（`supportedRuntime v4.8`、PerMonitorV2 DPI 感知、
+   `EnableWindowsFormsHighDpiAutoResizing`），并把 `Microsoft.Web.WebView2.Core.dll`、
+   `Microsoft.Web.WebView2.WinForms.dll`、`WebView2Loader.dll` 拷到 exe 旁边。
 
-Output: `build/spw-folia-host.exe` **114,176 B** + config 406 B + WebView2 dlls 931,872 B
-(Core 698,208 / WinForms 38,752 / Loader 194,912) ≈ **1.04 MB** unpacked. Rebuild time ≈ 1 s.
+产物：`build/spw-folia-host.exe` + `.config` + 3 个 WebView2 dll，合计约 **1.04 MB** 解压后
+（Core 约 700 KB / WinForms 约 39 KB / Loader 约 195 KB）。重建约 1 s。
 
-WebView2 SDK dlls: download `https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2`,
-extract `lib/net462/Microsoft.Web.WebView2.{Core,WinForms}.dll` and
-`runtimes/win-x64/native/WebView2Loader.dll` into `poc/webview/tools/sdk/`.
+WebView2 SDK dll 的获取：从 NuGet 包 `Microsoft.Web.WebView2` 里取
+`lib/net462/Microsoft.Web.WebView2.{Core,WinForms}.dll` 与
+`runtimes/win-x64/native/WebView2Loader.dll`，放进 `poc/webview/tools/sdk/`
+（`packaging/build-package.sh` 用的 nupkg 在 `poc/webview/tools/webview2.nupkg`）。
 
 ---
 
-## 2. CLI reference
+## 2. CLI 参考
 
 ```
 spw-folia-host.exe [options]
 ```
 
-| option | default | meaning |
+| 选项 | 默认 | 含义 |
 | --- | --- | --- |
-| `--bundle <dir>` | – | production bundle dir (contains `index.html`); served at `https://spw-folia.local/`. Required unless `--dev-url`/`--url` is given. |
-| `--dev-url <url>` | – | dev server URL (protocol §7), e.g. `http://127.0.0.1:18080/?obs=1&token=dev`; no virtual host mapping. |
-| `--url <url>` | derived | explicit load URL override (debug; normally derived from bundle + `?obs=1&token=…`). |
-| `--fullscreen` | **on** | borderless fullscreen on primary screen, topmost (protocol default). |
-| `--window <w>x<h>` | 1280×720 | windowed mode (`--window 1600x900`, also `1600,900`). |
-| `--windowed [w,h]` | – | flag form of windowed mode, optional size. |
-| `--width`, `--height` | 1280, 720 | windowed size components. |
-| `--no-topmost` | topmost on | clears always-on-top. |
-| `--user-data <dir>` / `--user-data-dir <dir>` | `%LOCALAPPDATA%\spw-folia\webview` | WebView2 profile dir. |
-| `--fps-log [path]` | no file | append page FPS samples (`atMs,fps,heapMB,canvases,dpr,w,h`) to a file (path optional, also forwarded). |
-| `--screenshot <png>` `--shot-at <ms>` | – / 5000 | capture page content once at N ms after start (PNG via `CapturePreviewAsync`). |
-| `--duration <ms>` | 0 = run until close | auto-close after N ms (diagnostics). |
-| `--devtools` | off | WebView2 devtools enabled. |
-| `--title <text>` | `spw-folia-host` | window title. |
-| `--no-esc` | ESC closes | disable ESC-to-close (kiosk tests). |
-| `--keep-alive` / `--exit-on-stdin-close` | exit on stdin EOF | controls whether stdin EOF closes the helper (`--keep-alive` keeps it alive). |
-| `--demo` / `--no-demo` | off | embed the synthetic demo config + auto-patch stdin lyrics/track into Folia shape (standalone runs). |
+| `--bundle <dir>` | – | 生产 bundle 目录（含 `index.html`），以 `https://spw-folia.local/` 提供。除非给了 `--dev-url`/`--url`，否则必需。 |
+| `--dev-url <url>` | – | 开发服务器 URL（protocol §7），例如 `http://127.0.0.1:18080/?obs=1&token=dev`；不做虚拟主机映射。 |
+| `--url <url>` | 派生 | 显式加载 URL 覆盖（调试；正常由 bundle + `?obs=1&token=…` 派生）。 |
+| `--fullscreen` | **开** | 无边框全屏、置顶（协议默认）。开在 SPW 窗口所在的那块屏幕上。 |
+| `--window <w>x<h>` | 1280×720 | 窗口化模式（`--window 1600x900`，也接受 `1600,900`）。 |
+| `--windowed [w,h]` | – | 窗口化模式的 flag 形式，尺寸可选。 |
+| `--width`, `--height` | 1280, 720 | 窗口尺寸分量。 |
+| `--no-topmost` | 置顶开 | 取消总是置顶。 |
+| `--user-data <dir>` / `--user-data-dir <dir>` | `%LOCALAPPDATA%\spw-folia\webview` | WebView2 配置目录。 |
+| `--fps-log [path]` | 无文件 | 追加页面 FPS 采样（`atMs,fps,heapMB,canvases,dpr,w,h`）。 |
+| `--screenshot <png>` `--shot-at <ms>` | – / 5000 | 在启动后 N ms 抓一次页面内容（PNG，`CapturePreviewAsync`）。 |
+| `--duration <ms>` | 0 = 跑到关窗 | N ms 后自动关闭（诊断）。 |
+| `--devtools` | 关 | 启用 WebView2 devtools。 |
+| `--title <text>` | `spw-folia-host` | 窗口标题。 |
+| `--no-esc` | ESC 可关 | 禁用 ESC 关窗（kiosk 测试）。 |
+| `--keep-alive` / `--exit-on-stdin-close` | stdin EOF 就退出 | `--keep-alive` 让辅助进程在 stdin EOF 后继续活着。 |
+| `--demo` / `--no-demo` | 关 | 内嵌合成演示配置，并自动把 stdin 的 lyrics/track 补成 Folia 形状（独立运行用）。 |
+| `--mode <name>` | 来自配置 | 强制内嵌演示配置里的 `visualizerMode`。 |
+| `--dev-settings <json-or-path>` | – | 初始设置树：内联 JSON 或 `.json` 文件路径；启动时喂给设置 UI。 |
+| `--assets <dir>` | – | 额外的静态目录，映射到 `https://spw-folia-assets.local/`。 |
+| `--no-overlay` | 注入 overlay | 跳过占位 HUD 脚本（自动化测试）。 |
+| `--settings-dir <dir>` | 自动探测 | 设置 UI 产物目录 → 映射到 `https://spw-folia-settings.local/`，其入口 module script 在 `Shim.js` **之后**注入。不给时若 `<bundle>/settings/settings-ui.js` 存在则自动采用。 |
+| `--settings-entry <file>` | `settings-ui.js` | `--settings-dir` 里的入口文件名。 |
+| `--no-transparency` | 关 | 即使持久化设置要求透明背景也强制不透明窗口（诊断 / 回归）。 |
+| `--force-dsf <n>` | 跟随 Windows | 给 WebView2 传 `--force-device-scale-factor=n`（DSF=1 时 CSS px = 设备 px；**仅调试**）。 |
+| `--bundle-version <text>` | – | 回显在页面的 `hello` 消息里，并作为设置岛注入 URL 的 cache-buster（`?v=`）。 |
+| `--exit-after-fps <n>` | 0 = 关 | 诊断：页面 FPS 采样 ≥ n 时关闭。 |
+| `--audio-log` | 关 | 每 ~2 s 打印一行 `{"t":"audio-stats",…}`（环回验证）。 |
+| `--no-curtain` | 开屏动画开 | 关闭开屏转场动画。 |
+| `--curtain-duration <s>` | 0.8（夹 0.3–2.0） | 开屏淡入时长。 |
+| `--curtain-palette <#hex,…>` | – | 开屏动画的封面派生配色。 |
+| `--verbose-log` | 关 | 额外诊断（环境报告、各级页面 console、逐窗口卡顿）。 |
+| `--log-file <path>` | – | 插件的宿主日志路径，会写进「出现问题」的环境报告。 |
+| `--open-settings` | 关 | 设置岛发出 `bridgeReady` 后自动展开一次设置面板（导航完成后 2.5 s 兜底定时器）。**插件不传这个参数**——真实用户首次运行不会自动弹设置；只有 `verify-layout.mjs` 这类验收脚本会传。 |
 
-Track messages carry the album cover as a base64 data URL (`coverDataUrl`). Since v0.1.2 the host
-forwards the same value to the page under **both** `coverDataUrl` and `coverUrl` (mirror), because the
-Folia settings island's theme derivation reads `coverUrl`. Without the mirror the derived theme silently
-stayed at the default palette — see `docs/archive/verification-v0.1.2.md`.
-| `--mode <name>` | from config | force `visualizerMode` in the embedded demo config. |
-| `--dev-settings <json-or-path>` | – | initial settings tree: inline JSON or a path to a `.json` file; used to feed the injected settings UI at startup. |
-| `--assets <dir>` | – | extra static dir mapped to `https://spw-folia-assets.local/`. |
-| `--no-overlay` | overlay injected | skip the placeholder HUD script (automated tests). |
-| `--settings-dir <dir>` | – | settings-UI dist dir → mapped to `https://spw-folia-settings.local/` and its entry module script injected **after** `Shim.js`. |
-| `--no-transparency` | off | force the opaque window even when the persisted settings ask for a transparent player page (diagnostics / regression runs). |
-| `--settings-entry <file>` | `settings-ui.js` | settings-UI entry filename inside `--settings-dir`. |
-| `--force-dsf <n>` | follow Windows | pass `--force-device-scale-factor=n` to WebView2 (CSS px = device px at 1; dev/DPI experiments). |
-| `--bundle-version <text>` | – | echoed in the page `hello` message. |
-| `--exit-after-fps <n>` | 0 = off | diagnostic: close once a page FPS sample ≥ n. |
-| `--audio-log` | off | print `{"t":"audio-stats",…}` every ~2 s (loopback verification). |
+Track 消息里的专辑封面是 base64 data URL（`coverDataUrl`）。宿主把同一个值以
+**`coverDataUrl` 与 `coverUrl` 双写**转发给页面，因为设置岛的主题派生读 `coverUrl`；
+没有这个镜像，派生主题会静默停在默认调色板。
 
-**Exit codes:** `0` normal close; `2` bad args / bundle dir missing or without `index.html`;
-`3` WebView2 Runtime not found (helper prints a `{"t":"log","level":"error","msg":"webview2-runtime…"}`
-line first — the plugin should show "install WebView2 Runtime" instead of a blank window);
-`1` other error (window/WebView2 init failure, unhandled exception). Last message on stdout is
-always `{"t":"closed","reason":"user"|"error"|"plugin"}` before exit.
+**退出码**：`0` 正常关闭；`2` 参数错误 / bundle 目录缺失或没有 `index.html`；
+`3` 找不到 WebView2 Runtime（辅助进程会先打一行
+`{"t":"log","level":"error","msg":"webview2-runtime…"}`，插件应当提示「安装 WebView2 Runtime」
+而不是给一个黑窗口）；`1` 其他错误（窗口/WebView2 初始化失败、未捕获异常）。
+stdout 上的最后一条消息永远是 `{"t":"closed","reason":"user"|"error"|"plugin"}` 之后才退出。
 
 ---
 
-## 3. Protocol-v1 behaviour (implementation notes per docs/protocol.md)
+## 3. 协议 v1 行为（逐项对应 [`protocol.md`](protocol.md)）
 
-### stdin → host (`t` field)
-`hello` (versions logged; optional `devUrl` navigates the page), `settings` (stored, forwarded to
-page as `{"type":"settings"}`; re-sent on page `ready`), `state` (anchor for clock interpolation,
-see below), `lyrics` (forwarded as `{"type":"lyrics"}`; `--demo` converts protocol lines to Folia
-`LyricData` shape before forwarding), `track` (forwarded as `{"type":"track"}`; `--demo` patches the
-demo config), `config` (replaces base config and is forwarded on next page-ready/patch),
-`audioMode` (`off`/`stdin`/`loopback` routing), `quit` (closes with reason `plugin`), and
-`command` (`close`, `screenshot {path}`, `settings`/`open-settings`/`close-settings` → page `ui`
-message, `eval {script}` debug).
-Robustness: UTF-8, CRLF tolerated, empty lines skipped, partial lines buffered by `StreamReader`;
-unparsable line → `log` line, helper keeps running. stdin EOF → 2 s timer → close reason `plugin`
-(so a dead plugin never leaves a zombie window); `--keep-alive` disables that.
+### stdin → 宿主（按 `t` 字段）
+`hello`（记录版本；可选 `devUrl` 会导航页面）、`settings`（存下并转发给页面为
+`{"type":"settings"}`；页面 `ready` 时重发）、`state`（时钟插值的锚点，见下）、
+`lyrics`（转发为 `{"type":"lyrics"}`；`--demo` 时先把协议行转成 Folia `LyricData` 形状）、
+`track`（转发为 `{"type":"track"}`；`--demo` 时补齐演示配置）、
+`config`（替换基础配置，并在下一次 page-ready/补丁时转发）、
+`audioMode`（`off`/`stdin`/`loopback` 路由）、`quit`（以 reason `plugin` 关闭）、
+以及 `command`（`close`、`screenshot {path}`、`settings`/`open-settings`/`close-settings` → 转成页面的
+`ui` 消息、`eval {script}` 调试）。
 
-### stdout → plugin (`t` field)
-`ready` `{protocol:1,pid,webviewVersion,bundle,startedAtMs}` as soon as the page navigation
-completes and the shim is installed; `closed` `{reason}`; `settings` `{settings}` (page pushed a
-settings change); `action` `{name:"reset"|"openDevTools"|"reload"}`; `log` `{level,msg}` for
-diagnostics (also `fps`, `screenshot`, `eval-result`, `audio-stats` diagnostic lines).
+健壮性：UTF-8、容忍 CRLF、跳过空行、半行由 `StreamReader` 缓冲；无法解析的行转成 `log` 行，
+辅助进程继续跑。stdin EOF → 2 s 定时器 → 以 reason `plugin` 关闭（插件已经死了也不会留下僵尸窗口）；
+`--keep-alive` 关掉这条。
+
+### stdout → 插件（按 `t` 字段）
+`ready` `{protocol:1,pid,webviewVersion,bundle,startedAtMs}`，在页面导航完成且 shim 装好后立刻发；
+`closed` `{reason}`；`settings` `{settings}`（页面推了设置改动）；`action`
+`{name:"reset"|"openDevTools"|"reload"}`；`log` `{level,msg}` 用于诊断
+（另有 `fps`、`screenshot`、`eval-result`、`audio-stats` 等诊断行）。
 
 ### host → page
-Timer at 15 ms (~64 Hz) posts `{"type":"state",posMs,durationMs,playing,rate,lyricOffsetMs,tsMs}`
-and `{"type":"audio",power,bass,lowMid,mid,vocal,treble,spectrum[…],tsMs}`. The injected shim turns
-them into the **real Folia SSE event shapes**: `state` → `clock`
+15 ms（约 64 Hz）的定时器发 `{"type":"state",posMs,durationMs,playing,rate,lyricOffsetMs,tsMs}`
+与 `{"type":"audio",power,bass,lowMid,mid,vocal,treble,spectrum[…],tsMs}`。注入的 shim 把它们
+变成 Folia 真实的 SSE 事件形状：`state` → `clock`
 `{currentTime:posMs/1000,duration,playerState:'PLAYING'|'PAUSED',sentAtMs:Date.now(),
-playbackRate:rate,lyricOffsetMs:offset/1000}` (throttled to 250 ms or on playing-change; the Folia
-page interpolates between samples itself); `audio` → `{audioPower,bands:{bass,lowMid,mid,vocal,
-treble},spectrum:Uint8Array(1024),sentAtMs}`. `config`/`lyrics`/`track` are dispatched as
-`config`/`lyrics`/`track` SSE events; unknown/debug messages are exposed through
-`window.__SPW_FOLIA__.on(...)` and the page→host `action`/`log`/`settings`/`beatDebug` channel is
-wired the same way.
-Paused/finished playback (or a silent/absent loopback frame) sends the protocol §5 breathing
-payload: `power` + all five bands = `(sin(now/2000)+1)*20`, `spectrum` empty — Folia's "breathing"
-idle look (verified in the loopback run).
-Clock anchoring: while a `state` message is fresh (≤ 500 ms) the host sends
-`anchorPosMs + (now - anchorAtTick) * rate`; if the plugin stops sending (stale state) the host
-free-runs the timeline so the window never freezes on a plugin hiccup.
+playbackRate:rate,lyricOffsetMs:offset/1000}`（节流 250 ms 或播放状态变化时立即发；Folia 页面自己
+在采样之间插值）；`audio` → `{audioPower,bands:{bass,lowMid,mid,vocal,treble},
+spectrum:Uint8Array(1024),sentAtMs}`。`config`/`lyrics`/`track` 被派发成同名 SSE 事件；
+未知/调试消息通过 `window.__SPW_FOLIA__.on(...)` 暴露，页面→宿主的
+`action`/`log`/`settings`/`beatDebug` 通道也用同样方式接好。
 
-### page → host (via `window.chrome.webview.postMessage`)
-`ready` (page-mounted → host re-sends `hello`/`settings`), `settings`, `action` (close/reset/
-openDevTools → forwarded to stdout and acted on), `log`, `fps` (rAF meter: fps/longFrames/heapMB/
-canvases/dpr/w/h), `key` (ESC handled host-side, F1 emits the `ui` toggle-settings action for the
-settings UI).
+暂停/播放结束（或环回帧静音/缺失）时发协议 §5 的呼吸载荷：
+`power` 与五个带全为 `(sin(now/2000)+1)*20`，`spectrum` 为空——Folia 的「呼吸」待机观感。
 
-### Cursor & settings-overlay UI state (v0.1.1)
+时钟锚定：`state` 还新鲜（≤ 500 ms）时宿主发 `anchorPosMs + (now - anchorAtTick) * rate`；
+插件停止推送（state 变陈旧）后宿主自由外推，窗口不会因插件打嗝而卡住。
 
-The fullscreen window does **not** hide the cursor permanently. A 15 ms tick in `HostForm.OnTick` tracks
-`Cursor.Position`; after 2.5 s without movement the host calls `Cursor.Hide()`, the next movement shows it
-again, and while the in-page 歌词样式 overlay is open the cursor is forced visible. Only state changes are
-logged (`cursor hide overlay=closed idleMs=…`, `cursor show …`) and the cursor is shown again when the
-window closes / the process exits.
+### page → host（经 `window.chrome.webview.postMessage`）
+`ready`（页面挂载完成 → 宿主重发 `hello`/`settings`）、`settings`、`action`（close/reset/
+openDevTools → 转发到 stdout 并执行）、`log`、`fps`（rAF 采样：fps/longFrames/heapMB/canvases/
+dpr/w/h）、`key`（ESC 由宿主处理，F1 发出 `ui` 的 toggle-settings 动作）、
+`bridgeReady`（设置岛初始化完成）。
 
-Overlay state comes from the page over the normal bridge: the settings UI reports every open/close via
-`chrome.webview.postMessage({"type":"ui","settingsOpen":bool})`; the Shim intercepts its own
-`settingsUI` special message so it is never re-dispatched locally (a v0.1.0 bug that echoed the state
-event and re-toggled the overlay hundreds of times per second). The same `settingsOpen` flag gives ESC its
-priority: F1/`command open-settings` opens the panel, ESC #1 closes the panel (window stays), ESC #2 closes
-the window (`closed{reason:user}`, exit 0).
+### 光标与设置覆盖层状态
 
-### Window/lifecycle
-Borderless `Form`, black background; fullscreen uses `Screen.PrimaryScreen.Bounds`, `TopMost`,
-`ShowInTaskbar=false`; ESC (host `ProcessCmdKey` or page keydown) and Alt+F4 close
-with reason `user`, exit 0. WebView2 configured with autoplay allowed and throttling/occlusion
-disabled (`--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling
+全屏窗口**不会**永久隐藏光标。`HostForm.OnTick` 里的 15 ms tick 跟踪 `Cursor.Position`；
+2.5 s 无移动就 `Cursor.Hide()`，下一次移动重新显示，设置覆盖层打开期间强制可见。
+只记录状态变化（`cursor hide overlay=closed idleMs=…`、`cursor show …`），关窗/进程退出时恢复显示。
+
+覆盖层状态经正常桥从页面过来：设置 UI 每次开/关都
+`chrome.webview.postMessage({"type":"ui","settingsOpen":bool})`；Shim 截获自己的
+`settingsUI` 特殊消息，因此不会被本地再派发一次。同一个 `settingsOpen` 标志决定 ESC 的优先级：
+F1 / `command open-settings` 打开面板，第 1 次 ESC 关面板（窗口还在），第 2 次 ESC 关窗口
+（`closed{reason:user}`，exit 0）。
+
+### 窗口 / 生命周期
+无边框 `Form`，黑底。全屏时的显示器选择：
+
+```csharp
+Screen monitor = userMoved
+    ? Screen.FromRectangle(Bounds)
+    : MonitorSupport.ScreenForProcess(DpiSupport.ParentProcessId());
+if (monitor == null) monitor = Screen.PrimaryScreen;
+```
+
+即窗口开在 **SPW 窗口所在的那块屏**（按父进程 PID 定位），**不是**系统主屏；用户用 Alt+左键拖过
+窗口之后（`userMoved`），后续的几何修正（DPI 变化、极小视口恢复）保持在拖到的屏幕上，不会拉回。
+请求到的全屏矩形如果不合常理地小（插件 spawn 时出现过的 8×6 视口），退回到该屏的工作区居中窗口，
+而不是显示一条细缝。
+
+`TopMost`、`ShowInTaskbar=false`；ESC（宿主的 `ProcessCmdKey` 或页面 keydown）与 Alt+F4 关闭，
+reason `user`，exit 0。WebView2 配置为允许自动播放、关闭节流与遮挡检测
+（`--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling
 --disable-renderer-backgrounding --disable-backgrounding-occluded-windows
---disable-features=CalculateNativeWinOcclusion`), context menus/status bar/swipe/zoom off.
+--disable-features=CalculateNativeWinOcclusion`），右键菜单/状态栏/滑动/缩放关闭。
 
-### Player-page transparency (v0.1.7)
+### 播放页透明背景
 
-`settings.transparentPlayerBackground` (toggled from the bottom-right sliders button of the injected chrome)
-turns the host window into a colour-key layered window: `BackColor` is set to `rgb(255,0,255)`, `TransparencyKey`
-to the same colour and `WebView2.DefaultBackgroundColor` to `Color.Transparent`; turning it off restores
-`BackColor=Black` / no key / opaque `DefaultBackgroundColor`. The flag is read from the settings JSON on three
-paths — constructor (`--dev-settings`), stdin `settings`, and the page's `{"type":"settings"}` — so the window
-follows the UI toggle immediately and plugins only have to persist the tree. Page side, the settings model emits
-`background.transparent`, which makes Folia skip its background renderer; the document background is already
-transparent in OBS mode.
+`settings.transparentPlayerBackground`（由注入 chrome 的右下角滑杆按钮切换）把宿主窗口变成色键
+分层窗口：`BackColor` 与 `TransparencyKey` 都设为 `rgb(255,0,255)`，`WebView2.DefaultBackgroundColor`
+设为 `Color.Transparent`；关掉时恢复 `BackColor=Black` / 无 key / 不透明 `DefaultBackgroundColor`。
+这个标志从三条路径读取——构造时（`--dev-settings`）、stdin 的 `settings`、页面的
+`{"type":"settings"}`——因此窗口立即跟随 UI 开关，插件只负责持久化整棵树。页面侧设置模型发出
+`background.transparent`，让 Folia 跳过背景渲染；OBS 模式下文档背景本来就是透明的。
 
-Two colour-key composition side effects are compensated: (1) a keyed window is fully click-through (verified with
-clicks on the gold ring hitting the window below), so a global hotkey escape is registered while transparency is
-active — **Ctrl+Alt+B**, falling back to Ctrl+Alt+Y / Ctrl+Alt+P / Ctrl+Alt+Shift+B — which turns transparency off
-and calls `window.__spwFoliaSetTransparent(false)` so the page switch and the persisted tree stay in sync;
-(2) `backdrop-filter` layers are not drawn by the keyed composition, so the chrome and its panel switch to a flat
-background via `data-flat='true'`. Logs: `transparency mode=on|off`, `transparency hotkey=registered|off|unregistered|failed`.
-Details and limitations: `docs/live-transparency.md`; evidence: `docs/archive/verification-v0.1.7.md`.
+色键合成的两个副作用都有补偿：(1) 带 key 的窗口完全点击穿透，所以透明生效期间注册一个全局热键
+—— **Ctrl+Alt+B**，失败时依次退到 Ctrl+Alt+Y / Ctrl+Alt+P / Ctrl+Alt+Shift+B —— 把透明关掉并调用
+`window.__spwFoliaSetTransparent(false)`，让页面开关与持久化的树保持同步；(2) `backdrop-filter`
+图层不会被色键合成绘制，因此 chrome 与其面板通过 `data-flat='true'` 切到纯色背景。
+日志：`transparency mode=on|off`、
+`transparency hotkey=registered|off|unregistered|failed`。细节与限制见
+[`live-transparency.md`](live-transparency.md)。
 
 ---
 
-## 4. How the Kotlin plugin spawns it
+## 4. Kotlin 插件如何 spawn 它
+
+打包布局：
 
 ```
 pluginDir/
-  lib/spw-folia.jar
-  web/…                     # Folia bundle subset (index.html + assets)
-  host/spw-folia-host.exe   # + 3 WebView2 dlls + exe.config
+  classes/…                 # 插件 jar
+  web/…                     # Folia bundle（index.html + assets + settings/）
+  native/spw-folia-host.exe # + exe.config + 3 个 WebView2 dll
 ```
 
-```kotlin
-class FoliaHostProcess(private val pluginDir: File, private val onMessage: (JsonObject) -> Unit) {
-    private var proc: Process? = null
-    private var writer: BufferedWriter? = null
+实际的 spawn 命令行（工作目录 = 插件目录，传的全是绝对路径；`cwd` 只是兜底）：
 
-    fun start(fullscreen: Boolean = true, bundleVersion: String? = null): Boolean {
-        if (proc?.isAlive == true) return true                    // singleton per plugin
-        val exe = File(pluginDir, "host/spw-folia-host.exe")
-        val web = File(pluginDir, "web")
-        require(exe.isFile && File(web, "index.html").isFile)     // fail fast with a user message
-        val pb = ProcessBuilder(exe.absolutePath, "--bundle", web.absolutePath,
-                if (fullscreen) "--fullscreen" else "--window", "1600x900")
-        pb.directory(pluginDir)
-        pb.redirectErrorStream(false)                             // stderr = host diagnostics only
-        val p = pb.start()
-        proc = p
-        writer = p.outputStream.bufferedWriter(Charsets.UTF_8)
-        Thread {                                         // stdout reader: one JSON object per line
-            p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line ->
-                runCatching { json.parseToJsonElement(line).jsonObject }.onSuccess(onMessage)
-            }
-            // EOF == helper exited; clear state, allow reopen
-        }.apply { isDaemon = true }.start()
-        Thread { p.errorStream.bufferedReader().forEachLine { /* log */ } }.apply { isDaemon = true }.start()
-        send(mapOf("t" to "hello", "protocol" to 1, "pluginVersion" to VERSION,
-                   "spwVersion" to SpwVersion.VERSION, "bundleVersion" to bundleVersion))
-        return true
-    }
-
-    fun send(obj: Map<String, Any?>) {              // one JSON line, newline-terminated
-        writer?.let { it.write(json.encodeToString(obj)); it.newLine(); it.flush() }
-    }
-    fun stop() { send(mapOf("t" to "quit")); proc?.let { if (!it.waitFor(2, TimeUnit.SECONDS)) it.destroyForcibly() } }
-}
+```text
+native\spw-folia-host.exe --bundle <web 绝对路径> --fullscreen --bundle-version <插件版本>
+    [--no-curtain | --curtain-palette #RRGGBB,…]
+    [--settings-dir <dir> --settings-entry settings-ui.js]      # 仅当设置岛不在 <bundle>/settings/
+    --log-file <插件目录>\spw-folia-host.stdout.log
+    [--verbose-log]
 ```
 
-Sending cadence: `hello` → `settings` → (on `ready`) `lyrics` + `track` + `config`, then `state`
-every 100 ms (protocol §6). Stop sending `state` on `closed`; update `config` at ≤ 10 Hz when the
-user changes settings. Never send `state` before `ready` (the helper tolerates it, but the page is
-not listening yet).
+要点：
+
+- `resolveHelper()` 依次找 `host/`、`host/x64/`、`lib/`、`lib/x64/`、`native/`、`native/x64/`
+  （外加开发检出的兜底），所以 `native/` 与 `lib/` 两种发布布局都能启动。
+- `resolveSettingsDir()` 在 `<bundle>/settings/settings-ui.js` 存在时返回 null，**不传**
+  `--settings-dir`——辅助进程会自己探测。
+- 三个 flag 由 SPW 配置页驱动：`--no-curtain`/`--curtain-palette`（开屏动画）、
+  `--verbose-log`（详细日志）。
+- `--log-file` 指到插件目录下的 `spw-folia-host.stdout.log`，插件把宿主 stdout 也镜像进去，
+  「出现问题」报告会引用这个路径。
+
+发送节奏：`hello` → `settings` →（收到 `ready` 后）`lyrics` + `track` + `config`，之后每 100 ms
+一条 `state`。收到 `closed` 后停止发 `state`；用户改设置时按 ≤10 Hz 更新 `config`。
+不要在 `ready` 之前发 `state`（辅助进程能容忍，但页面还没在听）。
 
 ---
 
-## 5. Measured results (this machine: Win11, 3200×2000 @ 180 %, WebView2 150.0.4078.83)
+## 5. 已知限制
 
-| metric | windowed 1600×900 | fullscreen 3200×2000 |
-| --- | --- | --- |
-| `ready` (spawn → nav complete + shim) | 523–597 ms (`nav-done` 569–597 ms, WebView2 ready ~452 ms) | 523 ms |
-| page FPS median | 118 | 119.2 |
-| FPS min (first meter sample, includes first-frame hitch) | 38.8 | 51.8 |
-| FPS max | 120 | 120 |
-| JS heap max | 44.3 MB | 35 MB |
-| canvases | 3 | 3 |
-| CSS viewport / dpr seen by page | 888×500 @ dpr 1 (window 1600×900, raster scale 1.8) | 1776×1110 @ dpr 1 |
-
-15-style cycle inside the host window (`--modes …`): all 15 screenshotted, median 114 fps, heap
-≤ 59.2 MB. WASAPI loopback run: 1024-bin spectrum delivered each ~16 ms tick (e.g.
-`power=30.187 bass=160.253 lowMid=11.19`), `silent=true` path after the tone stopped, capture
-latency mean 2.7–3.4 ms / p95 6.9–7.9 ms, CPU 0.97 % of one core (audio-probe `--perf`). Startup
-cost is dominated by WebView2 bring-up (~0.5 s), not our code.
-
-Known limitations: beat FX not available (see `docs/archive/webview-spike.md` §6); loopback is
-post-volume so lowering the system volume lowers visual reactivity (expected Folia behaviour);
-AGC off by default; multi-monitor selection not implemented (primary only); player-page transparency is a
-colour-key layered window (v0.1.7, `docs/live-transparency.md`), therefore mouse input passes through and
-`backdrop-filter` is dropped while it is on; one WebView2 profile per user data dir;
-the page must be 100 % offline (no external network requests — verified).
+- **节拍特效不可用** —— 节拍检测模型不在 webview 里，宿主也不发节拍事件。
+- 环回是 **post-volume** 采样：调低系统音量会降低视觉反应强度（这是 Folia 的预期行为）。
+- AGC 默认关闭。
+- 播放页透明是色键分层窗口，因此**鼠标输入会穿透**，且透明期间 `backdrop-filter` 被丢弃。
+- 多显示器：窗口开在 SPW 窗口所在的屏幕上，可用 Alt+左键拖到别的屏幕；没有显示器选择器。
+- 一个 user data 目录一个 WebView2 配置。
+- 页面必须 100% 离线（已验证无外部网络请求）。
 
 ---
 
-## 6. Standalone demo (what the plugin will do, without the plugin)
+## 6. 独立运行与测试驱动
 
 ```bash
-# build
+# 构建
 cd poc/webview/host && bash build.sh
 
-# end-to-end protocol v1: spawns the host, sends hello/settings/lyrics/track, streams 100 ms
-# state + 60 Hz audio, screenshots at different clock positions, simulates ESC, writes report
-cd poc/webview/host && node driver.mjs --window 1600x900
-cd poc/webview/host && node driver.mjs --fullscreen --out out/fullscreen
+# 协议 v1 端到端：spawn 宿主、发 hello/settings/lyrics/track、按 100 ms 流式发 state
+# + 60 Hz audio、在不同时钟位置截图、模拟 ESC、写报告
+node driver.mjs --window 1600x900
+node driver.mjs --fullscreen --out out/fullscreen
 
-# all 15 styles cycling through the live config channel inside the host window
-cd poc/webview/host && node driver.mjs --window 1280x720 --out out/host-styles-run \
+# 15 种样式在宿主窗口里轮播（走实时 config 通道）
+node driver.mjs --window 1280x720 --out out/host-styles-run \
   --modes sonnet,tempera,lumiere,diorama,pendolo,monet,fume,cappella,partita,claddagh,cadenza,tilt,still,window,classic
 
-# dev-server variant (protocol §7), documented for plugin dev builds
+# 开发服务器变体（protocol §7），插件开发构建用
 cd poc/webview/server && node server.mjs 18080 &
 ./build/spw-folia-host.exe --dev-url "http://127.0.0.1:18080/?obs=1&token=dev" --window 1600x900 --demo
 ```
 
-Reports/artifacts: `out/driver-report.json` (ready/closed/exit/fps/screenshots/stderr/stdout),
-`out/smoke/driver-report.json`, `out/fullscreen/`, `out/host-styles-run/` (15 host screenshots),
-`out/loopback-test.jsonl` (`--audio-log` trace). Acceptance run: `ready` + 696 `state` messages
-consumed + 3 screenshots at different `posMs` + ESC → `closed{reason:user}` + exit 0 + empty stderr.
+产物：`out/driver-report.json`（ready/closed/exit/fps/screenshots/stderr/stdout）、
+`out/smoke/driver-report.json`、`out/fullscreen/`、`out/host-styles-run/`（15 张宿主截图）、
+`out/loopback-test.jsonl`（`--audio-log` 轨迹）。
 
-Dev-server acceptance (`--dev-url`, note: a standalone run needs `--demo` or a config push, exactly
-like the plugin will send one; without it the page correctly shows its "等待 Folia 播放" idle state):
-
-```bash
-cd poc/webview/server && node server.mjs 18080 &            # dev-only SSE server (production: none)
-cd poc/webview/host && ./build/spw-folia-host.exe \
-  --dev-url "http://127.0.0.1:18080/?obs=1&token=dev" --window 800x450 --demo \
-  --duration 7000 --screenshot out/devurl-shot2.png --shot-at 5000
-```
-
-Result (verified): `nav-done success=True atMs=534`, `page-ready`, `ready{protocol:1,…}`,
-screenshot 229,341 B showing the rendered sonnet scene with track title/artist and lyric glyphs,
-`closed{reason:plugin}`, exit 0. Artifact: `poc/webview/host/out/devurl-shot2.png`.
+注意：独立运行需要 `--demo` 或一次 config 推送（插件本来就会推）。没有配置时页面正确地显示
+「等待 Folia 播放」的待机态，这不是 bug。
 
 ---
 
-## 7. Open items / handoffs
+## 7. 踩过的坑（维护者需要知道的）
 
-- **Settings UI injection**: implemented host-side (`--settings-dir`/`--settings-entry`, virtual host
-  `https://spw-folia-settings.local/`, module script after `Shim.js`; `F1`/`command settings` →
-  page `ui` action). Waiting on the task-5 bundle (`poc/settings-ui/dist`) and its open/close
-  contract; host needs only the entry filename.
-- **Config publisher**: production `ObsBrowserSourceConfig` is built **page-side** by the injected
-  settings UI (`window.__SPW_FOLIA__.pushConfig(config)`) per protocol §4; the host only forwards
-  `config`/`settings` and `--demo` exists solely for standalone runs.
-- **Audio calibration**: expose a sensitivity/AGC setting if users report under-reactive visuals on
-  quiet output devices (audio-probe owns measured calibration).
-- **Multi-monitor**: add `--monitor <index>` or a settings-driven picker; still primary-only.
-- **Packaging**: helper + dlls + `web/` go into the `.spmod` (layout in `docs/archive/webview-spike.md` §7);
-  keep `LICENSE`/`NOTICE` alongside per `docs/licensing.md`.
+### 7.1 被 GUI 父进程 spawn 时的几何塌缩
 
----
+插件 JVM 以 `javaw.exe`（无 console）启动时，第一次集成的页面 CSS 视口是 **8×6**：窗口被 spawner
+的 `STARTUPINFO` 建成隐藏/零尺寸（或 WebView2 初始化期间窗口一直没有明确几何），WebView2 于是把
+合成器尺寸设成 8×6 的客户区，Folia 舞台被排进邮票大小的框里。同一个 exe 从 console
+（`java.exe` 或手动）启动则正常——所以这是 spawn 上下文的问题，不是渲染问题。
+失败是静默的：宿主照常打 `ready` 和 FPS，页面也画出 3 个 canvas，只有几何是错的。
 
-## 8. v1.1 additions (packaging pass, docs/protocol.md §7.5)
+修复（都在 `poc/webview/host/`）：
 
-- **`--open-settings`** (first-run): open the settings overlay once, as soon as the injected island
-  emits `bridgeReady` (fallback: 2.5 s after navigation). The plugin sends it only when no persisted
-  settings exist; later opens show the visualizer directly. Verified in the packaged smoke test.
-- **Settings-overlay ownership was moved to the page/island** (protocol §7.5): the settings UI
-  registers `__SPW_FOLIA__.ui` (`isSettingsOpen/openSettings/closeSettings/toggleSettings`) and
-  consumes ESC itself in the capture phase while open. Shim behavior: on `Escape` it checks
-  `__SPW_FOLIA__.ui.isSettingsOpen()`; if open it does nothing (the island closes the overlay), if
-  closed it forwards the key so the host closes the window with `closed{reason:"user"}`. Host
-  `command open-settings/close-settings` is routed by the Shim into
-  `__SPW_FOLIA__.ui.openSettings()/closeSettings()` (verified round-trip: closed→open via commands).
-- **`--force-dsf <n>` is debug-only.** Production runs fullscreen at the monitor DSF (page CSS
-  viewport = monitor px / DSF; on the reference 3200×2000 @ 180 % machine that is ~1778×1111, which
-  lays out both visualizer and full-viewport settings overlay correctly). Use `--force-dsf 1` only
-  for small-window smoke tests where Folia's `lg:` breakpoint (≥1240×780 CSS px) matters. Never
-  default it on: it overrides the user's Windows scaling.
-- **Packaged-layout validation**: the shipped tree is `packaging/` (web + native + licenses +
-  checksums + size budget). Rebuild with `bash packaging/build-package.sh`; acceptance test with
-  `node packaging/tools/verify-layout.mjs` (settings first-run, ui command round-trip, ESC-once
-  closes overlay, ESC-twice closes window, exit 0, 0 console errors, screenshots). Full details and
-  the `.spmod` assembly mapping are in `docs/release.md`.
-- **Settings-UI cache-buster (task-12)**: the injected settings island is loaded from a stable
-  virtual-host URL, so WebView2's HTTP disk cache (user data dir
-  `%LOCALAPPDATA%\spw-folia\webview`) can keep serving the *previous* `settings-ui.js` after a
-  plugin upgrade. The module URL is now versioned:
-  `https://spw-folia-settings.local/<entry>?v=<bundleVersion>` where `bundleVersion` comes from the
-  plugin (`--bundle-version <pluginVersion>`, protocol `hello.bundleVersion`, fallback `dev`). Log
-  line: `settings-inject url=…`. `Shim.js`/`Overlay.js` are compiled into the exe as script strings
-  (not URLs) and therefore cannot go stale. Validate with a fresh `--user-data-dir` and by logging
-  `getComputedStyle(gear).pointerEvents` + the in-page style marker.
-- **Validation trap — stale payload/cache**: diagnostic harnesses must unpack a **fresh payload per run**
-  and use a **fresh `--user-data-dir`**. During task-12 diagnosis a diagnostic (`probe-hit.mjs`)
-  reused an old unpacked tree in `%TEMP%\spw-folia-rc-input`, so it evaluated the *pre-fix*
-  `settings-ui.js` (gear showed `data-visible=true` but computed `pointer-events:none`) and produced a
-  misleading root cause. `run-real-input.mjs` now deletes and re-extracts its work dir on every run,
-  passes a per-run `--user-data-dir`, and logs the loaded bundle marker
-  (`spw-chrome-btn{pointer-events:auto`), computed `gear pointerEvents` and the injected settings
-  script URL (must contain `?v=<bundleVersion>`).
-- **Relative-cwd spawn verified** (plugin install layout): from the plugin directory,
-  `lib\spw-folia-host.exe --bundle web --settings-dir web\settings --settings-entry settings-ui.js
-  --open-settings` → `nav-done` at 560 ms, settings auto-opened, screenshot, clean exit.
+- **`DpiSupport.cs`**：DPI 感知在初始化时被**报告**出来。先 `SetProcessDpiAwarenessContext(PMv2)`；
+  若因「manifest 已设」而失败于 `ERROR_ACCESS_DENIED`（正常情形），报告
+  `already-set(<DescribeAwareness>)`，而不是给出误导性的 `system`。日志行
+  `dpi-init result=… awareness=…` 让状态可审计。
+- **`HostForm.CreateParams`**：句柄创建时强制 `WS_VISIBLE`，即使父进程传 `SW_HIDE` 窗口也是可见的。
+- **`ApplyWindowGeometry(reason)`** 幂等，并在**句柄创建、OnLoad、Navigate 之后、首帧之后、
+  以及 3.5 s 后**各调一次；它重新断言边界（全屏用 `monitor.Bounds`，`--window` 用 `ClientSize`）、
+  `TopMost`、`ShowInTaskbar=false`，并在父进程把我们 spawn 成隐藏时
+  `ShowWindow(SW_SHOW/SW_RESTORE)+SetForegroundWindow`。每次调用都记
+  `geometry reason=… mode=… bounds=… client=… screen=… workarea=… dpi=… winDpi=… awareness=…`。
+- **`DpiSupport.PageViewport`**：`fps`/页面视口日志带上 `{w,h,dpr,canvases,client}`，
+  几何回归在任何一次运行里都能看出来：页面 CSS 视口必须等于 `client px / DSF`
+  （例如 3200×2000 物理 → 1776×1110 CSS @180 %），不能是极小的值。
+- `--no-esc` 对所有关闭路径生效；诊断只走 stderr 与 stdout 的 `log` 行，绝不往协议流里写非 JSON。
+
+参照：`winDpi=173`（180 % 缩放）时 .NET Framework 的 `Form.DeviceDpi` 仍报 96，因此任何缩放决策
+都用 `GetDpiForWindow`（并记日志），绝不用 `DeviceDpi`。
+
+### 7.2 设置岛注入的缓存陈旧
+
+注入的设置岛从一个固定的虚拟主机 URL 加载，WebView2 的 HTTP 磁盘缓存（user data 目录
+`%LOCALAPPDATA%\spw-folia\webview`）可能在插件升级后继续供**旧的** `settings-ui.js`。因此 module
+URL 是带版本的：`https://spw-folia-settings.local/<entry>?v=<bundleVersion>`，`bundleVersion`
+来自插件（`--bundle-version <插件版本>`，protocol 的 `hello.bundleVersion`，兜底 `dev`）。
+日志行：`settings-inject url=…`。`Shim.js` / `Overlay.js` 作为脚本字符串编译进 exe（不是 URL），
+因此不会陈旧。
+
+诊断这类问题必须**每次运行都解一份新的载荷**并给一个**新的 `--user-data-dir`**：曾经有个诊断脚本
+复用了 `%TEMP%` 下的旧解包树，于是评估的是修复前的 `settings-ui.js`，得出了误导性的根因
+（齿轮 `data-visible=true` 但 computed `pointer-events:none`）。
+
+### 7.3 早期 stdin 的 post 失败
+
+插件按协议在 spawn 后**立刻**发 `hello`/`settings`，此时 WebView2 控制器可能还没创建。
+`PostToPage` 在 `webviewReady == false` 或 `CoreWebView2 == null` 时记一行
+`debug post-page-skip reason=not-ready bytes=N` 后返回，不再抛 NRE；
+`settings`/`config` 在 `NavigationCompleted` 重发，`lyrics`/`track` 缓存最后一份 payload 并在导航
+完成时回放（否则设置页的输入区 / 歌词预览可能是空的）。
 
 ---
 
-## 9. Spawn robustness when launched by the plugin (task-9)
+## 8. 调试与排障入口
 
-### 9.1 Symptom and root cause
+- 日志：插件目录下的 `spw-folia.log` 与 `spw-folia-host.stdout.log`；
+  加 `--verbose-log`（或 SPW 配置页的详细日志开关）会追加导航行、各级页面 console 与逐窗口卡顿。
+- 几何问题：先看 `geometry …`、`dpi-init …`、`fps`(含页面视口) 三类行。
+- 页面/桥问题：看 `page-ready source=…`、`bridgeReady`、`settings-inject url=…`、
+  `post-page-skip …`。
+- 透明/热键：`transparency …`、`transparency hotkey=…`。
+- 用户侧环境自检：SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」会逐项检查 .NET / WebView2 /
+  插件文件 / 权限 / 可写目录，见 [`logging-and-diagnostics.md`](logging-and-diagnostics.md)。
 
-When the helper was launched from a **GUI parent process** (the plugin JVM started as `javaw.exe` —
-no console attached), the first integration attempt showed the WebView2 page at an **8×6 CSS
-viewport**: the window was created hidden/zero-sized by the spawner's `STARTUPINFO` (or the window
-never got an explicit geometry while WebView2 was initialising), so WebView2 sized its compositor to
-the 8×6 client area and the Folia stage laid out into a postage stamp. The same exe launched from a
-console (`java.exe`, or by hand) was fine — so it was a spawn-context bug, not a rendering bug.
-The failure was silent: the host logged `ready` and FPS, the page rendered 3 canvases, only the
-geometry was wrong.
-
-### 9.2 Fixes (all in `poc/webview/host/`)
-
-- **`DpiSupport.cs` (new)**: DPI-awareness is initialised and *reported*. `SetProcessDpiAwarenessContext(
-  PMv2)` first; if it fails with `ERROR_ACCESS_DENIED` (awareness already set by our manifest —
-  the normal case) it reports `already-set(<DescribeAwareness>)` instead of falling through to a
-  misleading `system`. The log line `dpi-init result=… awareness=…` makes the state auditable.
-- **`HostForm.CreateParams`**: `WS_VISIBLE` is forced at handle creation, so the window exists
-  visible even when the parent passes `SW_HIDE`.
-- **`ApplyWindowGeometry(reason)`** is now idempotent and called at **handle-created, OnLoad,
-  after `Navigate`, after first frame, and 3.5 s later**; it re-asserts bounds
-  (`Screen.PrimaryScreen.Bounds` for fullscreen, `ClientSize` for `--window`), `TopMost`,
-  `ShowInTaskbar=false`, and `ShowWindow(SW_SHOW/SW_RESTORE)+SetForegroundWindow` when the parent
-  spawned us hidden. Every call logs `geometry reason=… mode=… bounds=… client=… screen=…
-  workarea=… dpi=… winDpi=… awareness=…`.
-- **`DpiSupport.PageViewport`**: the `fps`/page-viewport log now includes
-  `{w,h,dpr,canvases,client}` so a geometry regression is visible in any run: the page CSS viewport
-  must be `client px / DSF` (e.g. 3200×2000 physical → 1776×1110 CSS @180 %), never tiny.
-- `--no-esc` is honoured for every close path; diagnostics go to stderr+stdout `log` lines only
-  (never to the protocol stream as non-JSON).
-
-### 9.3 Measured (reference machine, 3200×2000 @ 180 %, WebView2 150.0.4078.83)
-
-| run | `dpi-init` | geometry | page viewport | result |
-| --- | --- | --- | --- | --- |
-| standalone windowed 800×450 | `already-set(per-monitor)` | `window=1200,775 800x450` | 444×250 @dpr 1, 3 canvases | OK (`geometry` at handle-created logged client 794×403 then 800×450) |
-| standalone fullscreen | `already-set(per-monitor)` | `0,0 3200x2000` | 1776×1110 @dpr 1, 3 canvases | screenshot 3,327,788 B, exit 0 |
-| **parent `java.exe`** fullscreen (packaged layout) | `already-set(per-monitor)` | `0,0 3200x2000` | 1776×1110 @dpr 1, 3 canvases | `ready` 1,534 ms after spawn, screenshot 3,588,594 B, `closed{plugin}` exit 0 |
-| **parent `javaw.exe`** fullscreen (the failing scenario) | `already-set(per-monitor)` | `0,0 3200x2000` | 1776×1110 @dpr 1, 3 canvases | `nav-done` 503 ms, screenshot 3,568,662 B, 638 frames, `lastFps 120`, exit 0 |
-
-`winDpi=173` (180 % scaling) while .NET Framework's `Form.DeviceDpi` still reports 96 — the host
-therefore uses `GetDpiForWindow` (logged) for any scaling decision, never `DeviceDpi`. The page CSS
-viewport is physical size / DSF (3200×2000 → 1776×1110), as expected; `--force-dsf` remains
-debug-only (§8).
-
-### 9.4 Repro harness
-
-`poc/webview/host/repro/JavaSpawner.java` reproduces the plugin's spawn shape exactly: it launches
-the packaged exe with `--bundle <packaging/web> --fullscreen --settings-dir … --settings-entry
-settings-ui.js --screenshot <png> --shot-at 6000`, then sends `hello`/`settings`/`config` + 100 ms
-`state` frames over stdin and reads stdout; run it with both `java.exe` and `javaw.exe`:
-
-```bash
-cd poc/webview/host/repro && javac -encoding UTF-8 JavaSpawner.java
-cd .. && REPRO_SETTINGS="$PWD/repro/default-settings.json" \
-  "C:/Program Files/Java/jdk-25.0.2/bin/javaw.exe" -cp repro JavaSpawner \
-  "D:/输出目录/dsh2/packaging/native/spw-folia-host.exe" "D:/输出目录/dsh2/packaging/web" \
-  "D:/输出目录/dsh2/packaging/out/repro-javaw-fullscreen.log" --duration-ms 9000 \
-  --shot "D:\\输出目录\\dsh2\\packaging\\out\\repro-javaw-fullscreen.png" --settings
-```
-
-Evidence: `packaging/out/repro-java-fullscreen.{log,png}`,
-`packaging/out/repro-javaw-fullscreen.{log,png}` (full-screen 3201×2001 capture with the settings
-gear chrome from task-5), `poc/webview/host/out/task9-fullscreen-standalone.png`. After the fix the
-packaged acceptance test still passes 10/10 (`docs/release.md` §6).
-
-## 10. 早期 stdin 健壮性（2026-10-19）
-
-插件按协议 §6 在 spawn 后**立刻**发 `hello`/`settings`，此时 WebView2 控制器可能尚未创建。旧实现 `PostToPage` 直接访问 `webView.CoreWebView2`，会记一条 `error: post-page: NullReferenceException`（不影响后续渲染，但污染日志，且暴露早发数据被丢弃）。现在：
-
-- `PostToPage` 在 `webviewReady == false` 或 `CoreWebView2 == null` 时记 `debug post-page-skip reason=not-ready bytes=N` 后返回，不再抛 NRE；
-- `settings`/`config` 原本就在 `NavigationCompleted` 重发；`lyrics`/`track` 现在缓存最后一份 payload，并在导航完成时回放（此前早发的 lyrics/track 会丢失，设置页输入区/歌词预览可能为空）；
-- 回归：`node tmp-verify/early-stdin-test.mjs`（250 ms 早发 hello+settings+lyrics+track+config）→ 0 NRE、3 次正确 skip、`ready` at 514 ms、页面 3 canvases 且 settings root 已挂载、正常 `closed{reason:"plugin"}`；`poc/hook/probe-live-preview.mjs` 默认/`--self-test` 两种模式复验 11/11 PASS（`docs/archive/verification-live-preview.md` §7）。当前 exe sha256 `d0961bb65acc4fb1e4883c71594fbd004054c37bed9dd5a584a7fad81e717542`。
+打包布局的端到端验证（首次运行设置、ui 命令往返、ESC 两级关闭、exit 0、0 console error、截图）
+用 `node packaging/tools/verify-layout.mjs`，详见 [`release.md`](release.md)。

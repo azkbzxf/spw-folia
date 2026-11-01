@@ -1,44 +1,90 @@
-# Licensing & attribution plan (spw-folia)
+# Licensing & attribution (spw-folia)
 
 ## Our license
-- The plugin repo and every artifact we publish (source, `.spmod` release asset, bundled web
-  assets, native helper binary) is licensed **AGPL-3.0-or-later**.
-  Rationale: the plugin's visualizer is a redistribution + integration of **Folia**, which is
-  AGPL-3.0 (see `work/folia/folia-major-main/LICENSE`, upstream https://github.com/…/folia —
-  record the exact upstream repo URL + commit/tag 0.7.22 in NOTICE). AGPL requires derivative
-  works and combined distributions to be AGPL and to offer corresponding source to network users.
-- Source availability: repo contains all our source + build scripts; the Folia web bundle is built
-  from an unmodified upstream Folia checkout (pin commit hash in a `FOLIA_UPSTREAM.md` note), so its
-  source is upstream + our build recipe. The settings UI source is in our repo. The native helper
-  C# source is in our repo. If we patched Folia source, ship those patches (`patches/`).
 
-## Bundled components and their licenses (NOTICE file must list all)
-| component | version | license | how we use it | obligations |
-| --- | --- | --- | --- | --- |
-| Folia (app + 15 visualizer styles + settings UI components if reused) | 0.7.22 | AGPL-3.0 | bundled `web/` production dist (unmodified), reused React components or clean-room derived UI | AGPL, source offer, copyright notice |
-| NeteaseCloudMusicApi-style deps inside Folia dist (libraries already licensed inside Folia) | as shipped | mixed (MIT/Apache etc.) | transitively bundled in `web/` dist | keep Folia's bundled license reports (Folia dist contains its own attributions; copy them) |
-| spw-workshop-api | 0.1.0-dev22/23 | check repo LICENSE (record) | compileOnly API only, not redistributed | none if compileOnly; attribution in docs anyway |
-| PF4J | 3.12.0 | Apache-2.0 | compileOnly (host provides) | none if not redistributed |
-| WebView2 SDK / WebView2Loader.dll | pinned version | Microsoft WebView2 SDK license (BSD-style for loader? verify) | redistributed loader DLL | include Microsoft license text, only redistribute allowed DLLs |
-| MiSans / system fonts | n/a | OS/system fonts only; **do not bundle commercial fonts** | use system font stacks (Folia uses system + optional user fonts) | avoid redistributing fonts |
-| WASAPI loopback code (our C#) | new | AGPL-3.0 | written by us (no NAudio) | AGPL |
+- The repository and every artifact we publish (source, the `.spmod` release asset, the bundled web
+  assets, the native helper binary) are licensed **AGPL-3.0-or-later** (full text: [`LICENSE`](../LICENSE)).
+- Rationale: the visualizer is a redistribution and integration of **Folia**, which is AGPL-3.0. The
+  settings UI also builds Folia's React components from a Folia source checkout. AGPL requires
+  derivative and combined works to be AGPL, and requires offering the Corresponding Source to users
+  who interact with the work over a network.
+- Not affiliated with, endorsed by, or supported by the Folia authors or Salt Player.
+
+## Source offer (AGPL-3.0 §6/§13)
+
+The complete Corresponding Source for what we ship:
+
+| shipped artifact | source |
+| --- | --- |
+| Kotlin plugin (`classes/`) | `spw-folia/` in this repository |
+| Native host helper (`native/spw-folia-host.exe`) | `poc/webview/host/`, built with `bash poc/webview/host/build.sh` |
+| Settings UI (`web/settings/`) | `poc/settings-ui/`, built with `pnpm build` |
+| Web payload (`web/`) | Folia `v0.7.22` upstream (below) + staging recipe `packaging/tools/stage-web.mjs` |
+| Packaging | `packaging/build-package.sh`, `packaging/tools/assemble-release.py` |
+
+Folia's source: https://github.com/chthollyphile/folia-major, tag **`v0.7.22`**, commit
+`1f6d0f468f5bc81b23a8b40ad7ca96ccd4b1ecbe`. We ship Folia's production web build unmodified, except
+for two removed PWA tags in `web/index.html` (service-worker registration + manifest link, both
+inert because the service worker is not shipped). That change is documented in
+[`packaging/licenses/NOTICE.md`](../packaging/licenses/NOTICE.md) and reproducible via
+`packaging/tools/stage-web.mjs`. We do not patch Folia source, so there is no `patches/` directory.
+
+Whoever redistributes this plugin, including a modified version, must keep this source offer and
+must offer the Corresponding Source to users interacting with it over a network (AGPL-3.0 §13). If
+you received a binary and cannot obtain the source from the locations above, contact the distributor
+of that binary.
+
+## What ships inside the `.spmod`
+
+The plugin directory carries `licenses/`, so the notices travel with every release and stay
+readable in a local installation:
+
+| shipped file | covers |
+| --- | --- |
+| `licenses/AGPL-3.0.txt` | this project and the Folia web build |
+| `licenses/NOTICE.md` | copyright, Folia attribution, the `index.html` change, WebView2 |
+| `licenses/SOURCE-OFFER.md` | the written source offer (mirror of §Source offer above) |
+| `licenses/THIRD-PARTY.md` | component inventory with versions and licenses |
+| `licenses/AUDIO-MIT.txt` | the original WASAPI analyzer sources (MIT) |
+| `licenses/WebView2-SDK-LICENSE.txt` | Microsoft WebView2 SDK |
+| `licenses/WebView2-SDK-NOTICE.txt` | third-party notice bundle for the WebView2 SDK |
+
+`build-package.sh` stages this directory: `NOTICE.md`, `SOURCE-OFFER.md`, `THIRD-PARTY.md` and
+`AUDIO-MIT.txt` are authored in `packaging/licenses-src/`; `AGPL-3.0.txt` is copied from the Folia
+upstream `LICENSE`; the two WebView2 texts are extracted from the `Microsoft.Web.WebView2` NuGet
+package. Per-component details — versions, redistributed DLLs, npm dependency licenses — are in
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md); do not duplicate the inventory here.
+
+## Obligations to keep in mind
+
+- **Folia attribution travels with the bundle.** Every release notes states which Folia version and
+  upstream tag/commit it contains.
+- **Nothing third-party is bundled that we cannot redistribute.** Compose, Kotlin, PF4J and the
+  workshop API are `compileOnly` (Salt Player provides them); the WebView2 Runtime and .NET Framework
+  4.8 are OS components; no fonts and no Folia model weights are shipped.
+- **The WASAPI analyzer is ours.** `poc/webview/host/audio/` is an original clean-room
+  implementation under `SPDX-License-Identifier: MIT`, distributed in the AGPL-3.0 helper as a whole.
+  Keep `licenses/AUDIO-MIT.txt` in the package when those sources change.
+- **Credits are not dependencies.** spw-island is a GPL-3.0 behavioural reference only — no code
+  copied, not distributed — and is listed under acknowledgements in
+  [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md), not as a bundled component.
 
 ## Credentials / privacy
-- No credentials, tokens, cookies in repo or logs shipped. SPW logs may contain user paths — never
-  publish user logs verbatim.
-- The plugin reads only SPW's public workshop API data (track/lyrics/cover) for rendering; document
-  this in README (no telemetry, no network).
 
-## Publish checklist (G6)
-- [ ] `LICENSE` = AGPL-3.0 full text at repo root.
-- [ ] `NOTICE` with Folia copyright/upstream URL/version + commit, WebView2 SDK notice, any other.
-- [ ] `FOLIA_UPSTREAM.md`: upstream URL, tag 0.7.22 commit hash, `pnpm build` recipe, list of
-      files we changed (if any), how to reproduce `web/` dist byte-for-byte or honestly note
-      "dist from upstream release build".
-- [ ] README links to source, states AGPL, says plugin is unofficial community work, not affiliated
-      with Salt Player/Folia authors.
-- [ ] Release asset includes `LICENSE` + `NOTICE` inside the plugin dir (but plugin dir gets wiped
-      on update? keep copies under `licenses/` inside `.spmod`, host keeps them).
-- [ ] `sha256sum` published next to the `.spmod`.
-- [ ] GitHub repo topic `salt-player-plugins`, description mentions SPW 1.19.0 + Folia mode.
-- [ ] No build outputs committed except release asset; no `%APPDATA%` data, no host jars.
+- No credentials, tokens or cookies in the repository or in shipped logs.
+- The plugin reads only SPW's workshop API data (playback state, track, lyrics, cover, audio) and
+  renders it locally. No telemetry, no network requests from the shipped page.
+- User logs can contain local file paths; never publish user logs verbatim.
+
+## Publish checklist
+
+- [ ] `LICENSE` at the repository root is the full AGPL-3.0 text (identical to
+      `packaging/licenses/AGPL-3.0.txt`).
+- [ ] `licenses/` inside the `.spmod` has all seven files listed above.
+- [ ] `NOTICE.md` cites the Folia upstream URL plus tag `v0.7.22` and commit hash.
+- [ ] README states AGPL-3.0, links to source, and says the plugin is unofficial community work.
+- [ ] Release notes record the plugin version, host exe sha256, Folia version, and WebView2
+      SDK/runtime versions.
+- [ ] `SHA256SUMS.txt` (or the `.spmod.json` sidecar) is published next to the `.spmod`.
+- [ ] GitHub repo topic `salt-player-plugins`; description mentions SPW 1.19.x and Folia mode.
+- [ ] No build outputs committed except the release asset; no `%APPDATA%` data, no host jars.

@@ -1,34 +1,64 @@
 # Folia 各歌词样式 tuning 键与默认值
 
-> 自动抽取自 `src/types.ts` 的 `DEFAULT_<MODE>_TUNING`（v0.7.21）与各 `src/components/visualizer/<mode>/tuning.ts` 的声明。所有值持久化在 localStorage；「默认」按钮（歌词动画 tab）写回 defaults 并弹 `notifications.<mode>Reset` toast。
-> 配套文档：`docs/folia-spec/settings-ui.md`（设置窗口/控件/默认值）、`docs/folia-spec/style-map.md`（14 样式映射）。
+> 抽取自上游 Folia **0.7.22** 的 `DEFAULT_<MODE>_TUNING`（`src/types.ts` / 各样式 `types.ts`）与各
+> `src/components/visualizer/<mode>/tuning.ts` 的声明。所有值持久化在 localStorage；「默认」按钮（歌词动画 tab）
+> 写回 defaults 并弹 `notifications.<mode>Reset` toast。
+> 关联：`settings-ui.md`（设置窗口/控件/默认值）、`style-map.md`（15 样式映射）。
 
-## 1. 样式 tuning 一览（13 个样式有 tuning；still 没有）
+## 1. 样式 tuning 一览（15 种样式中的 14 种有 tuning；只有 still 没有）
 
 | 样式 dir | 中文名 | tuning mode | settingsKey | setter | resetter | localStorage key | 设置面板 | 动感效果 |
 |---|---|---|---|---|---|---|---|---|
-| sonnet | 商籁 | `sonnet` | `sonnetTuning` | `handleSetSonnetTuning` | `handleResetSonnetTuning` | `sonnet_tuning` | SonnetSettingsPanel (sonnet/SonnetSettingsPanel.tsx) | sonnet.lensTear 推镜裂光 |
+| sonnet | 商籁 | `sonnet` | `sonnetTuning` | `handleSetSonnetTuning` | `handleResetSonnetTuning` | `sonnet_tuning` | SonnetSettingsPanel (sonnet/) | sonnet.lensTear 推镜裂光 |
 | tempera | 凝彩 | `tempera` | `temperaTuning` | `handleSetTemperaTuning` | `handleResetTemperaTuning` | `tempera_tuning` | TemperaSettingsPanel (tempera/) | — |
 | lumiere | 绘光 | `lumiere` | `lumiereTuning` | `handleSetLumiereTuning` | `handleResetLumiereTuning` | `lumiere_tuning` | LumiereSettingsPanel (lumiere/) | — |
-| classic | 流光 | `classic` | `classicTuning` | `handleSetClassicTuning` | `handleResetClassicTuning` | `classic_tuning` | ClassicSettingsPanel (settingsPanels.tsx:31) | — |
+| hanabi | 花火 | `hanabi` | `hanabiTuning` | `handleSetHanabiTuning` | `handleResetHanabiTuning` | `hanabi_tuning` | HanabiSettingsPanel (hanabi/) | hanabi.beatBursts 随拍开花、hanabi.beatPulse 整镜脉冲 |
+| classic | 流光 | `classic` | `classicTuning` | `handleSetClassicTuning` | `handleResetClassicTuning` | `classic_tuning` | ClassicSettingsPanel (settingsPanels.tsx) | — |
 | cadenza | 心象 | `cadenza` | `cadenzaTuning` | `handleSetCadenzaTuning` | `handleResetCadenzaTuning` | `cadenza_tuning` | 无面板（歌词动画 tab 显示「这个样式没有参数」） | — |
-| partita | 云阶 | `partita` | `partitaTuning` | `handleSetPartitaTuning` | `handleResetPartitaTuning` | `partita_tuning` | PartitaSettingsPanel (settingsPanels.tsx:93) | — |
-| fume | 浮名 | `fume` | `fumeTuning` | `handleSetFumeTuning` | `handleResetFumeTuning` | `fume_tuning` | FumeSettingsPanel (settingsPanels.tsx:171) | — |
-| tilt | 倾诉 | `tilt` | `tiltTuning` | `handleSetTiltTuning` | `handleResetTiltTuning` | `tilt_tuning` | TiltSettingsPanel (settingsPanels.tsx:514) | — |
-| claddagh | 回环 | `claddagh` | `claddaghTuning` | `handleSetCladdaghTuning` | `handleResetCladdaghTuning` | `claddagh_tuning` | CladdaghSettingsPanel (settingsPanels.tsx:762) | — |
+| partita | 云阶 | `partita` | `partitaTuning` | `handleSetPartitaTuning` | `handleResetPartitaTuning` | `partita_tuning` | PartitaSettingsPanel (settingsPanels.tsx) | — |
+| fume | 浮名 | `fume` | `fumeTuning` | `handleSetFumeTuning` | `handleResetFumeTuning` | `fume_tuning` | FumeSettingsPanel (settingsPanels.tsx) | — |
+| tilt | 倾诉 | `tilt` | `tiltTuning` | `handleSetTiltTuning` | `handleResetTiltTuning` | `tilt_tuning` | TiltSettingsPanel (settingsPanels.tsx) | — |
+| claddagh | 回环 | `claddagh` | `claddaghTuning` | `handleSetCladdaghTuning` | `handleResetCladdaghTuning` | `claddagh_tuning` | CladdaghSettingsPanel (settingsPanels.tsx) | — |
 | monet | 莫奈 | `monet` | `monetTuning` | `handleSetMonetTuning` | `handleResetMonetTuning` | `monet_tuning` | MonetSettingsPanel (monet/) | — |
-| pendolo | 时计 | `pendolo` | `pendoloTuning` | `handleSetPendoloTuning` | `handleResetPendoloTuning` | `pendolo_tuning` | PendoloSettingsPanel (pendolo/) | pendolo.drumhead 仿真鼓面（drums） |
-| cappella | 群唱 | `cappella` | `cappellaTuning` | `handleSetCappellaTuning` | `handleResetCappellaTuning` | `cappella_tuning` | CappellaSettingsPanel (settingsPanels.tsx:309) | — |
-| diorama | 镜台 | `diorama` | `dioramaTuning` | `handleSetDioramaTuning` | `handleResetDioramaTuning` | `diorama_tuning` | DioramaSettingsPanel (settingsPanels.tsx:591) | diorama.ripple 水镜涟漪 |
+| pendolo | 时计 | `pendolo` | `pendoloTuning` | `handleSetPendoloTuning` | `handleResetPendoloTuning` | `pendolo_tuning` | PendoloSettingsPanel (pendolo/) | pendolo.drumhead 仿真鼓面、pendolo.gearBeats 齿轮节拍 |
+| cappella | 群唱 | `cappella` | `cappellaTuning` | `handleSetCappellaTuning` | `handleResetCappellaTuning` | `cappella_tuning` | CappellaSettingsPanel (settingsPanels.tsx) | — |
+| diorama | 镜台 | `diorama` | `dioramaTuning` | `handleSetDioramaTuning` | `handleResetDioramaTuning` | `diorama_tuning` | DioramaSettingsPanel (settingsPanels.tsx) | diorama.ripple 水镜涟漪 |
 | still | 静止 | —（无 tuning.ts） | — | — | — | — | 无 | — |
 
-- tuning.ts 位置：`src/components/visualizer/<mode>/tuning.ts`（`sonnet/tuning.ts`、`tempera/tuning.ts`、`lumiere/tuning.ts`、`classic/tuning.ts`、`cadenza/tuning.ts`、`partita/tuning.ts`、`fume/tuning.ts`、`tilt/tuning.ts`、`claddagh/tuning.ts`、`monet/tuning.ts`、`pendolo/tuning.ts`、`cappella/tuning.ts`、`diorama/tuning.ts`）。
-- 唯一带 `olderKeys` 的是 cadenza（旧键 `cadenze_tuning`，`cadenza/tuning.ts:21`）。
-- `applyVisualizerTuning(mode, props, bundle)` 把 tuning 以命名 prop（如 `sonnetTuning`）传给样式 renderer，同时 `props.visualizerTunings` 带整包 bundle（`tuningRegistry.ts`）。
-- 每个 `tuning.ts` 可声明 `preview(draft, saved)`（拖动滑块时预览画什么）、`apply(props, tuning)`、`storage: {key, olderKeys, read, merge, onChange, resetNotice, actions}`（`tuningDefinition.ts`）。
-- 默认 `preview` 行为：预览画 draft；`apply` 一律 `{...props, <mode>Tuning: tuning}`（monet 额外设 `onMonetTuningChange`）。
+- `tuning.ts` 位置：`src/components/visualizer/<mode>/tuning.ts`；`settingsPanels.tsx` 汇总了
+  classic/partita/fume/cappella/tilt/diorama/claddagh 的面板，其余各自目录内。
+- 唯一带 `olderKeys` 的是 cadenza（旧键 `cadenze_tuning`）。
+- `applyVisualizerTuning(mode, props, bundle)` 把 tuning 以命名 prop（如 `sonnetTuning`）传给样式 renderer，
+  同时 `props.visualizerTunings` 带整包 bundle（`tuningRegistry.ts`）。
+- 每个 `tuning.ts` 可声明 `preview(draft, saved)`（拖动滑块时预览画什么）、`apply(props, tuning)`、
+  `storage: {key, olderKeys, read, merge, onChange, resetNotice, actions}`（`tuningDefinition.ts`）。
+- 默认 `preview` 行为：预览画 draft；`apply` 一律 `{...props, <mode>Tuning: tuning}`（monet 额外设
+  `onMonetTuningChange`）。
+- 效果强度的统一上下限见 `services/beatFx/beatEffects.ts`：`BEAT_EFFECT_STRENGTH_MAX = 2`，单效果默认
+  `{ on: true, strength: 1 }`。
 
 ## 2. 各样式默认值（`DEFAULT_<MODE>_TUNING` 原文）
+
+### Hanabi —— HanabiTuning（`hanabi/types.ts:419-437`）
+```ts
+colorMode: 'mixed',
+sparkAmount: 1,
+ornamentAmount: 1,
+textMotion: 1,
+blockOpacity: 1,
+riseSpeed: 1,
+spin: 1,
+ambient: 1,
+glow: 1,
+bloom: 0.8,
+chorusBloom: 1.3,
+launches: true,
+overlayFrame: true,
+textOnly: false,
+sky: 0.85,
+collage: 1,
+renderQuality: 'full',
+```
 
 ### Classic —— ClassicTuning
 ```ts
@@ -289,6 +319,7 @@ blank: false,
 
 ## 4. 与设置 UI 的关系
 
-- 每个样式的设置面板把 tuning 字段渲染成 kit 控件；字段的 label 文案在各样式面板文件里（如 sonnet 见 `docs/folia-spec/settings-ui.md` §3.4）。
-- 所有数值区间不在 types 里，而在面板组件里（SliderRow 的 min/max/step）。WebView 复刻时以面板源文件为准。
-- 13 个 tuning 的默认值随 Folia 版本变化；迁移桌面 Folia 配置时按 `DEFAULT_*_TUNING` 做 merge（`readStoredTuning` 会把缺字段补默认）。
+- 每个样式的设置面板把 tuning 字段渲染成 kit 控件；字段 label 文案在各样式面板文件里（如 sonnet 见
+  `settings-ui.md` §3.4）。
+- 所有数值区间不在 types 里，而在面板组件里（SliderRow 的 min/max/step）。复刻时以面板源文件为准。
+- 默认值随 Folia 版本变化；迁移桌面 Folia 配置时按 `DEFAULT_*_TUNING` 做 merge（`readStoredTuning` 会把缺字段补默认）。

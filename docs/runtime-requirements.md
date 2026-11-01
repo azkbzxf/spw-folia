@@ -1,8 +1,6 @@
 # spw-folia 运行环境依赖清单与闪退排查
 
-Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二进制 + 本机实测 + 微软官方文档）。
 适用对象：遇到「闪退 / 打不开 / 黑窗」的用户，以及维护者做支持回复。
-日期：2026-10-20 · 核对机：Windows 11 x64（build 26300）、WebView2 150.0.4078.83、.NET Framework 4.8.1。
 
 一句话结论：**插件自己不携带浏览器与 .NET，它把渲染交给系统里的 WebView2 Runtime、把窗口交给
 .NET Framework 4.8 编写的辅助进程。这两样系统组件任一缺失，都会表现为「用户点了没反应 / 窗口闪一下就消失」。**
@@ -37,7 +35,7 @@ Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二�
 | --- | --- | --- |
 | S1 | 可用的 GPU / D3D / WebGL | 页面用 WebGL 渲染（bundle 内 18 个 chunk、553 处 `webgl` 引用，含 11 处 `WebGL2`）。辅助进程**没有**传 `--disable-gpu`，也没有软件渲染兜底开关。RDP 会话、虚拟机、很老的显卡驱动下可能黑屏/降级（**未见**因此直接崩溃），建议更新显卡驱动、退出远程桌面后重试。 |
 | S2 | 音频设备 | WASAPI 回环采集失败会被吞掉，自动回落合成信号（`wasapi-loopback-failed`），**只是不再有音频响应**，不崩。 |
-| S3 | 多显示器 | 全屏窗口固定开在**主屏**（`Screen.PrimaryScreen`）。副屏用户会觉得「窗口没出现」，不是崩溃。 |
+| S3 | 多显示器 | 全屏窗口开在 **SPW 窗口所在的那块屏幕**上（`MonitorSupport.ScreenForProcess(parentPid)`），不是系统主屏；**Alt + 左键**可拖到其它屏幕并铺满该屏。没有显示器选择器；`Screen.PrimaryScreen` 只在父进程定位失败时兜底。 |
 | S4 | 网络 | **完全不需要**。页面全部走本地虚拟主机（`https://spw-folia.local/`），发布产物实测 99 个请求全本地、0 外部。 |
 | S5 | 管理员权限 | **不需要**（辅助进程 manifest 无 `requestedExecutionLevel`，asInvoker）。 |
 | S6 | VC++ 运行库 | **不需要单独装**。辅助进程是纯托管（零 native 导入）；WebView2 Runtime 目录自带 `msvcp140/vcruntime140` 等。 |
@@ -122,13 +120,13 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-429
    异常从 `WndProc` 逃出 → WinForms 弹「Microsoft .NET Framework」未处理异常对话框 → 辅助进程退出。
    v0.1.10 改为 `unchecked((int)…ToInt64())` 并注册 `Application.ThreadException` /
    `AppDomain.UnhandledException` 输出协议错误行。**仍在 0.1.9 及更早的用户是最可能的「有些用户会闪退」来源。**
-   详见 `docs/archive/verification-v0.1.10.md`、`docs/archive/release-notes-v0.1.10.md`。
+   详见 `docs/archive/verification-v0.1.10.md`；发布说明见 GitHub Releases 的 v0.1.10。
 2. **v0.1.10 在 WebView2 155+ 的 stdin 泵崩溃（已修）** — 打开 Folia 后歌词重放时，插件 stdin 线程
    直接读 `webView.CoreWebView2` 抛 `InvalidOperationException: CoreWebView2 can only be accessed from
    the UI thread.`，读取线程终止 → 2 秒后窗口自关；同一故障还会让插件管道写阻塞、拖死 SPW UI 线程
    （「未响应」）。旧版 WebView2（如参考机 150.0.4078.83）对跨线程属性读取更宽容，所以只在 155+
    用户机器上必现。v0.1.11 改为线程封送 + 专职写线程，v0.2.0 一并发布；详见
-   `docs/archive/verification-v0.1.11.md`、`docs/archive/release-notes-v0.2.0.md`。
+   `docs/archive/verification-v0.1.11.md`；发布说明见 GitHub Releases 的 v0.2.0。
 3. **WebView2 浏览器进程偶发退出（未修）** — `BrowserProcessExited reason=Unexpected`，
    症状为窗口用着用着消失、日志出现 `webview process-failed` + `closed reason=error` + exit 1。
    发布产物上出现过 1 次、开发期另 1 次，15 分钟压测未复现；当前没有自动重试（属后续任务），
