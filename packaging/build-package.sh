@@ -3,7 +3,7 @@
 #
 #   packaging/
 #     web/                  minimal Folia web subset + settings UI island   -> .spmod/web/
-#     native/               spw-folia-host.exe + exe.config + WebView2 dlls  -> .spmod/native/
+#     native/               spw-folia-host.exe + exe.config + WebView2 dlls  -> .spmod/lib/
 #     licenses/             AGPL + WebView2 + audio MIT + NOTICE/SOURCE-OFFER -> .spmod/licenses/
 #     SHA256SUMS.txt
 #     size-report.json

@@ -3,6 +3,10 @@
 # for Windows application and reference sources. NEVER publish this directory.
 /work/
 
+# Local debugging scratch (session dumps, decompiled API jars, ad-hoc harnesses).
+# A previous baseline snapshot committed these by accident; they are never part of a release.
+/.scratch/
+
 # Third-party / generated build outputs
 /node_modules/
 **/node_modules/
@@ -58,6 +62,14 @@ poc/hook/acceptance/
 /tmp-verify/
 # staged bundle for the real-preview / verify-layout probes (scripts regenerate it)
 /.tmp-verify/
+# raw per-style captures used to rebuild poc/settings-ui/public/thumbs (scripts/make-thumbs.mjs)
+/.tmp-thumbs/
+# opening-splash acceptance run (scripts/verify-splash.mjs): screenshots + host logs
+/.tmp-splash/
+# colour-key / "no pink background" acceptance run (scripts/verify-colour-key.mjs)
+/.tmp-colour-key/
+# frame-rate acceptance run (scripts/verify-frame-rate.mjs): fps logs + webview profiles
+/.tmp-frame-rate/
 
 # local-only hook artifacts: installed-plugin backups and ad-hoc verification fixtures
 poc/hook/backup/
@@ -67,9 +79,16 @@ poc/hook/tmp-verify/
 /tmp-inspect/
 poc/webview/host/repro/*.exe
 poc/webview/host/repro/*.dll
+# compile output of the repro Java probes (VerifyResolver2 / RenameSim); the .java sources are tracked
+poc/webview/host/repro/out/
 
 # promo-site capture scratch (raw recordings, ffmpeg binary, screenshots)
 /.tmp-capture/
 
 # isolated Gradle home used by the local build (Aliyun-mirror workaround)
 spw-folia/.gradle-home/
+
+# Gradle/Kotlin build artifacts that the Baseline snapshot accidentally tracked
+# (the tracked copies make every code review unreadable and they are regenerated anyway).
+/spw-folia/build/
+/spw-folia/.gradle/

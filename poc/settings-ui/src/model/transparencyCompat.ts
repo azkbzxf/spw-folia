@@ -38,6 +38,19 @@ const STYLE_COMPAT: Record<StyleMode, TransparencyCompat> = {
     tempera: 'tuned',
     lumiere: 'tuned',
     hanabi: 'tuned',
+    /* 0.7.25 町景 (order 27) and 雾笺 (order 29): both entries declare `background: false` — they
+     * paint the entire viewport themselves (machi is a three.js miniature street diorama, nebbia a
+     * WebGL2 fogged bus window) rather than drawing glyphs over the shared background renderer that
+     * `background.transparent` can switch off. Under the colour key that is the worst case, not the
+     * best: the whole frame is a scene whose atmosphere, fog, bloom and reflections are inherently
+     * semi-transparent, so every pixel would be mixed with rgb(255,0,255) and the window would be a
+     * solid pink haze. Neither exposes a tuning key that removes the scene (there would be no style
+     * left), so no `transparentStyleTuning` override can rescue them — the same reasoning that makes
+     * monet (`unsupported`, its portrait plate is the style) and lumiere on a light theme (the 94%
+     * dark field) unsupported. **Not alpha-probe measured** (unlike the 0.7.22 table above): chosen
+     * conservatively pending a real render; see docs/archive/verification-v0.2.0.md for the method. */
+    machi: 'unsupported',
+    nebbia: 'unsupported',
     classic: 'native',
     cadenza: 'native',
     partita: 'native',

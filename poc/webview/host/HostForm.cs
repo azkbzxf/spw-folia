@@ -96,7 +96,25 @@ namespace SpwFolia
         // wherever the page paints transparent). Driven by settings.transparentPlayerBackground.
         private bool transparencyTarget;
         private bool transparencyActive;
-        private static readonly Color TransparencyKeyColor = Color.FromArgb(255, 0, 255);
+        // v0.4.9: the colour key used to be pure magenta rgb(255,0,255). LWA_COLORKEY only punches out
+        // pixels that EXACTLY match the key; everything the page paints with 0 < alpha < 1 is composited
+        // onto BackColor and therefore stays on screen tinted by it. Magenta blends into a loud pink
+        // haze (a 50 % white glyph edge became rgb(255,128,255)), which is what users reported as
+        // "调试时粉色背景很影响观感". The key's only job is "a colour the page never paints", so it can be
+        // any such colour: a near-black one makes the same blend read as a dark shadow instead of pink.
+        // rgb(1,0,1) is chosen because it is
+        //   - not pure black (Color.Black is the opaque-session BackColor and the page's base colour),
+        //   - not reachable by the Folia palette (its darkest tone is #09090b = rgb(9,9,11); a 1-unit
+        //     red/blue with zero green cannot be produced by blending that, and the page never writes
+        //     an exact rgb(1,0,1) because every painted layer has alpha 1 or is composited onto a
+        //     non-zero background),
+        //   - nearly invisible if a frame ever does present it un-keyed.
+        private static readonly Color TransparencyKeyColor = Color.FromArgb(1, 0, 1);
+        // v0.4.9: `--no-colour-key` (or SPW_FOLIA_COLOUR_KEY=0) keeps the window opaque for debugging.
+        // Transparency is a display concern the debug harnesses do not need, and running it made every
+        // screenshot of an alpha-blended frame magenta. This is a structural guarantee so no debug
+        // script has to remember to switch it off.
+        private bool colourKeyDisabled;
 
         private long totalFramesPosted;
         private double lastFps;
@@ -144,18 +162,22 @@ namespace SpwFolia
         // now driven straight through the layered-window API, so nothing is presented un-keyed.
         private bool transparencyVisualApplied;
         private bool pendingTransparencyApply;
-        // v0.4.0: elegant intro veil that covers the open transition. It fades in from transparent to
-        // opaque over `curtainFadeInMs` (0.3-2.0 s from the 配置 page) in cover-derived colours, then
-        // reveals once the page has painted, or after a fallback timeout; SPW_FOLIA_CURTAIN=0 disables
-        // it for A/B measurement.
-        private IntroCurtain introCurtain;
-        private bool introCurtainShown;
-        private bool introCurtainRevealed;
-        private long introCurtainShownAt;
+        // v0.4.8: the opening animation is Folia's own `#app-splash` (dark backdrop, letter-hopping
+        // "F o l i a" wordmark, 13-bar waveform) — drawn by the page, not by this process. The host
+        // only decides when it goes away: Shim.js re-injects the splash when the URL carries
+        // `splash=1` (upstream removes it whenever `obs=1` is present, and obs=1 is mandatory here),
+        // and TickSplash() calls `window.__spwHideSplash()` once the page has painted and the minimum
+        // on-screen time has passed. SPW_FOLIA_CURTAIN=0 still disables the whole thing.
+        private bool splashShown;
+        private bool splashRevealed;
+        private long splashShownAt;
         private long firstPageFrameAt;
-        private int curtainFadeInMs = 800;
-        private const long CurtainFallbackMs = 3400;
-        private const long CurtainFrameGraceMs = 450;
+        private int splashMinMs = 800;
+        private const long SplashFallbackMs = 3400;
+        private const long SplashFrameGraceMs = 450;
+        // v0.4.8: `--splash-duration` is clamped to this range; the plugin sends 0.8 s.
+        private const int SplashMinDurationMs = 300;
+        private const int SplashMaxDurationMs = 2000;
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_LAYERED = 0x00080000;
@@ -295,6 +317,11 @@ namespace SpwFolia
                 catch (Exception ex) { log.Error("dev-settings", ex); }
             }
 
+            // v0.4.9: resolved once, before the first handle/transparency decision, so neither the
+            // constructor path nor the pendingTransparencyApply path can ever paint the key colour.
+            colourKeyDisabled = !ColourKeyAllowed();
+            if (colourKeyDisabled) log.Log("info", "transparency colour-key=off reason=debug-flag");
+
             // v0.1.7: apply the persisted player-page transparency before the window is shown, so a
             // relaunch with the switch on comes up transparent instead of flashing an opaque frame.
             ApplyTransparencyFromSettings();
@@ -321,6 +348,14 @@ namespace SpwFolia
                 catch (Exception ex) { log.Error("transparency-parse", ex); }
             }
             if (args.NoTransparency) on = false;
+            // v0.4.9: with the colour key disabled the window cannot show anything through itself, so a
+            // "transparent" page would only paint holes over black. Keep the page opaque too — that way
+            // a debug capture shows the ordinary player page and never a keyed/holed surface.
+            if (colourKeyDisabled && on)
+            {
+                log.Log("info", "transparency requested but colour-key=off; keeping the page opaque");
+                on = false;
+            }
             bool passthrough = false;
             if (!string.IsNullOrEmpty(settingsRaw))
             {
@@ -358,7 +393,7 @@ namespace SpwFolia
             {
                 // Constructor path: the persisted settings ask for transparency before the host window
                 // exists. Remember it and key the window in the same message that creates the handle,
-                // so the very first presented frame is already colour-keyed (no magenta frame).
+                // so the very first presented frame is already colour-keyed (no key-colour frame).
                 pendingTransparencyApply = true;
                 transparencyTarget = on;
                 return;
@@ -371,8 +406,11 @@ namespace SpwFolia
                 EnsureTransparencyHotkey();
                 if (on) ShowInputCatcher();
                 else HideInputCatcher();
-                if (on) ShowIntroCurtainIfNeeded();
-                log.Log("info", "transparency mode=" + (on ? "on" : "off"));
+                if (on) ShowSplashIfNeeded();
+                // v0.4.9: with the key disabled the window stays opaque, so log what actually happened
+                // rather than the requested mode — a debug run then never claims to be transparent.
+                log.Log("info", "transparency mode=" + (on ? "on" : "off")
+                    + (colourKeyDisabled ? " colour-key=off reason=debug-flag" : ""));
             }
             catch (Exception ex) { log.Error("transparency", ex); }
         }
@@ -380,13 +418,18 @@ namespace SpwFolia
         /// <summary>
         /// v0.4.0: drives the transparency colour key through the layered-window API instead of
         /// WinForms' TransparencyKey. The order matters: for ON the key is installed *before* the form
-        /// paints magenta, so no frame can present the key colour as an opaque surface; for OFF the
+        /// paints the key colour, so no frame can present it as an opaque surface; for OFF the
         /// background is painted black before the key is lifted.
+        ///
+        /// v0.4.9: both branches are no-ops when the colour key is disabled for debugging
+        /// (`--no-colour-key`). The window then stays a plain opaque black surface — no key colour is
+        /// ever painted, so no screenshot can come out magenta. `TransparencyKey` is deliberately not
+        /// set either: that is what used to tint alpha-blended page pixels.
         /// </summary>
         private void ApplyTransparencyVisual(bool on)
         {
             IntPtr hwnd = Handle;
-            if (on)
+            if (on && !colourKeyDisabled)
             {
                 long style = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
                 if ((style & WS_EX_LAYERED) == 0)
@@ -401,6 +444,7 @@ namespace SpwFolia
             }
             else
             {
+                // Opaque: black (the colour key off path, and the --no-colour-key debug path).
                 BackColor = Color.Black;
                 SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
                 webView.DefaultBackgroundColor = Color.Black;
@@ -408,9 +452,35 @@ namespace SpwFolia
             transparencyVisualApplied = true;
         }
 
-        // ------------------------------------------------------- v0.4.0: intro curtain
+        // -------------------------------------------------------- v0.4.9: colour key
 
-        private bool CurtainEnabled()
+        /**
+         * v0.4.9: is the transparency colour key allowed to run? False when the debug flag says so.
+         *
+         * Any run that captures pixels (screenshots, thumbnail generation, layout verification,
+         * recordings) wants this off: with the key live, every page pixel whose alpha is between 0 and
+         * 1 is composited over the key colour, and the old magenta key turned those edges into a pink
+         * haze across the whole frame. Disabling the key keeps the window an ordinary opaque black
+         * surface, so a capture shows what the page actually draws.
+         *
+         * Two ways in, same shape as SplashEnabled():
+         *   --no-colour-key        the flag the debug scripts pass
+         *   SPW_FOLIA_COLOUR_KEY=0 an env escape hatch, for a harness that cannot add arguments
+         */
+        private bool ColourKeyAllowed()
+        {
+            if (args.NoColourKey) return false;
+            string env = Environment.GetEnvironmentVariable("SPW_FOLIA_COLOUR_KEY");
+            return !(env != null && env.Trim() == "0");
+        }
+
+        // -------------------------------------------------------- v0.4.8: opening splash
+
+        /**
+         * The opening animation is on unless the plugin passed --no-curtain (the 配置 page switch is
+         * off) or SPW_FOLIA_CURTAIN=0 is set for A/B measurement.
+         */
+        private bool SplashEnabled()
         {
             if (!args.Curtain) return false;
             string env = Environment.GetEnvironmentVariable("SPW_FOLIA_CURTAIN");
@@ -418,9 +488,9 @@ namespace SpwFolia
         }
 
         /**
-         * v0.4.0: per-monitor scale of the window's monitor. The curtain draws its fixed-size details
-         * (sparks, sweep width, hairline) in physical pixels, so they need this factor to look the
-         * same on a 100 % and a 150 % display; proportional details stay relative to the monitor size.
+         * v0.4.0: per-monitor scale of the window's monitor. Was used by the old veil for its
+         * physical-pixel details; the page-side splash scales itself, but transparency and the
+         * rasterization hand-over still key off the same factor, so it stays.
          */
         private float MonitorScale()
         {
@@ -435,38 +505,31 @@ namespace SpwFolia
             return 1f;
         }
 
-        private void ShowIntroCurtainIfNeeded()
+        /**
+         * v0.4.8: arms the splash clock. The splash itself is a page element — Shim.js installed it
+         * while the document was still parsing (see the shim's splash block), so there is nothing to
+         * draw here. This only records when the timer started, which TickSplash() counts from.
+         *
+         * Called as early as the window handle exists, so the first main-window paint is already
+         * covered — that is what hides the colour-key hand-over and the page's black first frame.
+         */
+        private void ShowSplashIfNeeded()
         {
-            if (introCurtainShown || !args.Fullscreen || !CurtainEnabled()) return;
+            if (splashShown || !args.Fullscreen || !SplashEnabled()) return;
             try
             {
-                Screen screen = Screen.FromRectangle(Bounds);
-                if (screen == null) return;
-                float scale = MonitorScale();
-                if (scale <= 0f) scale = 1f;
-                curtainFadeInMs = ClampCurtainDurationMs(args.CurtainDurationSec);
-                Color[] palette = ParseCurtainPalette(args.CurtainPalette);
-                introCurtainShown = true;
-                introCurtainShownAt = clock.ElapsedMilliseconds;
-                introCurtain = new IntroCurtain(screen.Bounds, scale, palette, curtainFadeInMs);
-                introCurtain.Finished = delegate
-                {
-                    SafeBeginInvoke(delegate { DisposeIntroCurtain(); });
-                };
-                introCurtain.Show();
-                // The veil must sit above the (topmost) player window for the opaque session too.
-                introCurtain.RaiseAbove();
-                log.Log("info", "intro curtain shown bounds=" + screen.Bounds.X + "," + screen.Bounds.Y
-                    + " " + screen.Bounds.Width + "x" + screen.Bounds.Height
-                    + " scale=" + scale.ToString("0.##", CultureInfo.InvariantCulture)
-                    + " fadeInMs=" + curtainFadeInMs
-                    + " palette=" + (palette.Length > 0 ? palette.Length.ToString(CultureInfo.InvariantCulture) : "0"));
+                splashMinMs = ClampSplashDurationMs(args.SplashDurationSec);
+                splashShown = true;
+                splashShownAt = clock.ElapsedMilliseconds;
+                log.Log("info", "splash shown source=page minMs=" + splashMinMs
+                    + " frameGraceMs=" + SplashFrameGraceMs
+                    + " fallbackMs=" + SplashFallbackMs);
             }
-            catch (Exception ex) { log.Error("intro-curtain", ex); }
+            catch (Exception ex) { log.Error("splash", ex); }
         }
 
-        /** v0.4.0: config seekbar bounds 0.3-2.0 s; anything else falls back to 0.8 s. */
-        private static int ClampCurtainDurationMs(double seconds)
+        /** v0.4.8: `--splash-duration` bounds 0.3-2.0 s; anything else falls back to 0.8 s. */
+        private static int ClampSplashDurationMs(double seconds)
         {
             if (double.IsNaN(seconds) || seconds <= 0) seconds = 0.8;
             if (seconds < 0.3) seconds = 0.3;
@@ -474,66 +537,65 @@ namespace SpwFolia
             return (int)Math.Round(seconds * 1000.0);
         }
 
-        /** v0.4.0: parses the plugin's `#RRGGBB,#RRGGBB,…` cover palette; empty on any problem. */
-        private static Color[] ParseCurtainPalette(string csv)
+        /**
+         * v0.4.8: decides when the page splash fades out and tells the page to do it.
+         *
+         * Two gates, same shape as the v0.4.0 veil so the transparent/passthrough hand-over keeps its
+         * guarantees:
+         *   1. the splash must have been on screen for `splashMinMs` — otherwise a fast warm start
+         *      flashes the wordmark for a frame or two;
+         *   2. the page must have painted its first frame *and* `SplashFrameGraceMs` must have elapsed
+         *      since then — firstPageFrameAt comes from the page's own rAF meter, so this is real
+         *      pixels, not navigation-completed. Revealing earlier shows a black frame (or, in a
+         *      colour-keyed session, an un-keyed magenta one) before the lyrics appear.
+         *
+         * `SplashFallbackMs` is the escape hatch: when the page never reports a frame (bundle broken,
+         * GPU process gone) the splash would otherwise stay up forever and hide the failure.
+         */
+        private void TickSplash()
         {
-            if (string.IsNullOrEmpty(csv)) return new Color[0];
-            string[] parts = csv.Split(',');
-            List<Color> colors = new List<Color>(parts.Length);
-            for (int i = 0; i < parts.Length; i++)
-            {
-                string part = (parts[i] ?? "").Trim();
-                if (part.Length == 0) continue;
-                if (part[0] != '#') part = "#" + part;
-                try { colors.Add(ColorTranslator.FromHtml(part)); }
-                catch (Exception) { }
-            }
-            return colors.ToArray();
-        }
-
-        private void TickIntroCurtain()
-        {
-            if (!introCurtainShown || introCurtainRevealed || introCurtain == null) return;
+            if (!splashShown || splashRevealed) return;
             long now = clock.ElapsedMilliseconds;
-            long shownFor = now - introCurtainShownAt;
+            long shownFor = now - splashShownAt;
             bool pagePainted = firstPageFrameAt > 0;
-            bool frameGraceElapsed = pagePainted && (now - firstPageFrameAt) >= CurtainFrameGraceMs;
-            // v0.4.0: the fade-in itself must finish before the veil lifts (user-tunable 0.3-2.0 s);
-            // the fallback only fires when the page never reports a frame at all.
-            if ((shownFor >= curtainFadeInMs && frameGraceElapsed) || shownFor >= curtainFadeInMs + CurtainFallbackMs)
-            {
-                introCurtainRevealed = true;
-                log.Log("info", "intro curtain reveal pagePainted=" + (pagePainted ? "yes" : "no")
-                    + " shownForMs=" + shownFor + " fadeInMs=" + curtainFadeInMs);
-                try { introCurtain.BeginReveal(); }
-                catch (Exception ex) { log.Error("intro-curtain", ex); }
-            }
+            bool frameGraceElapsed = pagePainted && (now - firstPageFrameAt) >= SplashFrameGraceMs;
+            bool timedOut = shownFor >= splashMinMs + SplashFallbackMs;
+            if (!(shownFor >= splashMinMs && frameGraceElapsed) && !timedOut) return;
+            splashRevealed = true;
+            log.Log("info", "splash reveal pagePainted=" + (pagePainted ? "yes" : "no")
+                + " shownForMs=" + shownFor + " minMs=" + splashMinMs
+                + (timedOut && !frameGraceElapsed ? " fallback=yes" : " fallback=no"));
+            HideSplashInPage(shownFor);
         }
 
         /**
-         * v0.4.0: the player window is created with `TopMost = args.TopMost` (true for plugin spawns)
-         * and the veil is topmost as well; the window shown *later* wins the z-order, so in an opaque
-         * session the player used to cover the veil entirely — the animation was only visible when the
-         * player was colour-keyed. Pushing the veil to the top of the topmost band fixes that for all
-         * modes (opaque, transparent and transparent + passthrough).
+         * v0.4.8: runs the page's own fade-out (`is-hiding` -> 320 ms ease -> node removed). Kept off
+         * the tick's critical path: ExecuteScriptAsync is async and the tick runs at 60 Hz.
          */
-        private void RaiseIntroCurtain()
+        private async void HideSplashInPage(long shownFor)
         {
-            if (introCurtain == null || introCurtainRevealed) return;
             try
             {
-                introCurtain.RaiseAbove();
+                if (!webviewReady || webView.CoreWebView2 == null)
+                {
+                    log.Log("warn", "splash hide skipped: webview not ready atMs=" + shownFor);
+                    return;
+                }
+                string result = await webView.CoreWebView2.ExecuteScriptAsync(SplashBridge.HideScript);
+                log.Log("info", "splash hide result=" + (result ?? "null") + " atMs=" + shownFor);
             }
-            catch (Exception ex) { log.Error("intro-curtain", ex); }
+            catch (Exception ex) { log.Error("splash-hide", ex); }
         }
 
-        private void DisposeIntroCurtain()
+        /**
+         * v0.4.8: cancels the splash (teardown, or a failed navigation that will never paint).
+         * Idempotent: safe to call from OnFormClosing and from the navigation-failure path.
+         */
+        private void DisposeSplash()
         {
-            IntroCurtain curtain = introCurtain;
-            introCurtain = null;
-            if (curtain == null) return;
-            try { curtain.Close(); } catch (Exception) { }
-            try { curtain.Dispose(); } catch (Exception) { }
+            if (!splashShown || splashRevealed) return;
+            splashRevealed = true;
+            log.Log("info", "splash cancelled reason=teardown");
         }
 
         private void EnsureTransparencyHotkey()
@@ -568,6 +630,10 @@ namespace SpwFolia
             // TransparencyInputCatcher.Forward for the same fix and the v0.1.9 crash it caused).
             if (m.Msg == WM_HOTKEY && unchecked((int)m.WParam.ToInt64()) == TransparencyHotkeyId)
             {
+                // v0.4.9: with the colour key disabled there is no transparency to toggle — the window
+                // is opaque by construction. Swallow the hotkey instead of flipping a state that would
+                // make the debug run look like a transparent session.
+                if (colourKeyDisabled) return;
                 // Toggle: transparency is display-only (the layered colour-key window swallows the
                 // mouse), so the keyboard must be able to leave *and* re-enter the mode.
                 if (transparencyActive) ExitTransparentMode("hotkey");
@@ -587,6 +653,12 @@ namespace SpwFolia
         /// <summary>Keyboard path back into transparent mode; mirrors the page switch on.</summary>
         private void EnterTransparentMode(string source)
         {
+            // v0.4.9: a debug run must stay opaque; entering here would repaint the key colour.
+            if (colourKeyDisabled)
+            {
+                log.Log("info", "transparency enter source=" + source + " skipped colour-key=off");
+                return;
+            }
             log.Log("info", "transparency enter source=" + source);
             SetTransparency(true);
             SyncPageTransparency(true);
@@ -833,7 +905,7 @@ namespace SpwFolia
             ApplyWindowGeometry("handle-created");
             // v0.4.0: when the persisted settings asked for a transparent player page, key the window
             // in the same message that creates it (see SetTransparency's handle-less path), so the first
-            // presented frame is transparent instead of an opaque magenta surface.
+            // presented frame is transparent instead of an opaque key-colour surface.
             if (pendingTransparencyApply)
             {
                 pendingTransparencyApply = false;
@@ -846,10 +918,11 @@ namespace SpwFolia
                 catch (Exception ex) { log.Error("transparency", ex); }
             }
             EnsureTransparencyHotkey();
-            // v0.4.0: the opening animation is shown for every Folia open (not only transparency
-            // sessions), and as early as the handle exists so the first main-window paint is already
-            // covered — that is what hides the magenta hand-over and the page's black first frame.
-            ShowIntroCurtainIfNeeded();
+            // v0.4.8: the opening animation is Folia's own page splash, shown for every Folia open
+            // (not only transparency sessions). Arming the clock as early as the handle exists keeps
+            // the shortest-visible window honest: the page installs the splash while parsing, so by
+            // the time this runs it is already on screen.
+            ShowSplashIfNeeded();
         }
 
         protected override void OnShown(EventArgs e)
@@ -857,17 +930,18 @@ namespace SpwFolia
             base.OnShown(e);
             if (!geometryApplied) ApplyWindowGeometry("shown");
             SyncWebViewBounds("shown");
-            // v0.4.0: the player is shown after the veil and is topmost too, so re-raise the veil
-            // after this window is on screen (required for the opaque session, harmless otherwise).
-            RaiseIntroCurtain();
-            TickIntroCurtain();
+            // v0.4.8: in an opaque session the player is shown after the page splash was installed;
+            // TickSplash only needs the elapsed clock, but running it here closes the gap between the
+            // window becoming visible and the first 60 Hz tick.
+            TickSplash();
         }
 
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
-            // Activation re-orders topmost windows; keep the veil above the player in every mode.
-            RaiseIntroCurtain();
+            // v0.4.8: nothing to do for the splash — it is a page element inside the player window,
+            // so activation re-ordering cannot cover it (the old WinForms veil was a second topmost
+            // window and had to be re-raised here).
         }
 
         protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -1175,7 +1249,7 @@ namespace SpwFolia
                 transparencyHotkeyRegistered = false;
             }
             try { DisposeInputCatcher(); } catch (Exception) { }
-            try { DisposeIntroCurtain(); } catch (Exception) { }
+            try { DisposeSplash(); } catch (Exception) { }
 
             SendClosed();
             log.Log("info", "host-exit code=" + exitCode + " reason=" + closeReason
@@ -1265,6 +1339,21 @@ namespace SpwFolia
                     core.SetVirtualHostNameToFolderMapping(Program.SettingsHost, Path.GetFullPath(args.SettingsDir), CoreWebView2HostResourceAccessKind.Allow);
                 }
 
+                // 旧版残留的 Service Worker 必须在这里清掉，而不是等页面脚本去清。
+                //
+                // v0.1–v0.3 的本地安装直接把 Folia 原始 dist 拷进 web/，那份 bundle 注册了 PWA
+                // service worker（sw.js）。用户的 WebView2 配置目录（%LOCALAPPDATA%\spw-folia\webview）
+                // 是按插件安装目录之外的固定路径复用的，所以升级到 v0.4+（不再分发 sw.js）之后，
+                // 那条 SW 注册仍然留在 profile 里并继续控制 https://spw-folia.local/：
+                // 它的 NavigationRoute 会把任何导航（包括预览 iframe 的 /preview.html）重新导回
+                // index.html —— 预览框里跑的是 OBS 页、拿不到子帧垫片，于是永远收不到 ready，
+                // 4 秒后回退成静态图（现象就是“预览框不显示/显示不全”）。
+                //
+                // Shim.js 里的清理只能对**已经加载完的页面**生效：它在新页面加载后才执行，而
+                // 那次 /preview.html 的导航已经被旧 SW 劫持了。所以必须在这一步、页面第一次
+                // 导航之前清，并且要等清理真正完成（ClearBrowsingDataAsync 返回）再 Navigate。
+                await PurgeStaleServiceWorkersAsync(core);
+
                 core.WebMessageReceived += OnWebMessageReceived;
                 core.NavigationCompleted += OnNavigationCompleted;
                 core.ProcessFailed += OnProcessFailed;
@@ -1284,6 +1373,9 @@ namespace SpwFolia
                     catch (Exception ex) { log.Error("verbose-hooks", ex); }
                 }
 
+                // v0.4.10: no frame-rate script any more — the 配置 page option is gone and the host
+                // always runs uncapped. Shim.js still clears any `visualizer_frame_rate` value left in
+                // localStorage by an older build, so an upgrade cannot keep throttling silently.
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(Program.ShimScript());
                 if (!args.NoOverlay && string.IsNullOrEmpty(args.SettingsDir))
                 {
@@ -1349,9 +1441,9 @@ namespace SpwFolia
         private string ResolveUrl()
         {            if (args.DemoConfig && string.IsNullOrEmpty(args.DevUrl) && string.IsNullOrEmpty(args.Url) && !string.IsNullOrEmpty(args.Bundle))
             {
-                return Program.DefaultBundleUrl;
+                return Program.WithSplashParam(Program.DefaultBundleUrl, SplashEnabled());
             }
-            return Program.BundleUrl(args.DevUrl ?? args.Url);
+            return Program.WithSplashParam(Program.BundleUrl(args.DevUrl ?? args.Url), SplashEnabled());
         }
 
         private void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -1390,6 +1482,52 @@ namespace SpwFolia
             if (configDirty) SendConfigIfNeeded();
         }
 
+        /// <summary>
+        /// 清掉旧版本安装遗留在 WebView2 profile 里的 Service Worker / Cache Storage。
+        ///
+        /// 背景（v0.4.7 修复）：v0.1–v0.3 的本地安装把 Folia 原始 dist 直接拷进 web/，其中
+        /// `sw.js` 是 PWA service worker；而 host 的 WebView2 profile 目录是固定的
+        /// （%LOCALAPPDATA%\spw-folia\webview，与插件版本无关）。升级后 web/ 里不再分发 sw.js，
+        /// 但旧注册仍在 profile 里，继续控制 https://spw-folia.local/ —— 它的 NavigationRoute
+        /// 会把预览 iframe 的 /preview.html 导航重新导回 index.html，预览框于是拿不到子帧垫片
+        /// （永远不 ready → 4 s 后回退静态图，表现为“预览框空白/显示不全”）。
+        ///
+        /// 必须在**第一次 Navigate 之前**完成：页面一旦加载，导航就已经被旧 SW 接管，页面里的
+        /// 清理（Shim.js 里那段）只对后续加载有效。这里按 origin 精确清理，只动我们自己的虚拟
+        /// 主机数据，不碰用户其他站点；清不掉也不算致命（记 warn 继续导航）。
+        /// </summary>
+        private async System.Threading.Tasks.Task PurgeStaleServiceWorkersAsync(CoreWebView2 core)
+        {
+            if (args.NoServiceWorkerPurge) return;
+            try
+            {
+                CoreWebView2Profile profile = core.Profile;
+                if (profile == null) { log.Log("warn", "sw-purge skipped: no profile"); return; }
+                // ServiceWorkers | CacheStorage | DiskCache —— 只有这三类是我们自己的虚拟主机产物。
+                // 不选 AllProfile：那会连设置（localStorage 里的 settings island 快照）一起清掉。
+                CoreWebView2BrowsingDataKinds kinds =
+                    CoreWebView2BrowsingDataKinds.ServiceWorkers
+                    | CoreWebView2BrowsingDataKinds.CacheStorage
+                    | CoreWebView2BrowsingDataKinds.DiskCache;
+                System.Threading.Tasks.Task purge = profile.ClearBrowsingDataAsync(kinds);
+                // 上限 3 s：清理只是“自愈”，不能把宿主启动拖死（冷 profile 上实测 < 200 ms）。
+                System.Threading.Tasks.Task timeout = System.Threading.Tasks.Task.Delay(3000);
+                System.Threading.Tasks.Task finished = await System.Threading.Tasks.Task.WhenAny(purge, timeout);
+                if (finished == timeout)
+                {
+                    log.Log("warn", "sw-purge timeout (3s); navigating anyway");
+                    return;
+                }
+                log.Log("info", "sw-purge done kinds=" + kinds);
+            }
+            catch (Exception ex)
+            {
+                // SDK 版本过老（没有 CoreWebView2Profile）或 profile 正在初始化：记一条日志即可，
+                // 页面侧 Shim.js 的清理解释仍然会兜住“之后的加载”。
+                log.Log("warn", "sw-purge unavailable: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
         private int DpiValue()
         {
             try { return DeviceDpi; } catch (Exception) { return 0; }
@@ -1419,6 +1557,13 @@ namespace SpwFolia
             if (type == "ready")
             {
                 log.Log("info", "page-ready source=" + (JsonUtil.GetString(msg, "source") ?? "?"));
+                // v0.4.10: the shim reports what it removed from localStorage (a cap left behind by an
+                // older build). Logged so a run can prove an upgrade really lifted the cap.
+                string cleared = JsonUtil.ExtractRawValue(raw, "frameRateCleared");
+                if (!string.IsNullOrEmpty(cleared) && cleared != "null")
+                {
+                    log.Log("info", "legacy frame-rate cap cleared " + cleared);
+                }
             }
             else if (type == "bridgeReady")
             {
@@ -1505,14 +1650,37 @@ namespace SpwFolia
                 log.WriteLine("{\"t\":\"log\",\"level\":\"" + JsonUtil.Escape(JsonUtil.GetString(msg, "level") ?? "info")
                     + "\",\"msg\":\"" + JsonUtil.Escape(JsonUtil.GetString(msg, "msg") ?? "") + "\"}");
             }
-            else if (type == "fps")
-            {                lastFps = JsonUtil.GetDouble(msg, "fps", lastFps);
+            else if (type == "splash")
+            {
+                // v0.4.8: page-side timeline of the opening splash (shown / hiding / removed). These
+                // are the evidence lines an acceptance run checks: "did the wordmark appear, and was
+                // it the page's own DOM element, not something this process painted".
+                string splashState = JsonUtil.GetString(msg, "state") ?? "?";
+                log.Log("info", "splash page-state=" + splashState
+                    + " atMs=" + JsonUtil.Num(JsonUtil.GetDouble(msg, "atMs", 0)));
+            }
+            // v0.4.9 (M2): the real first painted frame, reported by Shim.js from its first rAF
+            // callback. This used to be inferred from the first `fps` message, which is only sent once
+            // a full 1 s window has elapsed — so it was ~850 ms late (measured 853-863 ms across
+            // windowed/fullscreen runs) and the splash reveal gate that adds SplashFrameGraceMs on top
+            // kept the opening splash up far longer than configured.
+            if (type == "first-frame")
+            {
                 if (firstPageFrameAt == 0)
                 {
-                    // v0.4.0: first frame the page itself reported after painting — the intro curtain
-                    // waits for this before revealing (see TickIntroCurtain).
                     firstPageFrameAt = clock.ElapsedMilliseconds;
                     log.Log("info", "page first-frame atMs=" + firstPageFrameAt);
+                }
+            }
+            else if (type == "fps")
+            {
+                lastFps = JsonUtil.GetDouble(msg, "fps", lastFps);
+                if (firstPageFrameAt == 0)
+                {
+                    // Fallback: an older page bundle (or a shim that failed to install) still reports
+                    // fps. Late, but better than leaving the splash waiting for its fallback timeout.
+                    firstPageFrameAt = clock.ElapsedMilliseconds;
+                    log.Log("info", "page first-frame atMs=" + firstPageFrameAt + " source=fps-window");
                 }
                 if (!pageViewportLogged)
                 {
@@ -1587,10 +1755,25 @@ namespace SpwFolia
             sb.Append(",\"protocol\":").Append(Program.ProtocolVersion);
             sb.Append(",\"startedAtMs\":").Append(clock.ElapsedMilliseconds);
             string runtime = null;
-            try { runtime = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch (Exception) { }
+            string runtimeError = null;
+            try { runtime = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+            catch (Exception ex) { runtimeError = ex.GetType().Name + ": " + ex.Message; }
             sb.Append(",\"webView2\":").Append(JsonUtil.Str(runtime));
-            sb.Append(",\"dotnet\":").Append(JsonUtil.Str(ReadDotNetRelease()));
+            // v0.4.7: a null value is not 「没装」. Both of these carry the reason the read failed, so
+            // the panel reports *无法判定* with the cause instead of inventing a missing dependency.
+            sb.Append(",\"webView2Error\":").Append(JsonUtil.Str(runtimeError));
+            string dotnetError;
+            string dotnetRelease = ReadDotNetRelease(out dotnetError);
+            sb.Append(",\"dotnet\":").Append(JsonUtil.Str(dotnetRelease));
+            sb.Append(",\"dotnetError\":").Append(JsonUtil.Str(dotnetError));
             sb.Append(",\"os\":").Append(JsonUtil.Str(Environment.OSVersion.VersionString));
+            // v0.4.7: the version the panel actually judges on, plus the same number the plugin side
+            // reads from the registry, so both self-check entry points agree on one Windows identity.
+            // `Environment.OSVersion` honours the app manifest, so its Build is the real build number
+            // (Revision is always 0 there; UBR is separate).
+            sb.Append(",\"windowsBuild\":").Append(Environment.OSVersion.Version.Build);
+            sb.Append(",\"windowsRevision\":").Append(Environment.OSVersion.Version.Revision);
+            sb.Append(",\"windowsVersion\":\"").Append(Environment.OSVersion.Version.ToString()).Append('"');
             sb.Append(",\"os64\":").Append(Environment.Is64BitOperatingSystem ? "true" : "false");
             sb.Append(",\"process64\":").Append(Environment.Is64BitProcess ? "true" : "false");
             sb.Append(",\"bundle\":").Append(JsonUtil.Str(args.Bundle));
@@ -1623,17 +1806,44 @@ namespace SpwFolia
         /// <summary>.NET Framework 4.x `Release` from the registry (4.8 = 528040, 4.8.1 = 533320+).</summary>
         private static string ReadDotNetRelease()
         {
+            string error;
+            return ReadDotNetRelease(out error);
+        }
+
+        /// <summary>
+        /// Same read, with the reason on failure.
+        ///
+        /// v0.4.7: null alone cannot tell 「没装 .NET」 from 「读不到注册表」, and the panel used to
+        /// treat both as a missing dependency. The caller now ships the reason alongside the value so
+        /// the page can report *unknown* instead of inventing a verdict.
+        /// </summary>
+        private static string ReadDotNetRelease(out string error)
+        {
+            error = null;
             try
             {
                 using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.LocalMachine
                     .OpenSubKey("SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full"))
                 {
-                    if (key == null) return null;
+                    if (key == null)
+                    {
+                        error = "注册表键 HKLM\\SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full 不存在";
+                        return null;
+                    }
                     object value = key.GetValue("Release");
-                    return value == null ? null : Convert.ToString(value, Inv);
+                    if (value == null)
+                    {
+                        error = "该键没有 Release 值";
+                        return null;
+                    }
+                    return Convert.ToString(value, Inv);
                 }
             }
-            catch (Exception) { return null; }
+            catch (Exception ex)
+            {
+                error = ex.GetType().Name + ": " + ex.Message;
+                return null;
+            }
         }
 
         /// <summary>The five files that must sit beside the helper, and whether each one is there.</summary>
@@ -1751,7 +1961,7 @@ namespace SpwFolia
         {
             SyncInputCatcherBounds();
             TrackCursor();
-            TickIntroCurtain();
+            TickSplash();
             long now = clock.ElapsedMilliseconds;
             long elapsed = now - lastTick;
             if (lastTick == 0) elapsed = 16;
@@ -2409,6 +2619,11 @@ namespace SpwFolia
                 + ",\"dpr\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "dpr", 0))
                 + ",\"w\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "w", 0))
                 + ",\"h\":" + JsonUtil.Num(JsonUtil.GetDouble(msg, "h", 0))
+                // v0.4.10: `capped` stays as the single frame-rate diagnostic. It is upstream's own
+                // limiter-installed marker (`window.__foliaNativeRequestAnimationFrame`), so `false`
+                // is the positive proof that the deleted 配置 page cap — and any value a previous
+                // build left in localStorage — is really gone. fps numbers alone cannot show that.
+                + ",\"capped\":" + (JsonUtil.GetBool(msg, "capped", false) ? "true" : "false")
                 + ",\"atMs\":" + clock.ElapsedMilliseconds + "}";
             log.WriteLine(line);
             // issue #12: a stall is what users report as "卡顿/掉帧"; one log line when a window had

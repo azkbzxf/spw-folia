@@ -39,12 +39,21 @@ for (const area of areas) {
 report.biggest.sort((a, b) => b.bytes - a.bytes);
 report.biggest = report.biggest.slice(0, 15);
 report.totalMB = +(report.totalBytes / 1048576).toFixed(2);
-report.budgetMB = 25;
+// This measures the *staging directory* (uncompressed), which is ~2.2x the `.spmod` a user
+// actually downloads (26.19 MB staging -> 11.89 MB zip at v0.4.7). It is a bloat tripwire, not a
+// user-facing size: the 25 MB it used to carry was compared against a number that had been
+// meaningful before settings-island dedupe, so a healthy package reported OVER (see P4-10).
+// The budget that protects users is enforced on the shipped `.spmod` in assemble-release.py.
+// Kept at 32 MB = current 26.19 MB + ~22% headroom: enough to catch a P4-8-style regression
+// (+54% / +7 MB) on the first run, without flagging normal growth.
+report.budgetMB = 32;
+report.budgetScope = 'staging (uncompressed); the shipped .spmod budget lives in assemble-release.py';
 report.withinBudget = report.totalMB <= report.budgetMB;
 writeFileSync(join(PKG, 'size-report.json'), JSON.stringify(report, null, 2));
 
 const lines = [];
-lines.push(`package size: ${report.totalMB} MB (${report.totalFiles} files) — budget ${report.budgetMB} MB: ${report.withinBudget ? 'OK' : 'OVER'}`);
+lines.push(`staging size: ${report.totalMB} MB (${report.totalFiles} files) — tripwire ${report.budgetMB} MB: ${report.withinBudget ? 'OK' : 'OVER'}`);
+lines.push(`  (uncompressed staging is ~2.2x the shipped .spmod; the user-facing budget is checked at assembly)`);
 for (const area of areas) {
   const a = report.areas[area];
   lines.push(`  ${area.padEnd(9)} ${String(a.files).padStart(4)} files  ${String(a.mb).padStart(7)} MB`);

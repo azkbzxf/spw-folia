@@ -33,6 +33,16 @@ internal class FoliaSettingsStore(
     @Volatile private var pending: String? = null
     private var pendingSince: Long = 0L
 
+    /** Set by [shutdown]; stops [persist] from arming a flusher on a terminated executor. */
+    @Volatile private var closed = false
+
+    /**
+     * Whether this instance already armed its flusher. Must stay per-instance: SPW reloads plugins
+     * in place, and a `companion object` flag would survive into the replacement store, which would
+     * then never arm again and silently stop persisting settings for the rest of the session.
+     */
+    @Volatile private var flusherArmed = false
+
     /** Loads the persisted tree, falling back to the bundled canonical default tree. */
     fun load(): String {
         var helper: ConfigHelper? = null
@@ -93,9 +103,20 @@ internal class FoliaSettingsStore(
             }
         }
         // scheduleAtFixedRate is idempotent enough here: only the first call schedules the flusher.
-        if (!flusherArmed) {
+        // Guard the arm against a store that has already been shut down: SPW reloads plugins in
+        // place (stop() then start() on a new instance), but the stdout reader can deliver one last
+        // settings message to the old instance after stop(). Submitting to a terminated executor
+        // throws RejectedExecutionException out of the reader loop, which is the worst place for it.
+        synchronized(this) {
+            if (closed || flusherArmed) return
             flusherArmed = true
+        }
+        try {
             executor.scheduleAtFixedRate({ flushIfDue() }, DEBOUNCE_MS, DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // Lost the race with shutdown(): harmless, the tree is already persisted by load()'s peer
+            // or will be written on the next instance's first flush.
+            synchronized(this) { flusherArmed = false }
         }
     }
 
@@ -120,6 +141,7 @@ internal class FoliaSettingsStore(
     }
 
     fun shutdown() {
+        closed = true
         executor.shutdownNow()
     }
 
@@ -131,7 +153,12 @@ internal class FoliaSettingsStore(
         for (candidate in candidates) {
             try {
                 val stream = candidate() ?: continue
-                return stream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim()
+                // v0.4.13: collapse to one line. The bundled tree is pretty-printed (7188 bytes /
+                // 268 newlines) while everything the page persists is compact, so the plugin would
+                // alternate between two byte-different spellings of the same settings on every
+                // restart — and the pretty spelling could not cross the line protocol at all
+                // (see Json.singleLine). One canonical spelling, everywhere.
+                return Json.singleLine(stream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim())
             } catch (_: Throwable) {
             }
         }
@@ -146,8 +173,5 @@ internal class FoliaSettingsStore(
 
         /** `"textureResolution":1.5` in the compact JSON the settings UI persists. */
         private val TEXTURE_15 = Regex("\"textureResolution\"\\s*:\\s*1\\.5(?=[,}])")
-
-        @Volatile
-        private var flusherArmed = false
     }
 }

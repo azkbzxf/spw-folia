@@ -1,4 +1,4 @@
-/* The 15 lyric styles in Folia's shelf order (each entry's `order` ascending), with the real settings
+/* The 17 lyric styles in Folia's shelf order (each entry's `order` ascending), with the real settings
  * panel its registry entry renders and the beat effects it declares. Only the panels are reused; the
  * style previews are static frames captured from the real renderers (poc/webview/server/out/styles). */
 import React from 'react';
@@ -15,6 +15,8 @@ import SonnetSettingsPanel from '@/components/visualizer/sonnet/SonnetSettingsPa
 import TemperaSettingsPanel from '@/components/visualizer/tempera/TemperaSettingsPanel';
 import LumiereSettingsPanel from '@/components/visualizer/lumiere/LumiereSettingsPanel';
 import HanabiSettingsPanel from '@/components/visualizer/hanabi/HanabiSettingsPanel';
+import MachiSettingsPanel from '@/components/visualizer/machi/MachiSettingsPanel';
+import NebbiaSettingsPanel from '@/components/visualizer/nebbia/NebbiaSettingsPanel';
 import PendoloSettingsPanel from '@/components/visualizer/pendolo/PendoloSettingsPanel';
 import { MonetSettingsPanel } from '@/components/visualizer/monet/MonetSettingsPanel';
 import { BEAT_EFFECT_IDS, type BeatEffectDef } from '@/components/../services/beatFx/beatEffects';
@@ -65,6 +67,18 @@ export const STYLE_ENTRIES: StyleEntry[] = [
         thumb: stylePreviewUrl('tempera'),
         renderSettingsPanel: panel(TemperaSettingsPanel),
         ownFontSizeNoticeKey: 'options.temperaFontSizeAutoNotice',
+        // 0.7.25 gave 凝彩 its first beat effect: the ink flashed on htdemucs drum hits. Declared here
+        // exactly as tempera/entry.tsx does; the tempera tuning panel also gained the three 墨染奥行
+        // depth sliders (depthOfField / depthPan / glyphDepth) in the same release, which is another
+        // strength the effect's slider scales.
+        beatEffects: [
+            {
+                id: BEAT_EFFECT_IDS.temperaInkFlash,
+                nameKey: 'options.beatEffect_temperaInkFlash',
+                descKey: 'options.beatEffect_temperaInkFlashDesc',
+                source: 'drums',
+            },
+        ],
     },
     {
         mode: 'lumiere',
@@ -95,6 +109,64 @@ export const STYLE_ENTRIES: StyleEntry[] = [
                 nameKey: 'options.beatEffect_hanabiBeatPulse',
                 descKey: 'options.beatEffect_hanabiBeatPulseDesc',
                 source: 'beats',
+            },
+        ],
+    },
+    /* 0.7.25 町景 (order 27) and 雾笺 (order 29) — the two styles upstream added between 花火 (26) and
+     * 古典 (30). Everything below is copied from their own `entry.tsx` declarations: the beat effects
+     * are the entry's list verbatim (ids, i18n keys, source and — for 雾笺 — the two parts), because
+     * `BEAT_EFFECT_IDS` and `beatEffects.ts` own that vocabulary and this page must not restate it. */
+    {
+        mode: 'machi',
+        order: 27,
+        labelKey: 'ui.visualizerMachi',
+        labelFallback: '町景',
+        thumb: stylePreviewUrl('machi'),
+        renderSettingsPanel: panel(MachiSettingsPanel),
+        ownFontSizeNoticeKey: 'options.machiFontSizeAutoNotice',
+        // 智能动感模式 (machi/entry.tsx): the neon swells on the beats, each kick rings a ripple over
+        // the wet ground and each snare flashes the lyric screen (htdemucs_gpu drum hits).
+        beatEffects: [
+            {
+                id: BEAT_EFFECT_IDS.machiNeonPulse,
+                nameKey: 'options.beatEffect_machiNeonPulse',
+                descKey: 'options.beatEffect_machiNeonPulseDesc',
+                source: 'beats',
+            },
+            {
+                id: BEAT_EFFECT_IDS.machiDrumRipple,
+                nameKey: 'options.beatEffect_machiDrumRipple',
+                descKey: 'options.beatEffect_machiDrumRippleDesc',
+                source: 'drums',
+            },
+            {
+                id: BEAT_EFFECT_IDS.machiScreenFlash,
+                nameKey: 'options.beatEffect_machiScreenFlash',
+                descKey: 'options.beatEffect_machiScreenFlashDesc',
+                source: 'drums',
+            },
+        ],
+    },
+    {
+        mode: 'nebbia',
+        order: 29,
+        labelKey: 'ui.visualizerNebbia',
+        labelFallback: '雾笺',
+        thumb: stylePreviewUrl('nebbia'),
+        renderSettingsPanel: panel(NebbiaSettingsPanel),
+        // 疏雨轻车 (nebbia/entry.tsx): one effect, two parts, both read from the htdemucs run
+        // (`source: 'stems'`): rain follows the vocal stem, the bus jolts on the kicks. Each part gets
+        // its own strength slider, so the `parts` keys are part of the declaration, not decoration.
+        beatEffects: [
+            {
+                id: BEAT_EFFECT_IDS.nebbiaDrizzleRide,
+                nameKey: 'options.beatEffect_nebbiaDrizzleRide',
+                descKey: 'options.beatEffect_nebbiaDrizzleRideDesc',
+                source: 'stems',
+                parts: [
+                    { key: 'rain', nameKey: 'options.beatEffectPart_nebbiaRain' },
+                    { key: 'bump', nameKey: 'options.beatEffectPart_nebbiaBump' },
+                ],
             },
         ],
     },
@@ -219,7 +291,7 @@ export const STYLE_COUNT = STYLE_ENTRIES.length;
  * `STYLE_MODE_SHELF_ORDER` (settings.ts: what 随机歌词样式 draws from and what the store normalises
  * pools against). Adding a style to one of them and forgetting the other would silently desync the
  * shelf from the random pool, so the two lists are compared once, at module load, and a mismatch
- * throws at once instead of quietly shipping 15 tiles over a 14-mode pool.
+ * throws at once instead of quietly shipping 17 tiles over a 16-mode pool.
  * `./settings` imports nothing from this module by value (only the `StyleMode` type is declared
  * here, and `import type` is erased), so importing the order back is not a cycle. */
 const declaredShelfOrder = [...STYLE_ENTRIES]

@@ -63,10 +63,11 @@ namespace SpwFolia
         public bool OpenSettings;   // first run: open the injected settings UI once it is ready
         public double ExitAfterFps; // diagnostic: close when a page fps sample >= this
         public bool NoTransparency; // v0.1.7: force the window opaque (diagnostics/kill switch)
-        public bool Curtain = true; // v0.4.0: intro transition animation (--no-curtain disables it)
-        public double CurtainDurationSec = 0.8; // v0.4.0: fade-in duration, clamped to 0.3-2.0
-        public string CurtainPalette; // v0.4.0: cover-derived "#RRGGBB,#RRGGBB,…" for the curtain
+        public bool NoColourKey;    // v0.4.9: debug capture path — never install the colour key
+        public bool Curtain = true; // v0.4.8: opening splash on by default (--no-curtain disables it)
+        public double SplashDurationSec = 0.8; // v0.4.8: min on-screen time, clamped to 0.3-2.0 s
         public bool VerboseLog;     // issue #12: extra diagnostics (env report, page console, timings)
+        public bool NoServiceWorkerPurge; // v0.4.7: skip the startup SW/cache purge (diagnostics only)
         public string LogFile;      // issue #12: the plugin's host log path, reported in the env report
 
         public static CliArgs Parse(string[] argv)
@@ -112,9 +113,22 @@ namespace SpwFolia
                     case "--bundle-version": a.BundleVersion = Next(argv, ref i); break;
                     case "--open-settings": a.OpenSettings = true; break;
                     case "--no-transparency": a.NoTransparency = true; break;
+                    // v0.4.9: debug runs capture pixels; the colour key would tint every page pixel whose
+                    // alpha is between 0 and 1 and put that tint into the capture. See ColourKeyAllowed().
+                    case "--no-colour-key": a.NoColourKey = true; break;
+                    case "--no-color-key": a.NoColourKey = true; break;
+                    case "--no-sw-purge": a.NoServiceWorkerPurge = true; break;
+                    // v0.4.10: the 配置 page frame-rate list is gone, so the host no longer caps
+                    // anything and always runs at the display's refresh rate. The flag is still
+                    // *accepted and ignored* so a stale plugin build that still sends it keeps
+                    // spawning instead of tripping an "unknown argument" path.
+                    case "--frame-rate": Next(argv, ref i); break;
                     case "--no-curtain": a.Curtain = false; break;
-                    case "--curtain-duration": a.CurtainDurationSec = ParseDouble(Next(argv, ref i), 0.8); break;
-                    case "--curtain-palette": a.CurtainPalette = Next(argv, ref i); break;
+                    case "--splash-duration": a.SplashDurationSec = ParseDouble(Next(argv, ref i), 0.8); break;
+                    // v0.4.8: accepted and ignored so older plugin builds (which still pass the
+                    // cover palette for the removed veil) keep spawning without an unknown-arg bump.
+                    case "--curtain-duration": a.SplashDurationSec = ParseDouble(Next(argv, ref i), 0.8); break;
+                    case "--curtain-palette": Next(argv, ref i); break;
                     case "--exit-after-fps": a.ExitAfterFps = ParseInt(Next(argv, ref i), 0); break;
                     case "--width": a.WindowWidth = ParseInt(Next(argv, ref i), 1280); break;
                     case "--height": a.WindowHeight = ParseInt(Next(argv, ref i), 720); break;
@@ -486,6 +500,55 @@ namespace SpwFolia
         public static string BundleUrl(string overrideUrl)
         {
             return string.IsNullOrEmpty(overrideUrl) ? DefaultBundleUrl : overrideUrl;
+        }
+
+        /**
+         * v0.4.8: adds `splash=1` to the bundle URL so Shim.js installs Folia's own opening splash.
+         *
+         * Why not just drop `obs=1`? That parameter is what makes src/utils/appSurface.ts pick the OBS
+         * React root. Without it the page mounts the main app window, which expects a full player UI
+         * and an Electron bridge this host does not provide — the page fails instead of showing the
+         * visualizer. So obs=1 stays and the splash gets its own parameter, which only the shim reads
+         * (upstream index.html understands `splash=0` = remove and nothing else).
+         *
+         * `splash=0` is written when the switch is off, so the page cannot show a splash the host will
+         * never fade out. Splash is only armed for fullscreen opens (see ShowSplashIfNeeded), and the
+         * thumbnail/verification runs pass --no-curtain, which lands here as splash=0.
+         */
+
+        public static string WithSplashParam(string url, bool enabled)
+        {
+            if (string.IsNullOrEmpty(url)) return url;
+            string[] parts = url.Split('#');
+            string head = parts[0];
+            string hash = parts.Length > 1 ? "#" + parts[1] : "";
+            head = RemoveQueryParam(head, SplashBridge.UrlParam);
+            if (!enabled) return head + hash;
+            char separator = head.IndexOf('?') >= 0 ? '&' : '?';
+            return head + separator + SplashBridge.UrlParam + "=1" + hash;
+        }
+
+        /** Drops every occurrence of `name` (and its value) from a URL's query string. */
+        private static string RemoveQueryParam(string url, string name)
+        {
+            int question = url.IndexOf('?');
+            if (question < 0) return url;
+            string prefix = url.Substring(0, question);
+            string query = url.Substring(question + 1);
+            string[] pairs = query.Split('&');
+            StringBuilder kept = new StringBuilder();
+            for (int i = 0; i < pairs.Length; i++)
+            {
+                string pair = pairs[i];
+                if (pair.Length == 0) continue;
+                int equals = pair.IndexOf('=');
+                string key = equals < 0 ? pair : pair.Substring(0, equals);
+                if (key == name) continue;
+                if (kept.Length > 0) kept.Append('&');
+                kept.Append(pair);
+            }
+            if (kept.Length == 0) return prefix;
+            return prefix + "?" + kept.ToString();
         }
 
         /// <summary>

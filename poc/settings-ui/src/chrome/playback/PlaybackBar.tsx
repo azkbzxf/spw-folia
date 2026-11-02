@@ -10,6 +10,8 @@ import {
 } from '~/bridge';
 import { clockPosition, formatTime, usePlaybackClock, type PlaybackClock } from './playbackClock';
 import PlaybackQueuePanel from './PlaybackQueuePanel';
+/* v0.4.10: 配置 page 显示播放条 switch (plugin-owned; read-only injected settings-tree member). */
+import { useShowPlaybackBar } from '~/model/useInjectedSwitch';
 
 /**
  * v0.3.0 · bottom-centre playback HUD.
@@ -118,6 +120,9 @@ interface DragState {
 const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
     const mousePassthrough = useSettingsStore((s) => s.mousePassthrough);
     const flat = useSettingsStore((s) => s.transparentPlayerBackground);
+    /* v0.4.10: the 配置 page switch. Off means the HUD never mounts at all — no pixels and, with it,
+     * no hit region, which is why this is a guard here rather than `display:none` in the markup. */
+    const showPlaybackBar = useShowPlaybackBar();
     /* 0.7.22 随机歌词样式: the 重抽 chip ("draw another style from the pool") only exists while the
      * per-song random draw is on — the same rule Folia's own appearance section uses. */
     const randomSongMode = useSettingsStore((s) => s.randomVisualizerModePerSong);
@@ -398,7 +403,7 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
     }, [queue?.random]);
 
     const visible = meta.durationMs > 0;
-    if (mousePassthrough || settingsOpen || !visible) return null;
+    if (!showPlaybackBar || mousePassthrough || settingsOpen || !visible) return null;
 
     const randomActive = queue?.mode === 'random' || queue?.random === true;
     const position = clockRef.current ? clockPosition(clockRef.current) : 0;

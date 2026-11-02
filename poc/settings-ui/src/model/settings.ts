@@ -26,8 +26,11 @@ import {
 import { getStyleTransparencyCompat } from './transparencyCompat';
 import { systemPrefersLight } from './theme';
 /* 0.7.22 花火's tuning defaults live with the style's own module, not in `src/types.ts` (unlike the
- * 14 older styles), so they are imported from there. */
+ * 14 older styles), so they are imported from there.
+ * 0.7.25 町景 / 雾笺 follow the same convention: both keep their defaults next to the style. */
 import { DEFAULT_HANABI_TUNING } from '@/components/visualizer/hanabi/types';
+import { DEFAULT_MACHI_TUNING } from '@/components/visualizer/machi/types';
+import { DEFAULT_NEBBIA_TUNING } from '@/components/visualizer/nebbia/types';
 
 export type StyleMode =
     | 'sonnet'
@@ -35,6 +38,10 @@ export type StyleMode =
     | 'lumiere'
     /** 0.7.22 花火: order 26, between 绘光 (25) and 古典 (30) on Folia's own shelf. */
     | 'hanabi'
+    /** 0.7.25 町景: order 27, three.js miniature town dioramas; signs carry the lyrics. */
+    | 'machi'
+    /** 0.7.25 雾笺: order 29, writing the lyrics on a fogged-up bus window. */
+    | 'nebbia'
     | 'classic'
     | 'cadenza'
     | 'partita'
@@ -59,6 +66,8 @@ export const STYLE_TUNING_DEFAULTS: Record<StyleMode, Record<string, unknown>> =
     tempera: { ...DEFAULT_TEMPERA_TUNING },
     lumiere: { ...DEFAULT_LUMIERE_TUNING },
     hanabi: { ...DEFAULT_HANABI_TUNING },
+    machi: { ...DEFAULT_MACHI_TUNING },
+    nebbia: { ...DEFAULT_NEBBIA_TUNING },
     classic: { ...DEFAULT_CLASSIC_TUNING },
     cadenza: { ...DEFAULT_CADENZA_TUNING },
     partita: { ...DEFAULT_PARTITA_TUNING },
@@ -78,6 +87,8 @@ export const STYLE_TUNING_KEYS: Record<StyleMode, string> = {
     tempera: 'temperaTuning',
     lumiere: 'lumiereTuning',
     hanabi: 'hanabiTuning',
+    machi: 'machiTuning',
+    nebbia: 'nebbiaTuning',
     classic: 'classicTuning',
     cadenza: 'cadenzaTuning',
     partita: 'partitaTuning',
@@ -102,8 +113,8 @@ export const BACKGROUND_TUNING_DEFAULTS: Record<'monet' | 'nomand' | 'latent' | 
  *  `styles.tsx` imports `StyleMode` from this module — a value import back would be a cycle.
  *  `styles.tsx` asserts the two lists agree at module load. */
 export const STYLE_MODE_SHELF_ORDER: StyleMode[] = [
-    'sonnet', 'tempera', 'lumiere', 'hanabi', 'classic', 'cadenza', 'partita', 'fume',
-    'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
+    'sonnet', 'tempera', 'lumiere', 'hanabi', 'machi', 'nebbia', 'classic', 'cadenza', 'partita',
+    'fume', 'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
 ];
 
 /** 0.7.22 随机歌词样式's default pool: every style ticked, in Folia's shelf order. */

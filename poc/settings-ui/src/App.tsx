@@ -39,6 +39,8 @@ import {
     type HitRegion,
 } from '~/bridge';
 import PlayerBackgroundControl from '~/chrome/PlayerBackgroundControl';
+/* v0.4.11: 配置 page 「显示问题反馈按钮」 switch (plugin-owned injected member; default off). */
+import { useShowProblemButton } from '~/model/useInjectedSwitch';
 /* issue #12 增加日志功能: 「出现问题」 environment self-check + pre-filled feedback panel. */
 import ProblemReportPanel from '~/chrome/ProblemReportPanel';
 /* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar). */
@@ -68,6 +70,10 @@ const App: React.FC<AppProps> = ({ injected }) => {
     /** issue #12: 「出现问题」 environment self-check + feedback panel. */
     const [problemPanelOpen, setProblemPanelOpen] = useState(false);
     const visualizerMode = state.visualizerMode;
+    /* v0.4.11: off by default — the 救生圈 button sits over the artwork and is rarely needed twice.
+     * The same self-check stays reachable from SPW 配置 → 支持与反馈 → 出现问题, which also works
+     * when the player window itself fails to open. */
+    const showProblemButton = useShowProblemButton();
     /** v0.1.7: with the player background transparent the page is click-through on its keyed pixels,
      *  so the chrome buttons must stay pinned on screen — otherwise they could never be clicked again. */
     const chromeAlwaysOn = state.transparentPlayerBackground === true;
@@ -127,6 +133,11 @@ const App: React.FC<AppProps> = ({ injected }) => {
 
     useEffect(() => subscribeSettingsRoundTrip(), []);
     useEffect(() => setSettingsUiOpenState(open), [open]);
+
+    // v0.4.11: if the button is switched off while its panel is open, take the panel down with it.
+    useEffect(() => {
+        if (!showProblemButton && problemPanelOpen) setProblemPanelOpen(false);
+    }, [showProblemButton, problemPanelOpen]);
 
     const close = useCallback(() => {
         setOpen(false);
@@ -373,19 +384,25 @@ const App: React.FC<AppProps> = ({ injected }) => {
             {/* issue #12: 「出现问题」 entry point next to the gear. The SPW 配置 page carries the same
              *  action (`preference_config.json` button → FoliaPlugin.onReportProblem), which is the path
              *  that still works when the player window itself fails to open. */}
-            <button
-                type="button"
-                className="spw-chrome-btn spw-chrome-btn--problem"
-                data-spw-chrome="problem-report"
-                data-visible={chromeAlwaysOn || (chromeVisible && !open) ? 'true' : 'false'}
-                data-flat={chromeAlwaysOn ? 'true' : 'false'}
-                aria-label="出现问题"
-                title="出现问题"
-                onClick={() => setProblemPanelOpen(value => !value)}
-            >
-                <LifeBuoy size={20} strokeWidth={1.75} />
-            </button>
-            <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
+            {/* v0.4.11: the switch decides whether this exists at all — a CSS-hidden button would
+             *  still report a hit region and would still own ESC through ProblemReportPanel. */}
+            {showProblemButton ? (
+                <>
+                    <button
+                        type="button"
+                        className="spw-chrome-btn spw-chrome-btn--problem"
+                        data-spw-chrome="problem-report"
+                        data-visible={chromeAlwaysOn || (chromeVisible && !open) ? 'true' : 'false'}
+                        data-flat={chromeAlwaysOn ? 'true' : 'false'}
+                        aria-label="出现问题"
+                        title="出现问题"
+                        onClick={() => setProblemPanelOpen(value => !value)}
+                    >
+                        <LifeBuoy size={20} strokeWidth={1.75} />
+                    </button>
+                    <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
+                </>
+            ) : null}
             {/* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar).
              *  Hidden while the settings overlay owns the stage; unmounts itself entirely under
              *  mouse passthrough so no pixels and no hit region remain there. */}
@@ -416,6 +433,7 @@ const App: React.FC<AppProps> = ({ injected }) => {
                         onVisualizerModeChange={mode => state.setVisualizerMode(mode)}
                         randomEnabled={state.randomVisualizerModePerSong}
                         onRandomChange={enabled => state.setRandomVisualizerModePerSong(enabled)}
+                        active={open}
                     />
                 )}
             >

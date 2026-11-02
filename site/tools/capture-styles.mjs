@@ -26,8 +26,8 @@ const { chromium } = loadPlaywright();
 const PNG = loadPng();
 
 const ALL_MODES = [
-  'sonnet', 'tempera', 'lumiere', 'classic', 'cadenza', 'partita', 'fume',
-  'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
+  'sonnet', 'tempera', 'lumiere', 'hanabi', 'machi', 'nebbia', 'classic', 'cadenza', 'partita',
+  'fume', 'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
 ];
 
 const OUT = path.resolve(process.argv[2] || path.join(ROOT, '.tmp-capture/scan'));

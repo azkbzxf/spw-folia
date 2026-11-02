@@ -58,7 +58,49 @@ interface PreviewMessage {
     payload?: unknown;
 }
 
-const IFRAME_URL = () => `${window.location.origin}/preview.html?obs=1&preview=1`;
+const IFRAME_URL = (attempt: number) => `${window.location.origin}/preview.html?obs=1&preview=1${attempt > 0 ? `&r=${attempt}` : ''}`;
+
+/**
+ * 旧版安装留下的 Service Worker 会劫持 /preview.html（v0.4.7 报告：“预览框不显示/显示不全”）。
+ *
+ * v0.1–v0.3 的本地安装把 Folia 原始 dist 拷进 web/，那份 bundle 注册了 PWA `sw.js`；而宿主
+ * 的 WebView2 profile 是固定目录，升级后旧注册仍在，它的 NavigationRoute 会把预览 iframe 的
+ * `/preview.html` 导航重新导回 `index.html` —— 子帧里没有 PreviewShim，永远收不到 `ready`。
+ *
+ * 宿主的 `PurgeStaleServiceWorkersAsync` 已在首次导航前清一次；这里是第二道自愈：预览超时时
+ * 在当前页面里注销本 origin 的 SW 并清掉 Cache Storage，然后重建 iframe 重试一次。两级都失败
+ * 才回退静态图，避免“一次旧注册就把预览永久打死”。
+ */
+const purgeStaleServiceWorker = async (): Promise<boolean> => {
+    let purged = false;
+    try {
+        const registrations = await navigator.serviceWorker?.getRegistrations?.();
+        for (const registration of registrations ?? []) {
+            try {
+                await registration.unregister();
+                purged = true;
+            } catch {
+                /* 单条取消失败不影响重试 */
+            }
+        }
+    } catch {
+        /* 没有 serviceWorker API（或已禁用）：不是这条路径的问题 */
+    }
+    try {
+        const keys = await caches?.keys?.();
+        for (const key of keys ?? []) {
+            try {
+                await caches.delete(key);
+                purged = true;
+            } catch {
+                /* 同上 */
+            }
+        }
+    } catch {
+        /* 没有 Cache Storage */
+    }
+    return purged;
+};
 
 const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts, onError }) => {
     const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -70,9 +112,13 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
     const [ready, setReady] = useState(false);
     const [scale, setScale] = useState(0);
     const [hidden, setHidden] = useState(false);
+    /** 重建次数：>0 表示已经清过一次旧 SW 并重新加载 iframe。 */
+    const [attempt, setAttempt] = useState(0);
 
     const readyRef = useRef(false);
     const failedRef = useRef(false);
+    const attemptRef = useRef(0);
+    attemptRef.current = attempt;
     const configRef = useRef(config);
     configRef.current = config;
     const pausedRef = useRef(paused);
@@ -228,14 +274,27 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
         return () => window.removeEventListener('message', onMessage);
     }, [applyUploadedFonts, fail, send]);
 
-    // 4 s without `ready` (missing preview.html, broken shim) → fall back to the static sample. The
-    // clock only runs while the iframe is actually loaded and the stage is visible: the settings
+    // 4 s without `ready` (missing preview.html, broken shim, 旧 SW 劫持) → 先自愈一次，再回退静态图。
+    // The clock only runs while the iframe is actually loaded and the stage is visible: the settings
     // overlay lives in the DOM while closed (display:none), and that must not burn the timeout.
     useEffect(() => {
         if (ready || !shouldLoad || hidden) return undefined;
         readyTimerRef.current = window.setTimeout(() => {
             readyTimerRef.current = null;
-            if (!readyRef.current) fail('preview iframe did not report ready in time');
+            if (readyRef.current) return;
+            if (attemptRef.current === 0) {
+                // 第一次超时：清掉本 origin 的旧 SW / 缓存，然后重建 iframe（只重试一次）。
+                console.warn('[spw-live-preview] preview iframe did not report ready; purging stale service worker and retrying');
+                void purgeStaleServiceWorker().then(purged => {
+                    if (readyRef.current || failedRef.current) return;
+                    console.warn('[spw-live-preview] retrying preview iframe (purged=' + purged + ')');
+                    readyRef.current = false;
+                    setReady(false);
+                    setAttempt(previous => previous + 1);
+                });
+                return;
+            }
+            fail('preview iframe did not report ready in time');
         }, READY_TIMEOUT_MS);
         return () => {
             if (readyTimerRef.current != null) {
@@ -243,7 +302,7 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
                 readyTimerRef.current = null;
             }
         };
-    }, [fail, hidden, ready, shouldLoad]);
+    }, [fail, hidden, ready, shouldLoad, attempt]);
 
     useEffect(() => {
         if (!ready) return;
@@ -302,8 +361,11 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
             {shouldLoad && (
                 <iframe
                     ref={iframeRef}
+                    // 自愈重试必须换一个新文档：React 复用同一个 iframe 时只会改 src，
+                    // 旧文档的 shim 状态（readyRef / 监听器）会带过来，重试就失去意义。
+                    key={attempt}
                     title="歌词动画预览"
-                    src={IFRAME_URL()}
+                    src={IFRAME_URL(attempt)}
                     tabIndex={-1}
                     aria-hidden="true"
                     data-spw-live-preview-iframe="true"

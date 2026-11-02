@@ -39,6 +39,69 @@ internal object Json {
     fun bool(value: Boolean): String = if (value) "true" else "false"
 
     /**
+     * Collapses the insignificant whitespace **outside string literals** so [json] fits on one line.
+     *
+     * This is not cosmetic. The plugin↔helper protocol ([FoliaHostBridge.sendLine]) is line-oriented
+     * on both ends: the plugin writes `line + "\n"` through a `BufferedWriter`, and the helper reads
+     * with `Console.OpenStandardInput()` + `reader.ReadLine()`. A `settings` payload is embedded
+     * **raw** (`"{\"t\":\"settings\",\"settings\":$tree}"`), so any newline inside the tree splits one
+     * logical message into hundreds of physical lines, every one of them invalid JSON. The helper
+     * then drops them all and the page keeps whatever settings it had — which is exactly the v0.4.12
+     * report 「三个开关全部不生效」: the bundled `default-settings.json` is pretty-printed (7188 bytes,
+     * 268 newlines), so on a fresh install / after a settings reset **every** push was lost.
+     *
+     * String content is preserved byte for byte (spaces inside "标题" survive); only whitespace
+     * between tokens is removed. Non-object input is returned unchanged.
+     */
+    fun singleLine(json: String): String {
+        var inString = false
+        var escaped = false
+        val sb = StringBuilder(json.length)
+        for (c in json) {
+            if (inString) {
+                sb.append(c)
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> {
+                    inString = true
+                    sb.append(c)
+                }
+                // JSON needs no whitespace between tokens: `{"a":1,"b":[2]}` parses without any.
+                ' ', '\t', '\n', '\r' -> Unit
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+
+    /** Whether [json] contains a newline / carriage return outside a string literal. */
+    fun needsCollapsing(json: String): Boolean {
+        var inString = false
+        var escaped = false
+        for (c in json) {
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '\n', '\r' -> return true
+            }
+        }
+        return false
+    }
+
+    /**
      * Returns the raw JSON text (object / array / scalar) stored under [key] in [json],
      * or null when the key is absent. String aware and brace balanced.
      */
@@ -177,7 +240,44 @@ internal object Json {
         return json.substring(0, last + 1) + inserted + json.substring(last + 1)
     }
 
-    private class MemberSpan(val valueStart: Int, val valueEnd: Int)
+    /**
+     * Returns [json] with the root-level member [key] removed entirely.
+     *
+     * Needed by the "injected member" rule: the page echoes the whole settings tree back on every
+     * interaction, including members the plugin injected for it (`systemFonts`, `showPlaybackBar`).
+     * Those are derived from other state and must never reach the settings file, or the file becomes a
+     * second source of truth that can disagree with the 配置 page.
+     *
+     * Like the other editors this is text surgery, not re-serialisation: exactly one separator comma is
+     * eaten and every other byte survives. Non-object input, or input without the member, is returned
+     * unchanged (byte for byte).
+     */
+    fun withoutMember(json: String, key: String): String {
+        val span = findRootMember(json, key) ?: return json
+        // MemberSpan.keyStart is the index just AFTER the opening quote (that is what the key text
+        // comparison needs), while the removal has to start AT the quote — otherwise the orphaned
+        // quote is left in place and the object stops parsing.
+        val quoteStart = span.keyStart - 1
+        var tail = span.valueEnd
+        while (tail < json.length && json[tail].isJsonSpace()) tail++
+        val hasFollowingComma = tail < json.length && json[tail] == ','
+        // Removing a middle member must eat exactly one separator, or the object ends up with a double
+        // comma. Prefer the following one; fall back to the preceding one when this member is last.
+        val start = if (hasFollowingComma) {
+            quoteStart
+        } else {
+            var before = quoteStart - 1
+            while (before >= 0 && json[before].isJsonSpace()) before--
+            if (before >= 0 && json[before] == ',') before else quoteStart
+        }
+        val end = if (hasFollowingComma) tail + 1 else tail
+        return json.removeRange(start, end)
+    }
+
+    private class MemberSpan(val keyStart: Int, val valueStart: Int, val valueEnd: Int)
+
+    /** JSON's four insignificant whitespace characters (not `String.isWhitespace`). */
+    private fun Char.isJsonSpace(): Boolean = this == ' ' || this == '\t' || this == '\n' || this == '\r'
 
     /** Finds the root-level member [key] (nested keys are ignored) and returns its value span. */
     private fun findRootMember(json: String, key: String): MemberSpan? {
@@ -203,7 +303,7 @@ internal object Json {
             val valueStart = i
             i = endOfValue(json, i)
             if (i < 0) return null
-            if (json.substring(keyStart, keyEnd) == key) return MemberSpan(valueStart, i)
+            if (json.substring(keyStart, keyEnd) == key) return MemberSpan(keyStart, valueStart, i)
             while (i < json.length && json[i].isWhitespace()) i++
             if (i < json.length && json[i] == ',') i++
         }

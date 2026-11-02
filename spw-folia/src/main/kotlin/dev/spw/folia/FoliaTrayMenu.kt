@@ -8,6 +8,7 @@ import com.xuncorp.spw.workshop.api.hook.HookHandle
 import com.xuncorp.spw.workshop.api.hook.MethodHook
 import com.xuncorp.spw.workshop.api.hook.MethodHookParam
 import java.lang.reflect.Constructor
+import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -37,6 +38,17 @@ import java.util.concurrent.atomic.AtomicInteger
  * op is a plain `MenuOp.PlainItem("Folia", ...)`, the same op type the host's own `Item(退出)`
  * produces, which is why it renders as a normal row of the menu and behaves as a sibling of
  * 桌面歌词 in the native menu.
+ *
+ * ## v0.4.12: this half is best-effort, and it is silent when it does not run
+ * `snapshot()` only fires when the host *re-records* the tray menu content. A workshop plugin loads
+ * after SPW has already composed its tray, and `AppTray` hands a remembered lambda to `Tray(...)`,
+ * so in practice `snapshot()` is never called on a normal session: the hook is installed, the tray
+ * row still appears (it comes from [FoliaTrayNative]), and no `tray: recorded scope ops=` line is
+ * ever written. That absence is the *expected* shape of this half, not a bug — do not read the
+ * missing line as "injection failed". The native half owns delivery; this half only helps on a host
+ * build that does re-record, where it is strictly better (no Win32 handle work). Dedupe here is by
+ * *callback identity* against this instance's one shared [composeClickAction], never by label, so a
+ * stale row from an older plugin instance can never be mistaken for ours.
  *
  * ## Why it is safe
  * - `snapshot()` is also called for *nested submenu* scopes; a scope whose ops contain a
@@ -85,10 +97,25 @@ internal class FoliaTrayMenu(
      * items. [FoliaTrayNative] patches the native side deterministically (builder hook + forced
      * `WindowsTrayManager.update`). Created lazily so a broken host build cannot fail plugin start.
      */
-    private val nativePatch by lazy { FoliaTrayNative(log, foliaClickAction()) }
+    private val nativePatch by lazy { FoliaTrayNative(log, composeClickAction) }
+
+    /**
+     * ONE callback object per plugin instance, shared by every op this half records and by the
+     * native half. Dedupe and identity checks compare against this exact reference (v0.4.12: a
+     * previous instance's stale row carries a *different* Function0, so a label match must never be
+     * treated as "ours").
+     */
+    private val composeClickAction: () -> Unit = foliaClickAction()
+
+    /** `MenuOp.PlainItem.getOnClick()` — used for identity dedupe of the recorded op list. */
+    @Volatile
+    private var plainItemOnClickGetter: Method? = null
 
     /** Diagnostic budget for the recorded-scope dump (the log is a file; keep it bounded). */
     private val injectLogLines = AtomicInteger(0)
+
+    /** Set once the hook has been observed running, so "never called" is distinguishable in the log. */
+    private val snapshotSeen = AtomicBoolean(false)
 
     /**
      * Installs the tray hook. Returns true when the hook is live.
@@ -137,6 +164,7 @@ internal class FoliaTrayMenu(
                     "tray patch ready: compose=on " +
                         "native=${if (nativeInstalled) "on" else "off"}"
                 )
+                watchSnapshot()
                 true
             },
             onFailure = {
@@ -152,6 +180,32 @@ internal class FoliaTrayMenu(
         handle = null
         installed.set(false)
         loggedInjection.set(false)
+        snapshotSeen.set(false)
+    }
+
+    /**
+     * One-shot watcher: if `snapshot()` was never called within [SNAPSHOT_WATCH_MS] of install, say
+     * so once. On SPW 1.19.3 this is the normal case (the tray was already composed and `AppTray`
+     * hands a remembered lambda to `Tray(...)`), and the row is delivered by [FoliaTrayNative].
+     * Without this line "no recorded scope ops= log" reads like a broken hook when it is merely
+     * this half not being exercised.
+     */
+    private fun watchSnapshot() {
+        val watcher = Thread({
+            try {
+                Thread.sleep(SNAPSHOT_WATCH_MS)
+            } catch (e: InterruptedException) {
+                return@Thread
+            }
+            if (!snapshotSeen.get() && installed.get()) {
+                log(
+                    "tray: recorded-scope hook not exercised within ${SNAPSHOT_WATCH_MS / 1000} s " +
+                        "(tray was already composed); row delivery is owned by the native half"
+                )
+            }
+        }, "spw-folia-tray-watch")
+        watcher.isDaemon = true
+        watcher.start()
     }
 
     // ------------------------------------------------------------ internals ----
@@ -196,6 +250,10 @@ internal class FoliaTrayMenu(
             return false
         }
         plainItemCtor = ctor
+        plainItemOnClickGetter = runCatching { itemClass.getMethod("getOnClick") }.getOrNull()
+        if (plainItemOnClickGetter == null) {
+            log("tray: MenuOp\$PlainItem.getOnClick() missing; op identity check degrades to label match")
+        }
         return true
     }
 
@@ -206,6 +264,7 @@ internal class FoliaTrayMenu(
     private fun inject(call: MethodHookParam) {
         val ctor = plainItemCtor ?: return
         val ops = call.result as? List<*> ?: return
+        snapshotSeen.set(true)
         if (ops.isEmpty()) return
         if (injectLogLines.getAndIncrement() < 5) {
             log(
@@ -228,18 +287,35 @@ internal class FoliaTrayMenu(
         var insertAt = firstCheckable + 1
         while (insertAt < ops.size && isCheckable(ops[insertAt])) insertAt++
 
-        if (ops.any { isFolia(it) }) return
-
-        val item = ctor.newInstance("Folia", java.lang.Boolean.TRUE, null, foliaClickAction())
-        val merged = ArrayList<Any?>(ops.size + 1)
-        for (i in 0 until insertAt) merged.add(ops[i])
+        // Identity, never label (v0.4.12): only an op carrying THIS instance's callback counts as
+        // ours. A stale op from an older plugin instance (same label, dead Function0) is dropped and
+        // replaced, because the host would otherwise hand its dead callback to the native menu.
+        val own = ops.any { isOwnOp(it) }
+        val stale = ops.filter { it != null && isFolia(it) && !isOwnOp(it) }
+        if (own && stale.isEmpty()) return
+        val kept = ops.filterNot { it != null && isFolia(it) && !isOwnOp(it) }
+        var target = insertAt
+        if (stale.isNotEmpty()) {
+            val firstStale = ops.indexOfFirst { it != null && isFolia(it) && !isOwnOp(it) }
+            if (firstStale >= 0 && firstStale < insertAt) target = firstStale
+        }
+        val item = ctor.newInstance("Folia", java.lang.Boolean.TRUE, null, composeClickAction)
+        val merged = ArrayList<Any?>(kept.size + 1)
+        for (i in 0 until target) merged.add(kept[i])
         merged.add(item)
-        for (i in insertAt until ops.size) merged.add(ops[i])
+        for (i in target until kept.size) merged.add(kept[i])
         call.setResult(merged)
-        // Log only the first time: this runs on the composition thread for every tray menu open, and
-        // log() appends to a file — no need to pay for that on each open.
-        if (loggedInjection.compareAndSet(false, true)) {
-            log("tray: Folia item recorded at index $insertAt/${ops.size} (after 桌面歌词 section)")
+        // The first successful injection is logged once (it runs on the composition thread for every
+        // tray menu open, and log() appends to a file). A STALE REPAIR is different: it is rare, it
+        // means an older plugin instance owned the row, and it is the evidence for this bug class —
+        // so it is always logged, not just on the first call.
+        if (stale.isNotEmpty()) {
+            log(
+                "tray: recorded scope had ${stale.size} stale Folia op(s) (foreign onClick); " +
+                    "replaced with this instance's at index $target/${kept.size}"
+            )
+        } else if (loggedInjection.compareAndSet(false, true)) {
+            log("tray: Folia item recorded at index $target/${kept.size} (identity=new, droppedStale=0)")
         }
     }
 
@@ -259,6 +335,13 @@ internal class FoliaTrayMenu(
         }, "spw-folia-tray-click")
         worker.isDaemon = true
         worker.start()
+    }
+
+    /** True only when the recorded op's `onClick` IS this instance's callback (identity). */
+    private fun isOwnOp(op: Any?): Boolean {
+        if (op == null || op.javaClass.name != "$MENU_OP_CLASS\$PlainItem") return false
+        val getter = plainItemOnClickGetter ?: return false
+        return runCatching { getter.invoke(op) }.getOrNull() === composeClickAction
     }
 
     private fun isFolia(op: Any?): Boolean =
@@ -290,6 +373,9 @@ internal class FoliaTrayMenu(
             "dev.nucleusframework.composenativetray.menu.api.KeyShortcut"
 
         private const val FOLIA_LABEL = "Folia"
+
+        /** How long after install to report "this half was never exercised". */
+        private const val SNAPSHOT_WATCH_MS = 3_000L
 
         /** Op types the host uses for ticked rows; 桌面歌词 is the only one in the tray menu. */
         private val CHECKABLE_OPS = setOf(

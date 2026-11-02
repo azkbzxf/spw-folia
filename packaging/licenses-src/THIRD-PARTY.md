@@ -4,12 +4,13 @@ Bundled in the plugin distribution:
 
 | component | version | license | where | notes |
 | --- | --- | --- | --- | --- |
-| Folia web build (`folia-major`) | 0.7.22 | AGPL-3.0 | `web/**` | Folia build output, redistributed as-is; the only change is in `web/index.html` (two PWA tags removed) |
-| Folia visualizer styles (15 registered styles) | 0.7.22 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface; 0.7.21 had 14, 花火 (hanabi) is new in 0.7.22 |
+| Folia web build (`folia-major`) | 0.7.25 | AGPL-3.0 | `web/**` | unmodified production build except removed PWA tags in `index.html` |
+| Folia visualizer styles (17 registered styles) | 0.7.25 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface; 0.7.22 had 15 (added 花火/hanabi), 0.7.25 adds 町景 (machi) and 雾笺 (nebbia) |
+| AnimCJK stroke medians for 雾笺 (nebbia) | commit `99dba56` | Arphic Public License | `web/nebbia-strokes.json`, license texts in `web/licenses/nebbia-strokes/` | generated at build time by Folia's `dev/nebbia/nebbiaStrokesPlugin.mjs`; derivative of AnimCJK graphics data (see `web/licenses/nebbia-strokes/NOTICE.txt`). Without this file nebbia falls back to font skeleton tracing |
 | spw-folia settings UI | this repo | AGPL-3.0 | `web/settings/**` | React island; reuses Folia components |
-| spw-folia native host | this repo | AGPL-3.0 | `native/spw-folia-host.exe`, `native/spw-folia-host.exe.config` | C#, .NET Framework 4.8 |
-| WASAPI loopback analyzer | this repo | MIT | compiled into `native/spw-folia-host.exe` | original clean-room C#, no NAudio |
-| Microsoft WebView2 SDK | NuGet `Microsoft.Web.WebView2` | Microsoft WebView2 SDK license | `native/Microsoft.Web.WebView2.Core.dll`, `native/Microsoft.Web.WebView2.WinForms.dll`, `native/WebView2Loader.dll` | see `licenses/WebView2-SDK-LICENSE.txt`, `licenses/WebView2-SDK-NOTICE.txt` |
+| spw-folia native host | this repo | AGPL-3.0 | `lib/spw-folia-host.exe` | C#, .NET Framework 4.8 |
+| WASAPI loopback analyzer | this repo | MIT | compiled into host exe | original clean-room C#, no NAudio |
+| Microsoft WebView2 SDK | NuGet `Microsoft.Web.WebView2` (pinned in `docs/host-app.md`) | Microsoft WebView2 SDK license | `lib/Microsoft.Web.WebView2.Core.dll`, `lib/Microsoft.Web.WebView2.WinForms.dll`, `lib/WebView2Loader.dll` | see `licenses/WebView2-SDK-LICENSE.txt`, `notices/WebView2-SDK-NOTICE.txt` |
 | Microsoft .NET Framework 4.8 | system | Microsoft EULA | not redistributed | required on the machine (present on Windows 11) |
 | Microsoft Edge WebView2 Runtime | system | Microsoft EULA | not redistributed | system component, required at runtime |
 

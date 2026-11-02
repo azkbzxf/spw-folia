@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.spw"
-version = "0.4.6"
+version = "0.4.13"
 
 // A global init.gradle on this machine injects Aliyun mirrors into every project and
 // thereby suppresses settings repos, so declare the repositories this build needs here.
@@ -26,6 +26,21 @@ java {
     sourceCompatibility = JavaVersion.VERSION_25
     targetCompatibility = JavaVersion.VERSION_25
 }
+
+// NOTE: `src/main/java/` is a *default* Gradle source set — it needs no configuration here — and it
+// holds exactly one file on purpose: `dev/spw/folia/KotlinMetadata.java`.
+//
+// Do NOT "tidy" that file into Kotlin. It has to read Kotlin's `@Metadata` annotation, and from Kotlin
+// that is not possible without a compile-time dependency on kotlin-stdlib's metadata types:
+//   * `Class.getDeclaredAnnotations()` is mapped to `Array<kotlin.Annotation>`, and that Kotlin type
+//     has no `annotationType()`, so you cannot match the annotation or read its `d2` table;
+//   * the annotation instance is created by the *host's* classloader, so comparing `Class` objects
+//     across loaders always fails — the annotation type must be matched by NAME.
+// Java gets `java.lang.annotation.Annotation[]`, where both are trivial. The plugin deliberately does
+// not take a kotlin-reflect / kotlinx-metadata dependency (the host ships its own Kotlin runtime and
+// the versions drift), so this small Java shim is the dependency-free way to read metadata.
+//
+// Background: docs/upstream-sync.md §11「SPW 宿主升级时的反混淆检查」.
 
 kotlin {
     jvmToolchain(25)
@@ -69,7 +84,7 @@ spmod {
     PluginId = "dev.spw.folia"
     PluginName = "spw-folia"
     PluginDescription = "Folia fullscreen lyric mode for Salt Player for Windows"
-    PluginVersion = "0.4.6"
+    PluginVersion = "0.4.13"
     PluginProvider = "azkbzxf"
     // v0.4.0: preference_config.json declares the plugin's 配置 page (SPW 模组管理 → 配置),
     // which carries the 打开过渡动画 switch read by FoliaPlugin via ConfigManager.
@@ -153,4 +168,43 @@ val syncDevAssets by tasks.registering(Sync::class) {
 
 tasks.named("plugin") {
     dependsOn(syncDevAssets)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unit tests for the 「出现问题」 self-check (v0.4.7)
+//
+// The self-check is pure decision logic over evidence records, so it is tested without SPW: the
+// reg.exe parsing, the version/property decoding and the pass/unknown/fail boundaries are exercised
+// against sample strings taken verbatim from a real Windows 11 machine and from reg.exe's real
+// output. This is what keeps the v0.4.2–0.4.6 class of bug ("a check that can never pass") from
+// coming back: the OS sample below is the exact `os.version` that broke it.
+// ---------------------------------------------------------------------------------------------
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    // The main sources compile against the host's Kotlin stdlib (`compileOnly`), so a test source
+    // set would otherwise have no stdlib on its compile classpath at all (kotlin.Any unresolved).
+    testImplementation(kotlin("stdlib"))
+    // The Compose compiler plugin runs over the test source set too and hard-fails when no Compose
+    // runtime is on its class path. The tests themselves do not use Compose; it only has to exist.
+    testImplementation("org.jetbrains.compose.runtime:runtime-desktop:1.12.1")
+    // Constants such as PluginPermission are read from the real workshop API, so the test class path
+    // needs it as a runtime dependency as well (the main source set only compiles against it).
+    testRuntimeOnly("com.github.Moriafly.spw-workshop-api:spw-workshop-api:0.1.0-dev23")
+}
+
+tasks.withType<Test>().configureEach {
+    // The tests must pass offline and on a machine of any locale.
+    systemProperty("file.encoding", "UTF-8")
+    testLogging { events("passed", "failed", "skipped") }
+}
+
+// Runs the real self-check on THIS machine against the real registry/WebView2/.NET — the check the
+// issue reported as always failing. `gradlew runDiagnostics` prints the evidence and fails the build
+// if the OS check reports FAIL on a healthy machine.
+tasks.register<JavaExec>("runDiagnostics") {
+    group = "verification"
+    description = "Runs the 「出现问题」 self-check on this machine and prints its evidence."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.spw.folia.DiagnosticsMain")
+    args(rootDir.absolutePath, providers.gradleProperty("spwVersion").getOrElse("1.19.3"))
 }

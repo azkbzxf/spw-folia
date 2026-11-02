@@ -209,6 +209,25 @@ body.spw-injected {
     background: rgba(224, 163, 74, 0.08);
 }
 
+/* v0.4.7: three-state rows. `data-ok` still marks the orange failure tint (so an UNKNOWN row can
+ * never look like a broken environment), and these give the other verdicts their own quiet look. */
+.spw-problem-report__row[data-verdict='unknown'] {
+    background: rgba(244, 244, 245, 0.04);
+}
+
+.spw-problem-report__row[data-verdict='unknown'] .spw-problem-report__detail {
+    color: rgba(244, 244, 245, 0.5);
+}
+
+.spw-problem-report__row[data-verdict='advisory'] {
+    background: transparent;
+}
+
+.spw-problem-report__row[data-verdict='advisory'] .spw-problem-report__label,
+.spw-problem-report__row[data-verdict='advisory'] .spw-problem-report__detail {
+    color: rgba(244, 244, 245, 0.45);
+}
+
 .spw-problem-report__label {
     font-weight: 500;
 }

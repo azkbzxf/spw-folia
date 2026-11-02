@@ -375,8 +375,22 @@ export interface EnvReport {
     protocol?: string;
     startedAtMs?: number;
     webView2?: string | null;
+    /** v0.4.7: why `webView2` is null. Absent/null means the read itself succeeded. */
+    webView2Error?: string | null;
     dotnet?: string | null;
+    /** v0.4.7: why `dotnet` is null; lets the panel report 无法判定 instead of 未安装. */
+    dotnetError?: string | null;
     os?: string | null;
+    /**
+     * v0.4.7: the Windows build the panel judges on (`Environment.OSVersion.Version.Build`).
+     * `os` is a display string; this is the number, and the panel must not re-derive it from `os`
+     * when it is present.
+     */
+    windowsBuild?: number | null;
+    /** v0.4.7: `Environment.OSVersion.Version.Revision` (always 0; UBR is separate). */
+    windowsRevision?: number | null;
+    /** v0.4.7: `Environment.OSVersion.Version.ToString()`, e.g. `10.0.26300.0`. */
+    windowsVersion?: string | null;
     os64?: boolean;
     process64?: boolean;
     bundle?: string | null;

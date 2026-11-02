@@ -38,6 +38,9 @@ const child = spawn(EXE, [
     '--user-data', path.join(OUT, 'profile'),
     '--title', 'real preview check',
     '--demo', '--no-topmost',
+    // v0.4.9: this diagnostic captures preview screenshots; the transparency colour key must not tint
+    // any sub-alpha page pixel into them.
+    '--no-colour-key',
 ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: false });
 
 const waiters = [];

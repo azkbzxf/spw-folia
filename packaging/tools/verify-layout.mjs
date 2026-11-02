@@ -30,6 +30,20 @@ for (const p of [exe, join(PKG, 'web', 'index.html'), join(PKG, 'web', 'settings
 const settings = JSON.parse(readFileSync(join(PKG, 'testdata', 'default-settings.json'), 'utf8'));
 if (typeof settings.smartBeat === 'boolean') settings.smartBeat = { enabled: settings.smartBeat, effects: {} };
 
+// The style shelf renders one tile per STYLE_ENTRIES row. Read that number off the packaged settings
+// bundle instead of hardcoding it, so adding a style upstream cannot leave this check asserting a
+// stale count (v0.7.25: 15 → 17 with machi + nebbia). Same entry-table shape the staging thumbnail
+// gate parses; keep the two matchers in sync.
+const settingsBundleText = readFileSync(join(PKG, 'web', 'settings', 'settings-ui.js'), 'utf8');
+const expectedStyles = [...new Set(
+  [...settingsBundleText.matchAll(/mode:`([a-z0-9_-]+)`,order:\d+,[^`]*`[^`]*`,labelFallback:`[^`]*`,thumb:[A-Za-z_$][\w$]*\(`([a-z0-9_-]+)`\)/g)]
+    .map((match) => match[2]),
+)].sort();
+if (expectedStyles.length === 0) {
+  console.error('[verify-layout] cannot read the style shelf table from web/settings/settings-ui.js');
+  process.exit(2);
+}
+
 const LOOP_SECONDS = 16;
 const lyrics = {
   lines: LINES.map((l) => ({
@@ -50,6 +64,9 @@ const args = [
   '--window', '1600x900',
   '--user-data-dir', join(OUT, 'webview2-userdata'),
   '--fps-log', join(OUT, 'packaged-fps.log'),
+  // v0.4.9: this verifier captures layout screenshots. The transparency colour key tints every page
+  // pixel whose alpha is between 0 and 1, so keeping it off is what makes the captures show the page.
+  '--no-colour-key',
 ];
 if (openSettings) args.push('--open-settings');
 
@@ -107,7 +124,7 @@ function startFlow() {
 
   const shot = (name) => send({ t: 'command', command: 'screenshot', path: join(OUT, name) });
   const evalJs = (script) => send({ t: 'command', command: 'eval', script });
-  const probe = () => evalJs("JSON.stringify({hasUi: !!window.__SPW_FOLIA_SETTINGS_UI__, hasBridge: !!window.__SPW_FOLIA__, uiApi: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen), open: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen && window.__SPW_FOLIA__.ui.isSettingsOpen()), canvases: document.querySelectorAll('canvas').length, settingsScripts: [...document.scripts].map(s=>s.src).filter(s=>s.indexOf('/settings/settings-ui.js')>=0 || s.indexOf('spw-folia-settings.local')>=0).length, avatarAssetStatus: (function(){try{var x=new XMLHttpRequest();x.open('GET','/assets/avatar10-CEta-Hap.png',false);x.send();return x.status}catch(e){return 'err'}})()})");
+  const probe = () => evalJs("JSON.stringify({hasUi: !!window.__SPW_FOLIA_SETTINGS_UI__, hasBridge: !!window.__SPW_FOLIA__, uiApi: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen), open: !!(window.__SPW_FOLIA__ && window.__SPW_FOLIA__.ui && window.__SPW_FOLIA__.ui.isSettingsOpen && window.__SPW_FOLIA__.ui.isSettingsOpen()), canvases: document.querySelectorAll('canvas').length, settingsScripts: [...document.scripts].map(s=>s.src).filter(s=>s.indexOf('/settings/settings-ui.js')>=0 || s.indexOf('spw-folia-settings.local')>=0).length, avatarAssetStatus: (function(){try{var x=new XMLHttpRequest();x.open('GET','/assets/avatar10-CEta-Hap.png',false);x.send();return x.status}catch(e){return 'err'}})(), styleThumbs: (function(){var imgs=[].slice.call(document.querySelectorAll('img')).filter(function(i){return /\\/thumbs\\//.test(i.src)});return {total: imgs.length, loaded: imgs.filter(function(i){return i.naturalWidth>0}).length}})(), preview: (function(){var box=document.querySelector('[data-spw-live-preview]');var f=box&&box.querySelector('iframe');return {ready: box?box.getAttribute('data-live-preview-ready'):null, staticFallback: !!document.querySelector('.spw-preview-drift'), childShim: !!(f&&f.contentWindow&&f.contentWindow.__SPW_FOLIA_PREVIEW__), childSplash: !!(f&&f.contentWindow&&f.contentWindow.document&&f.contentWindow.document.getElementById('app-splash'))}})()})");
   const esc = () => evalJs("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); JSON.stringify({esc:'dispatched'})");
 
   setTimeout(probe, 4200);                                             // probe1: first-run state
@@ -147,6 +164,19 @@ child.on('exit', (code) => {
     openSettingsCommand: !!(p.probe3 && p.probe3.open === true),
     escClosedSettingsOnly: !!(p.probe4 && p.probe4.open === false),
     visualizerCanvases: !!(p.probe1 && p.probe1.canvases > 0),
+    // One style tile per shelf entry. The expected count is read from the staged settings bundle
+    // instead of a literal: upstream v0.7.25 added machi + nebbia (15 → 17) and a hardcoded 15 kept
+    // passing while two tiles could render as a broken-image icon (v0.4.7 report).
+    styleThumbsLoaded: !!(p.probe1 && p.probe1.styleThumbs && p.probe1.styleThumbs.total === expectedStyles.length
+      && p.probe1.styleThumbs.loaded === expectedStyles.length),
+    livePreviewReady: !!(p.probe1 && p.probe1.preview && p.probe1.preview.childShim
+      && p.probe1.preview.ready === 'true' && p.probe1.preview.staticFallback === false),
+    // The live-preview child frame must render lyrics only: the splash belongs to the player surface
+    // (the host reveals it on startup), never to a panel the user re-creates while tuning a style.
+    // The pre-boot dark base that stops a white flash is checked in verify-splash-browser.mjs instead:
+    // by the time this probe runs, ObsBrowserSourceApp has deliberately set the body to transparent,
+    // so a background assertion here would test the transparent-playback effect, not the splash strip.
+    previewHasNoSplash: !!(p.probe1 && p.probe1.preview && p.probe1.preview.childSplash === false),
     noConsoleErrors: report.consoleErrors === 0,
   };
   report.screenshots = ['packaged-firstrun-settings.png', 'packaged-visualizer.png'].map((n) => {
@@ -160,6 +190,7 @@ child.on('exit', (code) => {
   const c = report.checks;
   report.pass = c.exitedZero && c.closedUser && c.bridgePresent && c.settingsInjected && c.closeSettingsCommand
     && c.openSettingsCommand && c.escClosedSettingsOnly && c.visualizerCanvases && c.noConsoleErrors && screenshotsPresent
+    && c.styleThumbsLoaded && c.livePreviewReady && c.previewHasNoSplash
     && (!report.openSettings || c.settingsAutoOpened);
   report.finishedAt = new Date().toISOString();
   writeFileSync(join(OUT, 'verify-report.json'), JSON.stringify(report, null, 2));

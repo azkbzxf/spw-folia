@@ -8,7 +8,7 @@ available as follows.
 
 Full source code: this repository. The release artifact contains:
 
-- `native/spw-folia-host.exe` — native host helper, C# (.NET Framework 4.8). Source: `poc/webview/host/`.
+- `lib/spw-folia-host.exe` — native host helper, C# (.NET Framework 4.8). Source: `poc/webview/host/`.
   Build: `bash poc/webview/host/build.sh` (no SDK required; in-box `csc.exe`).
 - `web/settings/` — settings UI island. Source: `poc/settings-ui/`. Build: `pnpm build`
   (Vite, React, imports Folia components from the Folia source checkout).
@@ -18,15 +18,15 @@ Full source code: this repository. The release artifact contains:
 
 ## Folia web assets (`web/`)
 
-`web/` is the production web build of **Folia `folia-major` 0.7.22** (AGPL-3.0), extracted from the
-installed Folia desktop application as distributed to end users. No Folia source is modified.
-`web/index.html` had two non-functional PWA tags removed (service-worker registration + manifest
-link); this one-line change is documented and reproducible.
+`web/` is the unmodified production web build of **Folia `folia-major` 0.7.22** (AGPL-3.0),
+extracted from the installed Folia desktop application as distributed to end users. No Folia
+source is modified. `web/index.html` had two non-functional PWA tags removed (service-worker
+registration + manifest link); this one-line change is documented and reproducible.
 
 To reproduce or modify the Folia part, obtain the upstream Folia source:
 https://github.com/chthollyphile/folia-major, tag `v0.7.22`
 (commit `1f6d0f468f5bc81b23a8b40ad7ca96ccd4b1ecbe`). Run its web build and stage the subset with
-`node packaging/tools/stage-web.mjs`.
+`node packaging/tools/stage-web.mjs` (see `docs/release.md`).
 
 Whoever distributes this plugin (including any modified version) must keep this source offer and
 must offer the Corresponding Source to users interacting with it over a network, per AGPL-3.0 §13.

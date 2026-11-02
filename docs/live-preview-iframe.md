@@ -98,6 +98,32 @@ wrapper { position:absolute; inset:0; overflow:hidden; }
 （暂停或页面隐藏时暂停转发；`paused` 变化时重发）。4s 内未收到 `ready` 或收到 `error` → 预览
 回退为 `StylePreview`（Ken Burns）。
 
+## 旧版 Service Worker 残留（v0.4.7 修复，**排障先看这里**；v0.4.7 未发布，线上 v0.4.6 仍会中招）
+
+症状：预览框整片空白/显示不全，宿主日志里是
+`[spw-live-preview] preview iframe did not report ready in time`，页面本身没有任何报错。
+
+根因：v0.1–v0.3 的本地安装把 Folia **原始 dist** 拷进 `web/`，那份 bundle 注册了 PWA service
+worker（`sw.js`，`NavigationRoute` 覆盖所有导航）。宿主的 WebView2 profile 是固定目录
+（`%LOCALAPPDATA%\spw-folia\webview`，与插件版本无关），升级到 v0.4+（不再分发 sw.js）后旧注册
+仍在 profile 里、继续控制 `https://spw-folia.local/`：预览 iframe 请求的 `/preview.html` 被
+重新导回 `index.html`，子帧里因此没有 `PreviewShim`，永远不 `ready` → 4 s 后回退静态图。
+
+两级修复，缺一不可：
+
+1. **宿主启动清理**（`HostForm.PurgeStaleServiceWorkersAsync`，`--no-sw-purge` 可关）：
+   在**第一次 `Navigate` 之前**调 `CoreWebView2Profile.ClearBrowsingDataAsync(ServiceWorkers |
+   CacheStorage | DiskCache)`，3 s 上限，失败只记 warn 不阻塞启动。必须早于导航：页面一旦加载，
+   那次导航就已经被旧 SW 接管，页面里的清理只对之后的加载有效。
+2. **页面内自愈**（`LivePreview.tsx` 的 `purgeStaleServiceWorker()` + `attempt` 重试）：
+   第一次 4 s 超时后，在当前页注销本 origin 的 SW、清空 Cache Storage，然后用带 `&r=1` 的新 URL
+   重建 iframe（`key={attempt}` 强制换新文档，避免旧文档状态带过来），再给一次 4 s。两级都失败
+   才回退静态图。
+
+验收脚本：`node scripts/repro-stale-sw.mjs <stagedWeb> <profile>`（先用原始 dist 把 sw.js 注册进
+profile，再用打包 bundle 验证预览可用）；`node scripts/probe-heal.mjs <stagedWeb> <profile>`
+（同上但加 `--no-sw-purge`，只验证页面内自愈）。
+
 ## 子帧垫片 `poc/webview/host/PreviewShim.js`
 
 classic script，由 `preview.html` 在 `<head>` 里以 `<script src="/_host/preview-shim.js"></script>` 引入
@@ -147,18 +173,49 @@ classic script，由 `preview.html` 在 `<head>` 里以 `<script src="/_host/pre
 ## Bundle 组装 `packaging/tools/stage-web.mjs`
 
 1. 复制 `poc/webview/host/PreviewShim.js` → `out/_host/preview-shim.js`。
-2. 由 `out/index.html` 生成 `out/preview.html`：在 `<head>` 内**第一个 `<script`（或 `</head>`）之前**插入
-   `<script src="/_host/preview-shim.js"></script>`；其余内容保持一致（`?obs=1` 会让内联脚本移除 splash）。
+2. 由 `out/index.html` 生成 `out/preview.html`：**先剥掉开屏遮罩**，再在 `<head>` 内**第一个 `<script`
+   （或 `</head>`）之前**插入 `<script src="/_host/preview-shim.js"></script>`。
 3. 把 dist 里的占位封面复制到稳定路径：`assets/placeholder_cover-CufMMif3.jpg` → `out/preview/placeholder_cover.jpg`，
    `assets/placeholder_cover-2-BuqqkGqf.jpg` → `out/preview/placeholder_cover-2.jpg`
    （v0.4.1 起预览不再使用这两张图；保留为宿主/插件未来的示例曲资源，不影响预览）。
-4. 报告里加 `previewHtml: true/false`、`previewShimCopied: true/false`。
+4. 报告里加 `previewHtml: true/false`、`previewShimCopied: true/false`、`splash: {…}`、`styleShelf: {…}`。
 5. **本地安装也必须走这个脚本**：`spw-folia/build.gradle.kts` 的 `stageDevWeb`（Gradle 调
    `node packaging/tools/stage-web.mjs --dist poc/webview/dist/dist --out build/web-stage/web --report build/web-stage/report.json`）
    生成与发布包一致的 `web/` 布局，再由 `syncDevAssets` 拷进 `build/plugin-root/web`。
    **不要**再直接拷贝 `poc/webview/dist/dist`：裸 dist 会带上 PWA 的 `sw.js`，它的 `NavigationRoute`
    会把 `/preview.html` 这次导航重新导回 `index.html`（OBS 页没有子帧垫片、没有 token），
    预览就永远停在「正在连接 Folia」；同时裸 dist 里也没有生成的 `preview.html` / `_host/preview-shim.js`。
+
+## 开屏遮罩 `#app-splash`（v0.7.25）
+
+上游 Folia 的 `index.html` 自带首帧开屏（`#app-splash`：深色底 + "Folia" 白色辉光词标 + 13 根波形竖条，
+内联 `<style>` + 内联 `<script>`，不等 CSS/JS bundle 就画）。`src/utils/appSplash.ts#hideAppSplash()` 在
+React 挂载后 320 ms 淡出移除。spw-folia 的两条约束**必须由 `stage-web.mjs` 的硬闸守住**（`grep` 看不出来）：
+
+| 文件 | 要求 | 闸门 |
+| --- | --- | --- |
+| `web/index.html`（播放页） | **保留**完整开屏 | `assertIndexHtmlKeepsSplash()`：缺 `id="app-splash"` 或 `app-splash-wave` 就 throw |
+| `web/preview.html`（预览子帧） | **不含**任何 `app-splash` | `assertPreviewHtmlHasNoSplash()`：命中数 ≠ 0 就 throw |
+| `web/assets/*.js` | 仍有 `hideAppSplash()` | `assertSplashTeardownInBundle()`：同一 chunk 必须同时含 `app-splash` + `is-hiding` |
+
+**为什么预览是「剥标记」而不是靠 URL 参数**：上游那套 `obs=1` / `splash=0` / `/obs` 的移除判断是写在
+`<body>` 末尾的内联脚本里，而遮罩是内联 CSS——首帧就已经画上去了。iframe 的 query 不可靠，而且设置页
+会在 resize 与「旧 SW 自愈重试」时重建这个子帧（`LivePreview.tsx` 的 `key={attempt}`），一次闪烁会被反复
+放大。所以 `stripSplashFromHtml()` 直接删掉 DOM + `<style>` + 内联 `<script>`，让子帧**没有能力**画出开屏，
+与 `LivePreview.tsx` 拼什么 URL 无关（因此该文件无需改动）。剥样式时保留同一条 `<style>` 里的
+`html,body{background-color:#09090b}` 基础规则，否则子帧在 React 设置页面背景之前会闪白。
+
+`preview.html` 会在 `<head>` 留下
+`<!-- spw-folia: first-paint splash removed for the settings live preview ... -->` 标记，闸门同时校验它。
+
+验证（两条都要跑，互补）：
+
+```bash
+node packaging/tools/stage-web.mjs              # 组装（含上述三道闸）
+node packaging/tools/verify-splash-gates.mjs    # 三向：正常通过 / 删 splash 抛错 / preview 带 splash 抛错
+node packaging/tools/verify-splash-browser.mjs  # 真 Chromium 加载两页，断言盒子、条数、底色（9/9）
+node packaging/tools/verify-layout.mjs          # 打包件真机：previewHasNoSplash + 17 项样式缩略图
+```
 
 ## 顶层 `Shim.js` 改动（v0.4.1）
 

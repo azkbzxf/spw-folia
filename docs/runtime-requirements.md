@@ -1,6 +1,12 @@
 # spw-folia 运行环境依赖清单与闪退排查
 
+> **发布状态**：最后**发布**版本是 **v0.4.6**（2026-10-30）。本文提到「v0.4.7 起」的行为
+> （四态自检、按注册表判构建号）都是**未发布**的代码，线上用户拿到的仍是 v0.4.6 的二态自检。
+> v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10 / v0.4.11 均未发布。
+
+Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二进制 + 本机实测 + 微软官方文档）。
 适用对象：遇到「闪退 / 打不开 / 黑窗」的用户，以及维护者做支持回复。
+日期：2026-10-20 · 核对机：Windows 11 x64（build 26300）、WebView2 150.0.4078.83、.NET Framework 4.8.1。
 
 一句话结论：**插件自己不携带浏览器与 .NET，它把渲染交给系统里的 WebView2 Runtime、把窗口交给
 .NET Framework 4.8 编写的辅助进程。这两样系统组件任一缺失，都会表现为「用户点了没反应 / 窗口闪一下就消失」。**
@@ -35,7 +41,7 @@
 | --- | --- | --- |
 | S1 | 可用的 GPU / D3D / WebGL | 页面用 WebGL 渲染（bundle 内 18 个 chunk、553 处 `webgl` 引用，含 11 处 `WebGL2`）。辅助进程**没有**传 `--disable-gpu`，也没有软件渲染兜底开关。RDP 会话、虚拟机、很老的显卡驱动下可能黑屏/降级（**未见**因此直接崩溃），建议更新显卡驱动、退出远程桌面后重试。 |
 | S2 | 音频设备 | WASAPI 回环采集失败会被吞掉，自动回落合成信号（`wasapi-loopback-failed`），**只是不再有音频响应**，不崩。 |
-| S3 | 多显示器 | 全屏窗口开在 **SPW 窗口所在的那块屏幕**上（`MonitorSupport.ScreenForProcess(parentPid)`），不是系统主屏；**Alt + 左键**可拖到其它屏幕并铺满该屏。没有显示器选择器；`Screen.PrimaryScreen` 只在父进程定位失败时兜底。 |
+| S3 | 多显示器 | 全屏窗口固定开在**主屏**（`Screen.PrimaryScreen`）。副屏用户会觉得「窗口没出现」，不是崩溃。 |
 | S4 | 网络 | **完全不需要**。页面全部走本地虚拟主机（`https://spw-folia.local/`），发布产物实测 99 个请求全本地、0 外部。 |
 | S5 | 管理员权限 | **不需要**（辅助进程 manifest 无 `requestedExecutionLevel`，asInvoker）。 |
 | S6 | VC++ 运行库 | **不需要单独装**。辅助进程是纯托管（零 native 导入）；WebView2 Runtime 目录自带 `msvcp140/vcruntime140` 等。 |
@@ -88,8 +94,13 @@
 
 ## 4. 环境自检（让用户跑一条 PowerShell）
 
+> **v0.4.7 起插件会自己跑完这一节**（v0.4.7 **未发布**，所以线上 v0.4.6 用户仍需手工跑下面的命令）。
+> SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」逐项检查并把依据写进日志与反馈 issue；本节的
+> PowerShell 只在插件打不开、需要人工复核时使用。
+> 自检判定规则见 [`logging-and-diagnostics.md` §3](logging-and-diagnostics.md)。
+
 ```powershell
-# 1) WebView2 Runtime（两个位置任一 pv 非空/非 0.0.0.0 即可）
+# 1) WebView2 Runtime（三个位置任一 pv 非空/非 0.0.0.0 即可）
 Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue |
   Select-Object @{n='WebView2';e={$_.pv}}
 Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue |
@@ -100,6 +111,15 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-429
 
 # 3) 架构与系统
 [Environment]::Is64BitOperatingSystem; [Environment]::OSVersion.Version
+```
+
+**判定 H1（Windows build）请用注册表，不要用 JVM 属性。** `System.getProperty("os.version")` 在
+Windows 上恒为 `10.0`（HotSpot 不提供构建号），拿它判 1809+ 必然误判——v0.4.6 及更早版本正是
+栽在这里，见下一节。正确来源是：
+
+```powershell
+(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber   # 26300
+(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR                   # 9711
 ```
 
 用户侧三步修复：
@@ -120,21 +140,20 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-429
    异常从 `WndProc` 逃出 → WinForms 弹「Microsoft .NET Framework」未处理异常对话框 → 辅助进程退出。
    v0.1.10 改为 `unchecked((int)…ToInt64())` 并注册 `Application.ThreadException` /
    `AppDomain.UnhandledException` 输出协议错误行。**仍在 0.1.9 及更早的用户是最可能的「有些用户会闪退」来源。**
-   详见 `docs/archive/verification-v0.1.10.md`；发布说明见 GitHub Releases 的 v0.1.10。
+   详见 `docs/archive/verification-v0.1.10.md`、`docs/archive/release-notes-v0.1.10.md`。
 2. **v0.1.10 在 WebView2 155+ 的 stdin 泵崩溃（已修）** — 打开 Folia 后歌词重放时，插件 stdin 线程
    直接读 `webView.CoreWebView2` 抛 `InvalidOperationException: CoreWebView2 can only be accessed from
    the UI thread.`，读取线程终止 → 2 秒后窗口自关；同一故障还会让插件管道写阻塞、拖死 SPW UI 线程
    （「未响应」）。旧版 WebView2（如参考机 150.0.4078.83）对跨线程属性读取更宽容，所以只在 155+
    用户机器上必现。v0.1.11 改为线程封送 + 专职写线程，v0.2.0 一并发布；详见
-   `docs/archive/verification-v0.1.11.md`；发布说明见 GitHub Releases 的 v0.2.0。
+   `docs/archive/verification-v0.1.11.md`、`docs/archive/release-notes-v0.2.0.md`。
 3. **WebView2 浏览器进程偶发退出（未修）** — `BrowserProcessExited reason=Unexpected`，
    症状为窗口用着用着消失、日志出现 `webview process-failed` + `closed reason=error` + exit 1。
    发布产物上出现过 1 次、开发期另 1 次，15 分钟压测未复现；当前没有自动重试（属后续任务），
    用户侧处理是重新打开一次。
 4. **环境缺失类**（不是代码 bug）：缺 WebView2 Runtime → exit 3；缺 .NET Framework 4.8 →
    .NET 安装提示后退出；这两个占「打不开/闪退」报告的绝大多数。
-5. **MSIX 虚拟路径导致 CLR 激活失败（已修，v0.2.1 起）** — **只在 Microsoft Store / MSIX 渠道出现**。
-   症状：点 Folia 后系统弹「`spw-folia-host.exe` - This application could not be started」，
+5. **MSIX 虚拟路径导致 CLR 激活失败（已修，v0.2.1 起）** — **只在 Microsoft Store / MSIX 渠道出现**。   症状：点 Folia 后系统弹「`spw-folia-host.exe` - This application could not be started」，
    插件日志 `host process exited code=-2146232576`，`spw-folia-host.stdout.log` 为 0 字节；
    但**手动双击同一个 exe 却完全正常**，于是很容易被误判成「.NET Framework 坏了」而反复重装/修复 .NET（无效）。
 
@@ -162,6 +181,26 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-429
      -Path "$env:APPDATA\Salt Player for Windows" `
      -Target "$env:LOCALAPPDATA\Packages\Sakawish.SaltPlayerforWindows_q65q631pyh094\LocalCache\Roaming\Salt Player for Windows"
    ```
+
+6. **「出现问题」自检在健康机器上误报缺 Windows（已修，v0.4.7 起——注意 v0.4.7 未发布，v0.4.6 及更早仍会误报）** — 症状：点 SPW「模组管理 →
+   配置 → 支持与反馈 → 出现问题」，在完全正常的 Windows 11 上弹红条
+   「缺少运行环境：Windows 10 x64（1809+）（Windows 11 10.0 amd64）→ 需要 64 位 Windows 10 1809
+   (17763) 或更新版本」。
+
+   根因：自检从 `System.getProperty("os.version")` 取构建号，而 **HotSpot 在 Windows 上把它报成
+   `"10.0"`**——两段、没有构建号（构建号在注册表 `CurrentVersion\CurrentBuildNumber`）。旧代码用
+   `Regex("(\\d+)\\.(\\d+)\\.(\\d+)")` 解析，永远不命中 → `build = null` →
+   `is64 && build != null && build >= 17763` 恒为 false。**这个检查在任何机器上都不可能通过**，
+   而且「读不到」被当成了「版本太低」。
+
+   同类的错误还有三处：`.NET Release` 无条件按十六进制重新解析（把十进制 `528040` 变成 `0x528040`）；
+   `reg.exe` 失败与「值不存在」不可区分（都返回 null）；`isPermissionGranted` 是接口默认方法恒返回
+   `false`，于是「宿主不支持查询」被报成「缺少权限」。
+
+   修复：判定改成四态（`PASS` / `FAIL` / `UNKNOWN` / `ADVISORY`），**只有证据能产生 FAIL，读不到只
+   产生 UNKNOWN**；Windows build 改从注册表读；每一项都带 `evidence`（值 + 来源 + 原始输出 + 失败
+   原因）写进日志与反馈 issue。回归测试见 `spw-folia/src/test/kotlin/dev/spw/folia/FoliaDiagnosticsTest.kt`
+   （含 `os.version = "10.0"` 这条真实样本），真机复跑命令 `gradlew runDiagnostics`。
 
 ---
 

@@ -1,5 +1,10 @@
-# 播放页透明背景 — 宿主窗口透明机制
+# 播放页透明背景 — 宿主窗口透明机制（v0.1.7 契约）
 
+> **发布状态**：最后**发布**版本是 **v0.4.6**（2026-10-30）。本文里「v0.4.9 起」的键色改动
+> （纯洋红 → 近黑，见 §4.9）在 v0.4.6 上**尚未生效**；v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10
+> / v0.4.11 均未发布。
+
+日期：2026-10-19
 范围：`poc/settings-ui/src/chrome/PlayerBackgroundControl.tsx`（新控件）、`poc/settings-ui/src/model/settings.ts`、
 `poc/settings-ui/src/publisher/config.ts`、`poc/settings-ui/src/App.tsx`、`poc/settings-ui/src/app.css`、
 `poc/webview/host/HostForm.cs`、`poc/webview/host/Program.cs`。跨仓依据：Folia 的
@@ -37,7 +42,8 @@
 ## 3. 宿主实现（`HostForm.cs`）
 
 ```csharp
-static readonly Color TransparencyKeyColor = Color.FromArgb(255, 0, 255); // 页面永远不会画出的纯键色
+// v0.4.9: near-black, not pure magenta — see §4.9 for why the key colour is what tints alpha pixels.
+static readonly Color TransparencyKeyColor = Color.FromArgb(1, 0, 1);
 // on
 TransparencyKey = Color.Empty;          // 先清再设，避免黑底残帧
 BackColor       = TransparencyKeyColor;
@@ -49,8 +55,9 @@ TransparencyKey = Color.Empty;
 webView.DefaultBackgroundColor = Color.Black;
 ```
 
-- `ApplyTransparencyFromSettings()` — 在构造函数（`--dev-settings` 之后）、stdin `settings`、页面 `{"type":"settings"}` 三处调用；`--no-transparency` 强制关闭（诊断/回归用）。
-- 日志：`transparency mode=on|off`。
+- `ApplyTransparencyFromSettings()` — 在构造函数（`--dev-settings` 之后）、stdin `settings`、页面 `{"type":"settings"}` 三处调用；`--no-transparency` 强制关闭（诊断/回归用）；
+  `--no-colour-key` 只关色键、保留「不透明窗口」形态（调试截图用，见 §4.9）。
+- 日志：`transparency mode=on|off`；键被调试开关关掉时追加 `colour-key=off reason=debug-flag`。
 - 窗口仍是原来的 borderless topmost 全屏 Form，几何/DPI/鼠标 idle 逻辑不变。
 
 ## 4. 色键合成的三个副作用与对策
@@ -136,7 +143,8 @@ webView.DefaultBackgroundColor = Color.Black;
 
 ## 4.6 v0.2.0：透明窗口的样式兼容层
 
-色键透明的物理限制是：页面画出的每个 alpha < 1 的像素都会被混上键色（洋红）显示成粉雾。Folia 的
+色键透明的物理限制是：页面画出的每个 alpha < 1 的像素都会被混上键色显示。v0.2.0 起键色是近黑
+`rgb(1,0,1)`（v0.4.9 前是纯洋红，混出来的粉雾见 §4.9），所以现在这类像素只是一层暗压而不是粉雾。Folia 的
 14 种歌词/可视化样式里，有的在去掉背景层后只剩不透明字形/线稿（可直接用），有的会自带大面积半透明底板
 （必须临时精简）。v0.2.0 在 settings island 里做了一层分类与渲染期覆盖（`transparencyCompat.ts`）：
 
@@ -172,6 +180,43 @@ v0.2.0 的 tempera 覆盖只关了 `showBlocks`（35% 纸雾 + 网点 + `blocks`
 postProcessGrain:0, postProcessVignette:0, postProcessLensDistortion:0, layerImageFrequency:0}` 且
 `song/songArtist/songAlbum = null`；把透明关掉后同一份配置回到默认值并恢复元数据。
 
+## 4.9 v0.4.9：键色从纯洋红改为近黑，调试路径不再上键
+
+> **发布状态**：这一节描述的是**未发布**的 v0.4.9 改动。最后发布版本 **v0.4.6** 用的仍是纯洋红
+> `rgb(255,0,255)`，所以线上用户看到的就是下面描述的粉雾；升级到含本修复的版本（v0.4.9 起的开发版，
+> 最近一个是 v0.4.11）后才会变成中性灰。
+
+**用户报障**：「调试时，不要用粉色的背景」「粉色的背景很影响观感」。
+
+**根因**（两层，都不是「色键坏了」）：
+1. `LWA_COLORKEY` 只抠「精确等于键色」的像素。WebView2 把页面合成到窗口 `BackColor`（= 键色）上，所以
+   页面 alpha = 0 的像素变成键色 → 被抠掉 → 透出桌面；而 **0 < alpha < 1 的像素变成
+   `alpha*页面 + (1-alpha)*键色`，不再是精确匹配，就留在屏幕上、被键色染色**。键色是纯洋红
+   `rgb(255,0,255)` 时，一条 50% 白的字形边缘会变成 `rgb(255,128,255)` —— 这就是用户看到的粉雾。
+   实测（真实宿主 + 真实 WebView2 + GDI 全屏截图）：半透明标记 `(255,128,255)`，整帧 magenta 族
+   **99.96%**。
+2. 调试脚本没有关透明：`make-thumbs.mjs` 只传了 `--no-curtain`，路径里**从来没有**显式关过透明。于是
+   只要上一次会话持久化了 `transparentPlayerBackground: true`，截图/缩略图就都是在色键窗口下拍的。
+
+**改动**：
+- `HostForm.TransparencyKeyColor`：`rgb(255,0,255)` → **`rgb(1,0,1)`**。键色唯一的要求是「页面永不绘制
+  它」，具体是哪个色不影响抠像；换成近黑后同样这些半透明像素只是被压暗成中性灰（实测
+  `rgb(128,128,128)`），不再是粉色。不选纯黑是因为 `Color.Black` 同时是不透明会话的 `BackColor` 与页面
+  基色；`rgb(1,0,1)` 的绿通道为 0 且明度极低，Folia 任何调色板都混不出来。**6 种真实样式 3200×2000 全屏
+  实测精确命中 0 像素**。
+- 新增 `--no-colour-key`（`--no-color-key` 亦可，环境变量 `SPW_FOLIA_COLOUR_KEY=0`）：调试用。窗口保持
+  普通不透明黑色表面，不装键、不设 `BackColor`、不切 `DefaultBackgroundColor`，并顺带把页面侧透明也
+  降级为不透明（否则页面会在纯黑上开洞）。热键与 `EnterTransparentMode` 在该模式下直接跳过，避免调试
+  运行中途又把自己变成键色窗口。
+- 调试脚本统一带 `--no-colour-key`：`make-thumbs.mjs`（**并补上 `--no-transparency`**，它此前从未关过
+  透明）、`verify-splash.mjs` 的截图 run、`diag-real-preview.mjs`、`verify-layout.mjs`、`driver.mjs`。
+  `verify-splash.mjs` 的 run 3 仍是**带键**的透明回归（它验的是透明时序，不是像素观感）。
+
+**验收**：`node poc/settings-ui/scripts/verify-colour-key.mjs`（真实宿主 + GDI 全屏截图，因为
+`CapturePreviewAsync` 只抓 WebView2 表面、永远看不到窗口底色 —— 这正是既有截图检查抓不到本 bug 的原因）。
+改前 → 改后：magenta 族占比 **99.96% → 0%**；50%-alpha 像素 `(255,128,255)` → `(128,128,128)`；窗口底色
+`(255,0,255)` → `(1,0,1)`；`--no-colour-key` 时 `(0,0,0)`。
+
 ## 4.7 v0.2.2：穿透重构为系统级 shaped region（借鉴 SPW-island）
 
 v0.1.9 的「合成点击回放」只回放左键，右键/滚轮/悬停被整吞、拖拽必断，合成输入还会被提权窗口与反作弊拦截。
@@ -196,10 +241,11 @@ v0.2.2 借鉴 SPW-island 的 shaped input peer 思路（`WindowsGpuInput.kt`：�
 
 ## 5. 已知限制
 
-- 键色是纯洋红 `rgb(255,0,255)`：页面若恰好绘制该像素会被挖空（当前 Folia 主题/歌词不会产生该纯色；属于可接受风险）。
+- 键色是近黑 `rgb(1,0,1)`（v0.4.9 之前是纯洋红 `rgb(255,0,255)`，见 §4.9）：页面若恰好绘制该像素会被挖空。
+  6 种真实样式（sonnet/tempera/lumiere/classic/monet/claddagh，3200×2000 全屏）实测**精确命中 0 像素**，
+  属于可接受风险；新增样式若要复核，跑 `node poc/settings-ui/scripts/verify-colour-key.mjs` 的 run 3。
 - 透明就是「透到桌面/其它窗口」，不是 OBS 浏览器的 alpha 源——OBS 场景请直接用 Folia 的浏览器源，或用窗口捕获。
-- 全屏窗口开在 **SPW 窗口所在的那块屏幕**上（按父进程 PID 定位，见 `host-app.md` §3），不是系统主屏；
-  **Alt + 左键**可拖到其它屏幕并铺满该屏。没有显示器选择器；`Screen.PrimaryScreen` 只在父进程定位失败时兜底。
+- 仅主屏全屏（与 v0.1.0 起一致）；多屏选择未实现。
 - 透明模式默认会捕获鼠标（v0.1.8 的输入捕获窗口）；要操作下层窗口请打开面板里的「鼠标穿透（操作桌面）」，
   或按 Ctrl+Alt+B / ESC 退出透明。打开穿透后仅热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，
   其余位置的点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口（v0.2.2，见 §4.7）。

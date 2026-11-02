@@ -1,79 +1,120 @@
-# Hook target：往 SPW 菜单里注入「Folia」项（迷你播放器 更多 + 托盘右键，SPW 1.19.0+）
+# Hook target: inject "Folia" items into SPW menus (mini-player 更多 + tray right-click, SPW 1.19.0+)
 
-两个互相独立的 hook，都在运行时解析：
+Two independent hooks, both resolved at runtime:
 
-| 菜单 | hook | 文件 |
+| menu | hook | file |
 | --- | --- | --- |
-| 迷你播放器 更多 弹层 | 对宿主加项辅助方法做 `hookMethod` | `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` |
-| 托盘（最小化图标）右键 | 对 `compose-native-tray` 的 `RecordingComposableScope.snapshot()` 做 `hookMethod` | `spw-folia/src/main/kotlin/dev/spw/folia/FoliaTrayMenu.kt` |
+| mini-player 更多 flyout | `hookMethod` on the host's obfuscated item-adding helper | `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` |
+| tray (minimised icon) right-click | `hookMethod` on `compose-native-tray`'s `RecordingComposableScope.snapshot()` | `spw-folia/src/main/kotlin/dev/spw/folia/FoliaTrayMenu.kt` |
 
-下面先讲弹层 hook，托盘 hook 在
-[托盘菜单（最小化图标右键）](#托盘菜单最小化图标右键recordingcomposablescopesnapshot-hook) 一节。
+The flyout hook is described first; the tray hook is the section
+[托盘菜单（最小化图标右键）](#托盘菜单最小化图标右键recordingcomposablescopesnapshot-hook).
 
-## 更多 弹层（迷你播放器）
+## 更多 弹层（mini-player）：`hookMethod` on the item-adding helper
 
-做法是**对宿主的加项辅助方法做 `hookMethod`**。原始计划里的 `appendContent` 在这个 R8 混淆过的
-宿主构建上**不可能工作**（根因见文末
-[appendContent 为什么失败](#appendcontent-为什么在这个宿主上失败)）。
-实现位于 `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt`。
+Status: **version-independent since v0.3.1** (2026-10-23); **structure-discovered since v0.4.6**
+(2026-10-30). The obfuscated names below are *data*, not code: `HostTargets` resolves them per host
+build and caches the result, so a new SPW patch release no longer needs a plugin release. Since
+v0.4.6 an unknown build does not need a hand-written profile at all — `HostMenuDiscovery` derives the
+targets from the host's own bytecode by *shape* (see 「结构发现」 below).
 
-## 目标解析层级
+> **Publication note:** structural discovery landed in **v0.4.6**, which *is* published — so the
+> mechanism described here is what users of the latest downloadable release already run. Everything
+> later (v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10 / v0.4.11) is **unpublished local work**; where
+> those versions are named below they mark the batch a change belongs to, not a downloadable release.
 
-SPW 是 R8 混淆的，**每次发版都会改名我们依赖的类与方法**。1.19.2 把
-`ē`/`ন`/`Ⴈ` 改成 `घ`/`Ը`/`ะ`，1.19.3 又改成 `ɦ`/`ל`/`त`。人工反编译抄码点的方式每次发版都要
-重来一遍，因此目标解析改成了**按结构发现**：读宿主自己的字节码，按形状定位，R8 改名本身不再需要
-发插件版本。
+The working approach is **`hookMethod` on the host's item-adding helper**; the originally planned
+`appendContent` is **impossible on this R8-obfuscated host build** (root cause below). Implemented
+in `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` (owner: hook-poc). Deep background:
+`docs/archive/re-host.md`.
 
-插件在运行时解析目标（`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`），从最便宜的一层
-往上试：
+## Resolution layers (v0.4.6+)
 
-| # | 层 | 何时 | 成本 |
+SPW is R8-obfuscated, so **every release renames the classes and methods we touch** — 1.19.2 renamed
+`ē`/`ন`/`Ⴈ` to `घ`/`Ը`/`ะ`, and 1.19.3 renamed those again to `ɦ`/`ל`/`त`. Up to v0.4.5 each rename
+meant: decompile by hand → extract the new names → add a profile → ship a plugin release. v0.4.6
+replaces that with **structural discovery**, which reads the host's bytecode and finds the targets by
+shape, so an R8 rename alone no longer needs a plugin release.
+
+The plugin resolves its targets at runtime (`spw-folia/src/main/kotlin/dev/spw/folia/HostTargets.kt`),
+cheapest layer first:
+
+| # | layer | when | cost |
 | --- | --- | --- | --- |
-| 1 | `host-targets.json` 缓存（按 `spwVersion` 键） | 该版本第一次成功之后的每次启动 | ~0 |
-| 2 | 内置 profile（`PROFILES`：1.19.3、1.19.2、1.19.0） | 已知版本 —— **回归基准 + 零成本快路径**，不再承担适配职责 | ~0（实测 53–57 ms，含校验） |
-| 3 | **结构发现**（`HostMenuDiscovery` 跑在 `HostBytecodeIndex` 上） | 未知版本 —— **主路径**，只在后台线程 | 索引约 1.3–1.5 s，每个宿主版本一次，之后走缓存 |
-| 4 | 旧的 classpath `scan()`（手写 class 解析器，纯反射） | 结构发现失败时的第二意见 | 一次性约 0.5–2 s |
-| — | **反射守卫**（`validateMenu` / `validatePalette`） | **每一层**的结果在被使用前都过 | ~0 |
+| 1 | `host-targets.json` cache (keyed by `spwVersion`) | every start after the first success on that build | ~0 |
+| 2 | built-in profile (`PROFILES`: 1.19.3, 1.19.2, 1.19.0) | known builds — **regression baseline + zero-cost fast path**, no longer the adaptation mechanism | ~0 (53–57 ms measured, including validation) |
+| 3 | **structural discovery** (`HostMenuDiscovery` over `HostBytecodeIndex`) | unknown build — **the primary path**, background thread only | ~1.3–1.5 s index once per build, cached afterwards |
+| 4 | legacy classpath `scan()` (hand-rolled class parser, pure reflection) | second opinion when structural discovery fails | ~0.5–2 s once |
+| — | **reflection guard** (`validateMenu` / `validatePalette`) | **every** layer's result, before use | ~0 |
 
-`quickLoad()`（在 `start()` 内）只跑第 1–2 层，两者都校验不过就返回 `false`，所以 `start()`
-永远不会为字节码索引付时间。`deepResolve()`（后台 worker）跑第 3 层，失败退回第 4 层。
+`quickLoad()` (inside `start()`) only runs layers 1–2 and returns `false` when neither validates, so
+`start()` never pays for bytecode indexing. `deepResolve()` (background worker) runs layer 3 and falls
+back to layer 4.
 
-每一层的结果都**先过反射校验**——helper 的签名（`hookMethod` 的精确参数表）、scope 桥
-（`MenuFlyoutScope.item(onClick, content)` 作为静态 `(self, Function0, Function2)V`）、
-调色板 getter——过期的名字不会被信任。结构发现的结果**额外**与任何仍然能校验通过的内置 profile
-逐字段比对：已知版本上两条路径必须完全一致，不一致记 `WARNING` 而不是静默取平均。
+Every layer is **validated by reflection** before use — helper signature (`hookMethod`'s exact
+parameter list), scope bridge (`MenuFlyoutScope.item(onClick, content)` as a static
+`(self, Function0, Function2)V`), palette getter — so a stale name is never trusted. A structural
+result is *additionally* cross-checked against any built-in profile that still validates: on a known
+build both paths must agree exactly, and a disagreement is logged as a `WARNING` instead of being
+silently averaged.
 
-整套解析链要绕开两个宿主事实：
+Two host facts the whole resolution chain works around:
 
-- **jar 里的 zip 条目名不可信。** 有些条目存的名字与它实际包含的类不同
-  （`androidx/compose/ui/Ϡ.class` 里装的是 `…/ϡ`），所以候选一律按 class 文件里解析出来的
-  `this_class` 识别，绝不按条目路径。索引与旧扫描都遵守这条。
-- **`java.class.path` 是一个 polyglot jar**（`app/ffmpeg-x64.dll`，111 MB，42,147 个 class，
-  可用 `ZipFile` 读）。结构发现优先读宿主类自己的 code source
-  （`HostBytecodeIndex.read(hostClass)`），只有那里读不了时才退回 `java.class.path`。
+- **The jar's zip entry names cannot be trusted.** Several entries are stored under a name that
+  differs from the class they contain (`androidx/compose/ui/Ϡ.class` holds `…/ϡ`), so candidates are
+  identified by the `this_class` parsed out of the class file, never by the entry path. Both the index
+  and the legacy scan honour this.
+- **`java.class.path` is a single polyglot jar** (`app/ffmpeg-x64.dll`, 111 MB, 42147 classes,
+  readable with `ZipFile`). Structural discovery prefers the host class's own code source
+  (`HostBytecodeIndex.read(hostClass)`) and only falls back to `java.class.path` when that is
+  unreadable.
 
-### 已知版本 profile —— 回归基准，不是适配机制
+### Known profiles — regression baseline, not the adaptation mechanism
 
-| 构建 | 菜单 facade | helper | MenuFlyoutScope（bridge） | PopupState（dismiss） |
+| build | menu facade | helper | MenuFlyoutScope (bridge) | PopupState (dismiss) |
 | --- | --- | --- | --- | --- |
 | 1.19.0 | `androidx.compose.ui.ē` (U+0113) | `Ϳ` | `androidx.compose.ui.ন` (U+09A8) / `Ϳ` | `androidx.compose.ui.Ⴈ` (U+10A8) / `ԩ` |
 | 1.19.2 | `androidx.compose.ui.घ` (U+0918) | `Ϳ` | `androidx.compose.ui.Ը` (U+0538) / `Ϳ` | `androidx.compose.ui.ะ` (U+0E30) / `ԩ` |
 | 1.19.3 | `androidx.compose.ui.ɦ` (U+0266) | `Ϳ` | `androidx.compose.ui.त` (U+0924) / `Ϳ` | `androidx.compose.ui.ל` (U+05DC) / `ԩ` |
 
-这三行保留着，但职责已经变了。一个 profile 现在是：
+**These rows are kept on purpose, but their job has changed.** Since v0.4.6 a profile is:
 
-- **回归基准** —— 在我们已经钉住的版本上，结构发现必须逐字符复现它；不一致会记警告，
-  把「发现逻辑是不是退化了」从一次 bug 报告变成一行日志；
-- **零成本快路径** —— 已知版本上 `quickLoad()` 完全不碰字节码（实测 53–57 ms，含反射校验），
-  钉住版本的用户不必付索引成本；
-- **不再是适配机制** —— 未知版本不需要新增行。加 profile 变成可选的维护工作（钉住一个版本以跳过
-  它的首次索引），不是发版前提。
+- a **regression baseline** — on a build we already pinned, structural discovery must reproduce it
+  character for character; a mismatch is logged as a warning, which turns "did the discovery logic
+  regress?" into a single log line instead of a bug report;
+- a **zero-cost fast path** — on a known build `quickLoad()` resolves from the profile without
+  touching bytecode at all (measured 53–57 ms including reflection validation), so users on a pinned
+  build never pay the index cost;
+- **no longer the adaptation mechanism** — an unknown build needs no new row. Adding a profile is
+  now optional housekeeping (pin a build to skip its first index), never a prerequisite for a
+  release.
 
-1.19.3 上的实测形态（Steam 版）：`ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)Unit`，
-scope 实现 `গ$Ϳ`（items 列表字段 `Ϳ`），弹层内容色仍是 `ʰ.Ԩ(composer).Ԩ()`。
-播放控制与托盘反射在两个版本里都没变。
+Verified on 1.19.3 (Steam build, 2026-10-30) from the same `ffmpeg-x64.dll`:
+`ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)Unit`, scope impl `গ$Ϳ` (items list field `Ϳ`),
+flyout content colour still `ʰ.Ԩ(composer).Ԩ()`; playback-controls and tray reflection unchanged.
 
-日志里可以找这些行（`spw-folia.log`）：
+**The classpath scan had a latent bug until v0.4.5** — kept as history, because it explains the log
+lines users may still find in older reports, and because it is the reason the *legacy* scan is now
+layer 4 rather than the main path. `menuCandidates()` passed `ParsedClass.name` — the raw
+`this_class` value, i.e. the JVM *internal* form with `/` separators
+(`androidx/compose/ui/ɦ`) — straight into `MenuTarget.menuClass`. `validateMenu()` then called
+`Class.forName()` on that dotted-expected string, threw `ClassNotFoundException`, and the scan
+reported `found no flyout helper` on **every** unknown host build. Every build so far had a
+built-in profile, so the bug never showed; 1.19.3 renamed all three classes and exposed it
+(the scan found the candidate but could not validate it). Fixed by
+`cls.name.replace('/', '.')` at the construction site.
+
+v0.4.6 sidesteps this whole failure mode: structural discovery does its own one-way conversion from
+internal to binary names (`HostMenuDiscovery` emits dotted names only, and `popupStateClass` strips the
+`L…;` descriptor wrapper), and its result still goes through the same `validateMenu()` guard. The
+legacy scan remains only as the layer-4 second opinion for builds where the JDK class-file API cannot
+parse the host image.
+
+The **playback-controls** reflection (`FoliaPlaybackControls.kt`) needed no change in 1.19.2 or
+1.19.3 — `PlaybackQueueState`'s field order and `com.xuncorp.spc.core.queue.Ϳ` survived both
+renames.
+
+Log lines to look for in `spw-folia.log`:
 
 ```
 host menu profile:1.19.3: androidx.compose.ui.ɦ.Ϳ(Track, PiscesMediaItem, ל, Navigator, State, त)
@@ -81,7 +122,7 @@ hookMethod installed: … (profile:1.19.3)
 Folia item appended (scope=androidx.compose.ui.গ$Ϳ, bridge=Ϳ)
 ```
 
-未知版本走结构发现路径，日志变成：
+An unknown build logs the structural path instead (real output, 1.19.3, 2026-10-30):
 
 ```
 host structural index: com.xuncorp.pisces.PiscesMediaItem: 28058 method bodies (1313ms)
@@ -90,28 +131,16 @@ host menu structural: androidx.compose.ui.ɦ.Ϳ(Track, PiscesMediaItem, ל, Navi
 host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.Ԩ
 ```
 
-`host structural matches regression baseline …` 这一行让已知版本自检：没有它就去找
-`WARNING: structural discovery disagrees with <profile>`，那里会打出两侧候选的名字**以及**它们的
-`scopeParameter`/`popupParameter` 下标。发现彻底失败时，`lastDiagnostics` 带着逐角色的候选普查
-（`structural(indexMs=… bodies=… candidates=[owner=1,popup=1,…])`）与发现过程自己的诊断行
-—— 那才是要向用户索取的内容。
+`host structural matches regression baseline …` is the line that makes a known build self-checking:
+absent it, look for `WARNING: structural discovery disagrees with <profile>`, which prints both
+candidates' names **and** their `scopeParameter`/`popupParameter` indices. When discovery fails
+outright, `lastDiagnostics` carries the per-role candidate census
+(`structural(indexMs=… bodies=… candidates=[owner=1,popup=1,…])`) plus the discovery's own diagnostic
+lines — that is the block to ask a user for.
 
-### 旧 classpath 扫描的一个历史 bug
+## 结构发现（structural discovery，v0.4.6+）
 
-保留这段是因为它能解释老报告里可能出现的日志行，也解释了为什么旧扫描现在退到第 4 层。
-`menuCandidates()` 曾把 `ParsedClass.name`（原始 `this_class` 值，即带 `/` 分隔符的 JVM
-*内部*形式，`androidx/compose/ui/ɦ`）直接塞进 `MenuTarget.menuClass`；`validateMenu()` 随后对它调
-`Class.forName()`，抛 `ClassNotFoundException`，于是扫描在**每个**未知宿主版本上都报
-`found no flyout helper`。此前每版都有内置 profile，这个 bug 一直没显形；1.19.3 把三个类全改了名，
-把它暴露出来（扫描找到了候选，但校验不过）。修复方式是在构造点做 `cls.name.replace('/', '.')`。
-
-结构发现绕开了整个失败模式：它自己把内部名单向转成二进制名（`HostMenuDiscovery` 只输出点分名，
-`popupStateClass` 会剥掉 `L…;` 描述符外壳），结果仍然过同一个 `validateMenu()` 守卫。
-旧扫描只作为第 4 层第二意见保留，用于 JDK class-file API 解析不了宿主镜像的场景。
-
-## 结构发现
-
-这是**主路径**：不读任何混淆名，改为解析宿主自己的字节码、按结构约束逐个角色定位。
+这是 v0.4.6 的主路径：不读任何混淆名，改为**解析宿主自己的字节码、按结构约束逐个角色定位**。
 实现分两层，都在 `spw-folia/src/main/kotlin/dev/spw/folia/`：
 
 | 文件 | 职责 |
@@ -119,8 +148,8 @@ host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.
 | `HostBytecodeIndex.kt` | 只读索引：用 JDK 25 的 `java.lang.classfile` API 解析宿主 jar，建立「方法体 → 调用点 / 字段访问」的调用图。**从不加载或初始化宿主类**，只读字节。 |
 | `HostMenuDiscovery.kt` | 在索引上跑发现链，输出 6 个必需角色 + 2 个可选角色，全部是点分二进制名。 |
 
-设计来源是 SPW-Lyrics（<https://github.com/GaBoron/SPW-Lyrics>，`integration/hostui/HostBytecodeIndex.java`
-+ `HostPlayerMenuDiscovery.java`）；它的开发说明里的「主窗口 Hook 与动态发现」一节写了同一套纪律
+设计来源是 SPW-Lyrics（<https://github.com/GaBoron/SPW-Lyrics>，`integration/hostui/HostBytecodeIndex.java` +
+`HostPlayerMenuDiscovery.java`）；它的 `docs/开发说明.md`「主窗口 Hook 与动态发现」一节明确写了同一套纪律
 （联合结构约束、候选必须唯一、每次启用重新扫描）。
 
 ### 发现链（每一步只写结构约束，不含混淆名）
@@ -144,7 +173,7 @@ host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.
 ### 纪律：候选必须唯一，不唯一就报错
 
 每一步都是 `unique(...)`：候选数 != 1 就抛 `IllegalStateException`，消息带**角色名 + 候选数量**，
-绝不 best-effort 挑一个。理由是错的后果不对称——在宿主里调错方法会静默污染弹层，而抛错只是
+绝不 best-effort 挑一个。理由是错的后果不对称 —— 在宿主里调错方法会静默污染弹层，而抛错只是
 「这一版没有 Folia 项 + 一条可读日志」。异常被 `HostTargets.structuralResolve` 捕获、记日志、
 退回第 4 层 `scan()`，**不会**让插件启动失败。
 
@@ -154,10 +183,10 @@ host palette structural: androidx.compose.ui.ʹ.Ԩ() via androidx.compose.ui.ʰ.
 ### 为什么要收紧 SPW-Lyrics 的 builder 规则
 
 SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参数里没有 `Composer` + 方法体
-调用了 itemBridge」。**这条规则在 SPW 1.19.3 上有 15 个候选**——它对 SPW 自己的菜单结构约束太弱，
+调用了 itemBridge」。**这条规则在 SPW 1.19.3 上有 15 个候选** —— 它对 SPW 自己的菜单结构约束太弱，
 照抄过来完全不可用。
 
-收紧版在同样四个条件之外，还要求参数表里**同时**出现下面六个锚点：
+v0.4.6 的收紧版在同样四个条件之外，还要求参数表里**同时**出现下面六个锚点：
 
 | 锚点 | 为什么它不会被 R8 改名 |
 | --- | --- |
@@ -173,12 +202,12 @@ SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参�
 
 ### 性能与线程红线
 
-真实 1.19.3 宿主（`app/ffmpeg-x64.dll`，111 MB，**42,147 个 class**）实测：
+真实 1.19.3 宿主（`app/ffmpeg-x64.dll`，111 MB，**42147 个 class**）实测：
 
 | 指标 | 实测值 |
 | --- | --- |
-| 索引到的**方法体**数 | **28,058**（预筛只解析引用了 Compose runtime 的类） |
-| 索引耗时 | **1,313 ms**（多次运行区间约 **1.3–1.5 s**） |
+| 索引到的**方法体**数 | **28058**（约 2.8 万；预筛只解析引用了 Compose runtime 的类） |
+| 索引耗时 | **1313 ms**（多次运行区间约 **1.3–1.5 s**） |
 | 发现本身（索引建好之后） | 约 70–92 ms |
 | 已知版本走 profile（对照） | 53–57 ms，**零字节码成本** |
 
@@ -190,18 +219,19 @@ SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参�
 索引可协作取消（`HostBytecodeIndex.read(source, isCancelled)` 轮询线程中断标志），宿主退出时
 不会留下一个还在啃 111 MB zip 的线程。
 
-### 边界
+### 边界（如实写）
 
-- **能适应重命名。** 宿主下一次 R8 把 `ɦ`/`ל`/`त` 再改成别的字形，发现链不受影响——它一个
-  混淆名都不读。
+- **能适应重命名。** 宿主下一次 R8 把 `ɦ`/`ל`/`त` 再改成别的字形，发现链不受影响 —— 它一个
+  混淆名都不读。这正是本方案要解决的问题。
 - **不能适应页面结构重构。** 如果宿主不再用 `BlurPopupMenu` 这类弹层（第 2 步的形状变了），
   或者「更多」弹层不再从 `Track` / `PiscesMediaItem` 取数（第 6 步的锚点没了），结构约束就会
   失效：候选不唯一或为零 → 抛错 → 退回 `scan()` → 仍失败则记 `could not locate the 更多 flyout`
   并让 Folia 项缺失（其余功能不受影响）。**这种情况需要重新适配，不是自动就能活的。**
-  SPW-Lyrics 自己也承认这条边界。
+  SPW-Lyrics 自己也承认这条边界（其 `docs/常见问题.md`：「动态发现能适应重命名，但不保证任意
+  页面结构变化后都能继续接入」）。
 - **不做 best-effort。** 见上「纪律」一节。
 
-### 缓存文件 `host-targets.json`
+### 缓存文件 `host-targets.json`（v0.4.6 新增字段）
 
 结构发现的结果写进同一份缓存（`pluginDir/host-targets.json`），带 `origin: "structural"`，
 并额外记录诊断数据：
@@ -220,7 +250,7 @@ SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参�
                   "palette":"androidx.compose.ui.ʹ","color":"Ԩ","origin":"structural"}}
 ```
 
-两个实现细节值得记下来：
+两个实现细节值得记下来，它们都是踩过的坑：
 
 - **调色板的键叫 `paletteTarget` 而不是 `palette`。** 项目自带的 `Json.rawField` 不做层级区分，
   只返回**第一个**文本匹配，而 `structural.candidateCounts` 里也有一个 `palette` 键（候选计数）——
@@ -228,24 +258,26 @@ SPW-Lyrics 原版的 builder 规则只看「static + 返回 `kotlin.Unit` + 参�
 - **缓存命中仍要 `validateMenu` / `validatePalette`。** 缓存可能来自另一个宿主版本或一个有 bug 的
   发行版，不校验就等于信任磁盘上的字符串。
 
-## 这个菜单是什么
+## What the menu is
 
-迷你播放器里的 更多 按钮打开一个由 `PlayerMoreMenuFlyout` 渲染的 `PopupState` 弹层
-（原始文件 `com/xuncorp/voxzen/ui/player/popup/PlayerMoreMenuFlyout.kt`；1.19.0 的运行时 file facade
-是 `androidx.compose.ui.ē`，1.19.2 是 `घ`，1.19.3 是 `ɦ`）。它显示 4 项：播放速度 / 桌面歌词 /
-歌词翻译（勾选）/ 释放音频引擎。
+The 更多 button in the mini player opens a `PopupState` flyout rendered by `PlayerMoreMenuFlyout`
+(original file: `com/xuncorp/voxzen/ui/player/popup/PlayerMoreMenuFlyout.kt`, runtime file facade
+`androidx.compose.ui.ē` in 1.19.0 — `घ` in 1.19.2, `ɦ` in 1.19.3). It shows 4 items: 播放速度 /
+桌面歌词 / 歌词翻译(checked) / 释放音频引擎 (screenshot 2).
 
-*本节里的码点是 1.19.0 的，因为反编译是在那个版本上做的。对现在的实现来说，重要的是**形状**：
-同样的角色在任意版本上都能靠结构重新发现——见上面的「结构发现」。*
+*The glyphs in this section are the 1.19.0 ones because that is the build the decompilation was
+done on. What matters for v0.4.6 is the **shape**: the same roles are rediscovered on any build by
+structure alone — see 「结构发现」 above.*
 
-反编译结果：`work/host/dec_more/androidx/compose/ui/ē.kt`。它的 composable（约第 96 行）调用
-`Blur.kt` 的 file facade `com.xuncorp.voxzen.ui.component.Ԭ`（Ԭ = U+052C）：
+Decompiled: `work/host/dec_more/androidx/compose/ui/ē.kt`. Its composable (line ~96) calls the
+Blur.kt file facade `com.xuncorp.voxzen.ui.component.Ԭ` (Ԭ = U+052C):
 
 ```
 BlurPopupMenu(onDismissRequest /*Function0*/, header /*Function2?*/, content /*MenuFlyoutScope.()->Unit*/)
 ```
 
-4 个条目由**同一个类里的私有 static helper**（content-builder lambda 的方法体）追加，javap 签名：
+The 4 items are appended by a **private static helper in the same class** (the content-builder
+lambda body), javap signature:
 
 ```java
 private static final kotlin.Unit Ϳ(com.xuncorp.voxzen.data.entity.Track,
@@ -256,63 +288,69 @@ private static final kotlin.Unit Ϳ(com.xuncorp.voxzen.data.entity.Track,
                                    androidx.compose.ui.ন)          // MenuFlyoutScope
 ```
 
-它通过 Kotlin 默认参数静态桥
-`androidx.compose.ui.ন.Ϳ(ন scope, Function0 onClick, Function2 content)`（菜单项的 `@Composable`
-content lambda）追加条目，也就是说宿主自己的条目走的就是我们复用的同一条桥。
+It appends items through the Kotlin default-argument static bridge
+`androidx.compose.ui.ন.Ϳ(ন scope, Function0 onClick, Function2 content)` (the menu item's
+`@Composable` content lambda), i.e. host items go through the same bridge we reuse.
 
-## 实现
+## FINAL SOLUTION (implemented, registration verified)
 
-`hookMethod` 只需要 JVM 类名 + JVM 方法名 + 完整的**业务**参数类型表——不需要 Kotlin 名字，
-也不需要 `@Metadata` 关联：
+`hookMethod` needs only JVM class name + JVM method name + full **business** parameter type list —
+no Kotlin names, no `@Metadata` association:
 
 ```kotlin
 WorkshopApi.hookRegistrar.hookMethod(
     "androidx.compose.ui.ē",                    // PlayerMoreMenuFlyoutKt file facade
-    "\\u037f",                                   // 加项辅助方法的混淆 JVM 名
+    "\u037f",                                   // obfuscated JVM name of the item-adding helper
     listOf(
         "com.xuncorp.voxzen.data.entity.Track",
         "com.xuncorp.pisces.PiscesMediaItem",
-        "androidx.compose.ui.\\u10a8",           // PopupState (Ⴈ)
+        "androidx.compose.ui.\u10a8",           // PopupState (Ⴈ)
         "com.xuncorp.voxzen.ui.navigation.Navigator",
         "androidx.compose.runtime.State",
-        "androidx.compose.ui.\\u09a8",           // MenuFlyoutScope (ন)
+        "androidx.compose.ui.\u09a8",           // MenuFlyoutScope (ন)
     ),
     object : MethodHook() {
         override fun after(call: MethodHookParam) {
-            // 下标来自解析结果（scopeParameter/popupParameter），不是硬编码的 args[5]/args[2]。
-            // 1.19.x 的 profile 携带 5 和 2；结构发现从 builder 的参数表推导它们。
+            // v0.4.6: indices come from the resolved target (scopeParameter/popupParameter), not
+            // from a hardcoded args[5]/args[2]. The 1.19.x profiles carry 5 and 2; structural
+            // discovery derives them from the builder's parameter list.
             val scope = call.args[target.scopeParameter]        // MenuFlyoutScope
-            appendItem(scope, call.args[target.popupParameter]) // dedupe + 反射桥见下
+            appendItem(scope, call.args[target.popupParameter]) // dedupe + reflect bridge below
         }
     }
 )
 ```
 
-`after` 里（在宿主 4 个条目追加完之后、于合成线程上运行）：
+Inside `after` (runs on the composition thread right after the 4 host items are appended):
 
 ```kotlin
-val scopeCls = Class.forName("androidx.compose.ui.\\u09a8")
+val scopeCls = Class.forName("androidx.compose.ui.\u09a8")
 val bridge = scopeCls.getDeclaredMethod(
-    "\\u037f", scopeCls, Function0::class.java, Function2::class.java)
+    "\u037f", scopeCls, Function0::class.java, Function2::class.java)
 bridge.isAccessible = true
 val onClick: () -> Unit = { dismissPopup(); openFoliaWindow() }
-val content: @Composable () -> Unit = { BasicText("Folia") }   // 运行时类型 = Function2<Composer,Int,Unit>
+val content: @Composable () -> Unit = { BasicText("Folia") }   // runtime type = Function2<Composer,Int,Unit>
 bridge.invoke(null, scope, onClick, content)
 ```
 
-- 去重：scope 实现把条目放在可变列表字段 `Ϳ`（U+037F）里；以它作 `WeakHashMap` 键，
-  重组就不会重复加条目。字段**按类型**查找（第一个非 static `java.util.List` 字段），不按名字，
-  因此改名破坏不了它。
-- 关闭：`PopupState.ԩ()`（ԩ = U+0529）= 无参 void 方法，反射解析。
-- 参数下标：读 `MenuTarget.scopeParameter` / `.popupParameter`，使用前对 `call.args.size` 做越界检查
-  ——签名重排时记 `after: argument indices out of range …`，而不是静默喂错参数。
-- 编译要求：插件应用 `org.jetbrains.kotlin.plugin.compose`（Kotlin 2.4.20）并 `compileOnly`
-  声明 compose runtime/foundation/material3（`androidx.compose.*` 由宿主提供；**绝不**在
-  `lib/` 里再打一个 Compose runtime）。
+- Dedupe: the scope implementation keeps items in a mutable list field `Ϳ` (U+037F); use it as a
+  `WeakHashMap` key so recomposition does not add duplicate items. The field is found **by type**
+  (first non-static `java.util.List` field), not by name, so a rename cannot break it.
+- Dismiss: `PopupState.ԩ()` (ԩ = U+0529) = no-arg void method, resolved reflectively.
+- Argument indices: read from `MenuTarget.scopeParameter` / `.popupParameter`, and range-checked
+  against `call.args.size` before use — a reshuffled signature logs
+  `after: argument indices out of range …` instead of silently feeding us the wrong argument.
+- Compile requirements: plugin applies `org.jetbrains.kotlin.plugin.compose` (Kotlin 2.4.20) and
+  declares `compileOnly` compose runtime/foundation/material3 (`androidx.compose.*` classes are
+  host-provided; **never bundle** a second Compose runtime in `lib/`).
+- Verified: plugin log shows `hookMethod installed: com.xuncorp.voxzen.workshop.hooks.ԩ$ԯ@…` then
+  `start done`; hook-poc evidence under `poc/hook/shots/`. Menu-open verification is the current
+  remaining check (see task board).
 
 ## 托盘菜单（最小化图标右键）：`RecordingComposableScope.snapshot()` hook
 
-`spw-folia/src/main/kotlin/dev/spw/folia/FoliaTrayMenu.kt` 在托盘右键菜单里插入一行 **Folia**，
+Status: **implemented v0.4.0** (2026-10-24), owner `tray-menu`. 新增
+`spw-folia/src/main/kotlin/dev/spw/folia/FoliaTrayMenu.kt`，在托盘右键菜单里插入一行 **Folia**，
 与「桌面歌词」同一栏。与上面的 更多 弹层 hook **完全独立**（两个 `HookHandle`、两条失败路径），
 任一失败不影响另一个。
 
@@ -347,7 +385,7 @@ public dev.nucleusframework.composenativetray.menu.impl.MenuOp$PlainItem(
 `snapshot()` 是**唯一**一个「菜单已经录完、还没投影成原生菜单」的接缝：录制过程本身在宿主的
 lambda 里（R8 混淆，且每版重建），原生句柄层要碰 Win32 消息与 id 分配；只有这里拿到的
 `List<MenuOp>` 是可读可改的普通集合，改完塞回 `MethodHookParam.setResult` 即可，宿主完全无感。
-和 更多 弹层的做法一致：`hookMethod` + JVM 名字 + 参数类型表，零编译期依赖。
+和 更多 弹层的做法一致：`hookMethod` + JVM 名字 + 参数类型列表，零编译期依赖。
 
 ```kotlin
 WorkshopApi.hookRegistrar.hookMethod(
@@ -402,15 +440,17 @@ fingerprint: I:显示主窗口:…|C:桌面歌词:…|C:锁定桌面歌词:…|I
 | `inject` 内部任何异常 | `after` 整体 `try/catch (Throwable)`，只写 `tray: inject error: …`，宿主编排不受影响 |
 
 以上任一发生时，**更多 弹层的 Folia 项照旧工作**（独立 hook），符合「失败不放大」的约定。
+已用 `Instrumentation` agent 验证：`isModifiableClass(RecordingComposableScope) == true`、
+`retransformClasses` 不抛异常（`work/tray/agent/ModifiableProbe.java`）。
 
-### 安装版上的自查步骤
+### 仍未经端到端验证的一步
 
 静态证据只到「`snapshot()` 在 `ComposableTrayKt.rememberRecordedMenuContent` 里有且仅有一处调用」。
-装好插件后按下面三步确认（`enabled.txt` 含 `dev.spw.folia`、`permissions.json` 已授
+**安装版宿主在真机上是否真的走到这条录制路径**还没有被观测过（GUI 宿主无法在本环境无头驱动）。
+验收时按下面三步确认（插件已装、`enabled.txt` 含 `dev.spw.folia`、`permissions.json` 已授
 `class-transform`）：
 
-1. 启动 SPW，等插件 `start done` 后看
-   `…\workshop\plugins\<…>\plugin\spw-folia.log`，应出现
+1. 启动 SPW，等插件 `start done` 后看 `…\workshop\plugins\<…>\plugin\spw-folia.log`，应出现
    `tray hook installed: dev.nucleusframework.composenativetray.menu.impl.RecordingComposableScope.snapshot() …`
    （没有这行 = 目标解析失败，看紧跟的 `WARNING: tray menu item disabled: …`）。
 2. 最小化 SPW 到托盘，右键托盘图标：菜单里「桌面歌词」下方应出现一条 **Folia**；
@@ -418,61 +458,66 @@ fingerprint: I:显示主窗口:…|C:桌面歌词:…|C:锁定桌面歌词:…|I
 3. 点该 Folia 项 → Folia 窗口打开；日志追加 `tray: Folia item clicked`。再开合托盘菜单 2–3 次，
    确认 Folia 行**不重复**、日志里 `tray: Folia item recorded at index …` 只出现一次。
 
-## appendContent 为什么在这个宿主上失败
+## appendContent: why it fails on this host build (historical)
 
-早先的方案是
-`appendContent(className="…Ԭ", methodName="\\u037f", inClass="androidx.compose.ui.ē",
-parameter="content", scopeType=Class.forName("…ন"), parameterTypes=[F0,F2,F1], …)`。
-它永远抛
-`UI call missing or ambiguous: androidx.compose.ui.ē -> com.xuncorp.voxzen.ui.component.Ԭ.BlurPopupMenu (0 calls)`。
+The earlier plan was `appendContent(className="…Ԭ", methodName="\u037f", inClass="androidx.compose.ui.ē",
+parameter="content", scopeType=Class.forName("…ন"), parameterTypes=[F0,F2,F1], …)`. It always throws
+`UI call missing or ambiguous: androidx.compose.ui.ē -> com.xuncorp.voxzen.ui.component.Ԭ.BlurPopupMenu (0 calls)`.
 
-根因（从宿主字节解出来）：引擎解析到目标调用后，要求 `parameter` 是目标**业务参数名**
-（`UiTarget.names`）之一。这些名字来自 (a) JVM `MethodParameters` 属性或 (b) Kotlin `@Metadata`
-里的函数——而 (b) 还要求 metadata 里*原始*的 JVM 方法签名与运行时方法名匹配。R8 把 JVM 方法都改名了
-（所有 composable 共用 `Ϳ`，U+037F），而 `@Metadata` 里存的仍是原始名（`BlurPopupMenu`、
-`MenuFlyoutItemCompat`……），所以没有任何函数能关联上 → `names` 全是空串 →
-`indexOf("content") = -1` → 异常（字节码检查要求 index ≥ 0 **且**该参数类型是
-`kotlin.jvm.functions.Function1`）。宿主也没有发出 `MethodParameters` 属性。这是该宿主构建对
-**所有**插件的限制，不是我们这个目标特有的。
+Root cause (decoded from host bytes, `work/host/dec_ws/.../hooks/Ԫ.kt` = WorkshopHookTargets and the
+registrar): the engine resolves the target call, then requires `parameter` to be one of the target's
+**business parameter names** (`UiTarget.names`). Those names come from (a) JVM `MethodParameters`
+attributes or (b) Kotlin `@Metadata` functions — and for (b) the metadata's *original* JVM method
+signature must match the runtime method name. R8 renamed the JVM methods (all composables share the
+name `Ϳ`, U+037F) while `@Metadata` still stores the original names (`BlurPopupMenu`,
+`MenuFlyoutItemCompat`, …), so no function associates → `names` are all empty strings →
+`indexOf("content") = -1` → exception (bytecode check requires index ≥ 0 **and** that param's type
+be `kotlin.jvm.functions.Function1`). Also no `MethodParameters` attribute is emitted. This is a host
+build limitation for *all* plugins, not specific to our target.
 
-结论：对着 SPW 的目标永远不要依赖 Kotlin 名字；要么用 `hookMethod` + JVM 名字 + 参数类型表，
-要么用 `replaceComposable`/`afterComposable`（它们按 JVM 名 + 参数类型解析*调用点*，不需要参数名）。
+Consequence: never rely on Kotlin names against SPW 1.19.0 targets; use `hookMethod` with JVM names +
+parameter types, or `replaceComposable`/`afterComposable` (those resolve the *call site* by JVM name +
+parameter types and do not need parameter names).
 
-## 辅助方法 hook 万一失效时的降级方案
+## Fallback plans if the helper hook ever breaks
 
-- 方案 B：`replaceComposable(className="com.xuncorp.voxzen.ui.component.Ԭ", methodName="\\u037f",
-  inClass="androidx.compose.ui.ē", parameterTypes=[F0,F2,F1], …)`，在自己的 Composable 里重新实现
-  宿主的 4 个条目 + Folia 条目（宿主单例通过反射取：`PlaybackController.INSTANCE`、
-  `AppConfig.INSTANCE`、navigator；见 [`archive/re-host.md`](archive/re-host.md)）。
-- 方案 C：对 `com.xuncorp.voxzen.ui.player.mini.֏`（MiniPlayerMenu.kt）里的调用点做
-  `replaceComposable` —— 效果相同，注入点不同。
-- 方案 D：hook `MenuFlyoutScope` 的加项实现而不是 builder 辅助方法（更难：需要识别宿主的第 4 个
-  条目以便在它之后追加）。
-- 诊断：宿主异常出现在 `…\Salt Player for Windows\logs.txt`；插件另外在自己的安装目录写
-  `spw-folia.log`。
+- Plan B: `replaceComposable(className="com.xuncorp.voxzen.ui.component.Ԭ", methodName="\u037f",
+  inClass="androidx.compose.ui.ē", parameterTypes=[F0,F2,F1], …)` and re-implement the 4 host items +
+  Folia item inside our own Composable (host singletons via reflection: `PlaybackController.INSTANCE`,
+  `AppConfig.INSTANCE`, navigator; see `docs/archive/re-host.md`).
+- Plan C: `replaceComposable` on `PlayerMoreMenuFlyout` at its call site inside
+  `com.xuncorp.voxzen.ui.player.mini.֏` (MiniPlayerMenu.kt) — same effect, different injection point.
+- Plan D: hook `MenuFlyoutScope` item append implementation instead of the builder helper (harder:
+  needs to detect the host's 4th item to append after it).
+- Diagnostics: host exceptions surface in `…\Salt Player for Windows\logs.txt`; the plugin also writes
+  `spw-folia.log` in its own install dir.
 
-## 重新推导的配方（如果目标随 SPW 更新而变化）
+## Re-derivation recipes (if the target changes with an SPW update)
 
-**正常情况下你不需要这些。** 结构发现自己就能解析未知版本；下面这些只用于 (a) 用可选 profile
-钉住一个新版本、(b) 诊断发现失败（即宿主页面结构真的变了）、(c) 手工核对发现结果。
+**Since v0.4.6 you normally do not need any of this.** Structural discovery resolves an unknown build
+by itself; these recipes are only for (a) pinning a new build with an optional profile, (b)
+diagnosing a discovery failure (i.e. the host's page structure really changed), or (c) hand-verifying
+a discovery result.
 
-1. 类名→原始源码映射：`work/host/smap.json`（17,661 个混淆类 → `.kt` 文件名）。
-   `PlayerMoreMenuFlyout.kt → androidx/compose/ui/ē.class`，`Blur.kt → com/xuncorp/voxzen/ui/component/Ԭ.class`。
-2. 抽取类：用 Python `zipfile` 打开安装目录里的 `app/ffmpeg-x64.dll`（polyglot jar，`unzip` 会失败）。
-   然后 `java -jar work/host/vineflower.jar -dgs=1 <inDir> <outDir>` → `.kt`。
-3. javap（JDK 25）：`javap.exe -J-Dstdout.encoding=UTF-8 -p -s <file>`（写到文件再按 UTF-8 读；
-   控制台会把混淆的 unicode 名字弄坏）。
-4. 解析 Kotlin `@Metadata` 的 d1/d2（原始名，但 JVM 签名已改）：`work/host/tools/`
-   里的 `ParseMeta.java` / `ListMethods.java` / `ResolveTest.java`（直接对着 polyglot jar 编译运行），
-   输出 `work/host/d2_dump.txt`、`work/host/blur_d2_strings.txt`。
-5. 全部 jar 条目：`work/host/entries.txt`。
-6. **比 1–5 更快：读插件日志。** `host structural index: … (N method bodies, Mms)` 之后紧跟的
-   `host menu structural: …` 已经给出点分名与参数表。只有日志显示发现失败时才需要上面的反编译配方
-   ——而这时真正有用的产物是 `lastDiagnostics`（逐角色候选普查），不是名字。
+1. Class-name→original-source map: `work/host/smap.json` (17,661 obfuscated classes → `.kt` file names).
+   `PlayerMoreMenuFlyout.kt → androidx/compose/ui/ē.class`, `Blur.kt → com/xuncorp/voxzen/ui/component/Ԭ.class`.
+2. Extract classes: Python `zipfile` on
+   `C:\Program Files\WindowsApps\Sakawish.SaltPlayerforWindows_1.19.0.0_x64__q65q631pyh094\app\ffmpeg-x64.dll`
+   (polyglot jar; `unzip` fails). Then `java -jar work/host/vineflower.jar -dgs=1 <inDir> <outDir>` → `.kt`.
+3. javap (JDK 25): `"/c/Program Files/Java/jdk-25.0.2/bin/javap.exe" -J-Dstdout.encoding=UTF-8 -p -s <file>`
+   (write to file + read as UTF-8; console garbles the obfuscated unicode names).
+4. Decode Kotlin `@Metadata` d1/d2 (original names, but renamed JVM signatures): `work/host/tools/`
+   `ParseMeta.java` / `ListMethods.java` / `ResolveTest.java` (compile+run against the polyglot jar
+   directly), dumps `work/host/d2_dump.txt`, `work/host/blur_d2_strings.txt`.
+5. All jar entries: `work/host/entries.txt`.
+6. **Faster than 1–5 for a new build: read the plugin log.** `host structural index: … (N method
+   bodies, Mms)` then `host menu structural: …` already gives the dotted names and the parameter list.
+   Only if the log shows a discovery failure do you need the decompile recipes above — and then the
+   useful artifact is `lastDiagnostics` (the per-role candidate census), not the names.
 
-## 码点速查（复制粘贴安全）
+## Codepoints (copy-paste safety)
 
-| 字形 | 码点 | 名称 / 角色 |
+| glyph | codepoint | name / role |
 |---|---|---|
 | ē | U+0113 | PlayerMoreMenuFlyoutKt file facade (1.19.0) |
 | ঘ | U+0918 | PlayerMoreMenuFlyoutKt file facade (1.19.2) |
@@ -481,16 +526,17 @@ parameter="content", scopeType=Class.forName("…ন"), parameterTypes=[F0,F2,F1
 | ন | U+09A8 | MenuFlyoutScope interface (1.19.0) |
 | Ը | U+0538 | MenuFlyoutScope interface (1.19.2) |
 | त | U+0924 | MenuFlyoutScope interface (1.19.3) |
-| Ϳ | U+037F | 共用的混淆 JVM 方法名（builder 辅助方法、scope item bridge、list 字段） |
-| ઠ | U+0AA0 | 宿主菜单项 content lambda 工厂 |
+| Ϳ | U+037F | shared obfuscated JVM method name (builder helper, scope item bridge, list field) |
+| ઠ | U+0AA0 | host menu-item content lambda factories |
 | Ⴈ | U+10A8 | PopupState (1.19.0) |
 | ะ | U+0E30 | PopupState (1.19.2) |
 | ל | U+05DC | PopupState (1.19.3) |
 | ԩ | U+0529 | PopupState.dismiss() |
-| ʰ | U+02B0 | palette 访问器 facade（`ʰ.Ԩ(composer).Ԩ()`） |
-| Ԩ | U+0528 | palette 访问器方法 **与** 内容色 getter |
-| ʹ | U+0374 | palette 对象类 |
+| ʰ | U+02B0 | palette accessor facade (`ʰ.Ԩ(composer).Ԩ()`) |
+| Ԩ | U+0528 | palette accessor method **and** content-colour getter |
+| ʹ | U+0374 | palette object class |
 
-这些码点**只是回归基准和复制粘贴的便利**。没有代码路径*依赖*它们：结构发现从字节码结构推导出
-每一个名字，因此一个字形完全不同的构建仍然能解析。把这张表当作「在这些版本的构建上，发现链必须
-复现出这些值」，而不是插件查表用的映射。
+Since v0.4.6 these glyphs are **only regression baselines and copy-paste aids**. No code path
+*requires* them: structural discovery derives every name from bytecode structure, so a build with
+entirely different glyphs still resolves. Treat the table as "what the discovery must reproduce on
+these three builds", not as a lookup the plugin depends on.

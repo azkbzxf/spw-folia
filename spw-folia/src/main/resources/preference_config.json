@@ -8,9 +8,29 @@
           "type": "switch",
           "key": "transitionAnimation",
           "title": "打开过渡动画",
-          "summary": "打开 Folia 时显示一段封面取色的淡入动画（0.8 秒），遮住加载和透明切换的瞬间，减少闪烁。",
+          "summary": "打开 Folia 时播放原版开屏动画（Folia 词标 + 波形竖条），遮住加载与透明切换的瞬间。",
           "default_value": false
         },
+        {
+          "type": "switch",
+          "key": "showPlaybackBar",
+          "title": "显示播放条",
+          "summary": "播放页底部的播放控制条（时间轴、播放/暂停、上一首/下一首、随机、播放列表）。关闭后只剩歌词画面，切换即时生效。",
+          "default_value": true
+        },
+        {
+          "type": "switch",
+          "key": "showProblemButton",
+          "title": "显示问题反馈按钮",
+          "summary": "播放页右上角的救生圈按钮，点开可检查运行环境并打开反馈页面。默认关闭以免遮挡画面；播放窗口打不开时，仍可在本配置页最下方「支持与反馈 → 出现问题」使用同一功能。",
+          "default_value": false
+        }
+      ]
+    },
+    {
+      "title": "诊断与日志",
+      "config": "diagnostics.json",
+      "preferences": [
         {
           "type": "switch",
           "key": "verboseLog",

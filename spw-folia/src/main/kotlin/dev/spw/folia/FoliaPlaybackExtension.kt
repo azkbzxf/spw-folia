@@ -156,14 +156,9 @@ class FoliaPlaybackExtension : PlaybackExtensionPoint {
 
     // ------------------------------------------------------------ extension ----
 
-    /**
-     * v0.4.0: the current artwork as a `data:image/…;base64,…` URL, used by the intro curtain to
-     * derive its palette from the song cover ([FoliaCoverPalette]). Null until the cover loaded.
-     */
-    fun coverDataUrlForPalette(): String? = coverDataUrl
-
-    /** v0.4.0: id of the current track, so the palette cache can follow song changes. */
-    fun currentTrackId(): String? = mediaItem?.id
+    // v0.4.8: coverDataUrlForPalette() / currentTrackId() were only here for the cover-tinted veil
+    // that v0.4.8 removed (the opening animation is Folia's own page splash now). The artwork itself
+    // still travels to the page inside the track payload — see the `coverDataUrl` field above.
 
     private fun mapState(state: State): PlaybackState = when (state) {
         State.Idle -> PlaybackState.IDLE

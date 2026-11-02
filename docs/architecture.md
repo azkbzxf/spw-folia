@@ -1,131 +1,174 @@
-# spw-folia — 架构
+# spw-folia — Architecture v2 (FINAL, 2026-10-18)
 
-**SPW 1.19.0+ 的 Windows 创意工坊插件**：在迷你播放器的「更多」菜单里加一个 **Folia** 条目，
-点击后打开**全屏 Folia 歌词模式**，复现 Folia 的 15 种歌词样式、全部效果、设置界面与默认值。
-以 **AGPL-3.0**（Folia 衍生作品）发布在 `azkbzxf/spw-folia`（topic `salt-player-plugins`），
-产物是 `.spmod`。
+> **Version state (as of 2026-11-02):** the current **development** version is **v0.4.11**, which is
+> **not published**. The **last published** release is **v0.4.6** (GitHub Releases, 2026-10-30);
+> v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10 were local builds only and were never uploaded. Architecture
+> statements in this file describe the code as it stands at v0.4.11 unless a version is named
+> explicitly — a version name marks *when a mechanism was introduced*, not that users can download it.
+> Version numbers written inside the code were stale for several cycles (`0.4.7`) and are unified to
+> `0.4.11` by this batch of work.
 
-相关文档：
+Goal: **SPW 1.19.0 Windows workshop plugin**. Adds a **Folia** item to the mini-player 更多 menu; clicking opens a
+**fullscreen Folia lyric mode** reproducing Folia's 17 lyric styles, all effects, settings UI and defaults as
+faithfully as possible. Publish to GitHub (`azkbzxf/spw-folia`, topic `salt-player-plugins`) under **AGPL-3.0**
+(Folia-derived work), with a `.spmod` release.
 
-- [`protocol.md`](protocol.md) — 插件↔宿主↔页面 的协议 v1，字段级的实现契约。
-- [`hook-target.md`](hook-target.md) — 「更多」菜单的 hook 目标、结构发现链、已知版本基线、降级路径。
-- [`folia-spec/`](folia-spec/) — 从 Folia 源码提取的行为规格（15 样式、设置、音频尺度、主题、转场）。
-- 实现文档：[`host-app.md`](host-app.md)、[`settings-ui-impl.md`](settings-ui-impl.md)、
-  [`audio-timeline.md`](audio-timeline.md)。
-- 反向工程背景与历史证据：[`archive/`](archive/)。
+Related docs (authoritative order):
+- `docs/protocol.md` — **implementation contract v1** for plugin↔host↔page (frozen; changes require Lead approval).
+- `docs/archive/re-host.md` — SPW host RE facts, local plugin install/test loop, build env.
+- `docs/hook-target.md` — exact SPW hook target for the 更多 menu, the structural-discovery chain
+  (v0.4.6+), the known-profile regression baselines and fallbacks.
+- `docs/folia-spec/README.md` (+ style-map / settings-ui / tunings / runtime-contracts / fullscreen-shell / assets) —
+  Folia behavior spec extracted from source (15 styles, settings, audio scale, theme, transitions).
+- Implementation docs: `docs/host-app.md`, `docs/settings-ui-impl.md`, `docs/audio-timeline.md`.
+- Decision records (frozen): `docs/archive/webview-spike.md`, `docs/archive/hook-poc.md`.
+- `docs/architecture.md` (this file) — how the pieces fit.
 
-## 1. 核心决策
+## 1. Core decisions
 
-1. **不把 Folia 的视觉器移植到 Kotlin。** Folia（React/TS，约 6 万行，AGPL-3.0）本身就提供了
-   **OBS 浏览器源**这一入口：`dist` 在 pathname 为 `/obs` 或带 `?obs=1` 时挂载
-   `ObsBrowserSourceApp`（普通浏览器页面，不需要 Electron）。所以直接打包 Folia 的真实生产构建，
-   得到像素级一致的 15 种样式、背景、辉光字、字幕叠加与转场。
-2. **没有 HTTP 服务器、不联网、不用 Electron。** WebView2 宿主把本地目录映射成虚拟主机
-   `https://spw-folia.local`；Folia 的 `EventSource` 被注入的 **Shim.js** 替换，
-   数据来自 `window.chrome.webview` 消息。插件因此体积小、离线、攻击面低。
-3. **原生辅助进程 `spw-folia-host.exe`**：C# .NET Framework 4.8 + WinForms + WebView2
-   （系统运行时）——无边框全屏窗口、WASAPI 环回音频分析、与 JVM 插件的 IPC。
-   理由：SPW 是 512 MB 堆的 Compose/Skia 应用，把 Chromium/JCEF 塞进 JVM 又重又险；
-   而辅助进程是被验证过的模式（spw-island 也带原生 exe）。
-4. **插件保持薄**：它持有数据（播放时钟、歌词、曲目/封面、设置持久化）与生命周期，从不负责渲染。
-   页面负责设置 UI + 构建 `ObsBrowserSourceConfig` + 渲染。
-5. **设置 UI 复用 Folia 真实的 React 组件**（React island 注入到同一个页面），依据
-   [`folia-spec/settings-ui.md`](folia-spec/settings-ui.md)；降级控件按同一份规格降级。
+1. **Do not port Folia's visualizers to Kotlin.** Folia (React/TS, ~60k lines, AGPL-3.0) already ships a
+   first-class **OBS browser-source surface**: `dist` mounts `ObsBrowserSourceApp` at pathname `/obs` or `?obs=1`
+   (plain browser, no Electron; verified). We bundle Folia's real production dist → pixel-faithful, all 15 styles,
+   backgrounds, glow words, subtitle overlay, transitions.
+2. **No HTTP server, no network, no Electron.** WebView2 host maps a local folder to virtual host
+   `https://spw-folia.local`; Folia's `EventSource` is replaced by an injected **Shim.js** fed by
+   `window.chrome.webview` messages. This keeps the plugin small, offline, and secure.
+3. **Native helper process** `spw-folia-host.exe`: C# .NET Framework 4.8 + WinForms + WebView2 (system runtime
+   150.x already present) — borderless fullscreen window, WASAPI loopback audio analysis, IPC with the JVM plugin.
+   Rationale: SPW is a 512 MB-heap Compose/Skia app; embedding Chromium/JCEF in-JVM is heavy/risky, while helper
+   processes are the proven pattern (spw-island bundles native exes). Fallback only if WebView2 impossible: JCEF.
+4. **Plugin stays thin**: it owns data (playback clock, lyrics, track/cover, settings persistence) and lifecycle;
+   it never renders. The page owns settings UI + `ObsBrowserSourceConfig` building + rendering.
+5. **Settings UI reuses Folia's real React components** (React island injected into the same page) per
+   `docs/folia-spec/settings-ui.md` §8; fallback components are clean-room per its §7 visual specs.
 
-## 2. 组件
+## 2. Components
 
 ```
-Salt Player for Windows 1.19.x (JVM/Compose)  ── spawn ──▶  spw-folia-host.exe (每次全屏会话一个)
-  spw-folia 插件 (.spmod, PF4J, Kotlin)                     C# WinForms + WebView2
-  ├─ MenuHook      对 更多 builder 做 hookMethod            ├─ 无边框全屏窗口（DPI、多显示器）
-  ├─ PlaybackBridge PlaybackExtensionPoint                  ├─ 加载 web/（虚拟主机 spw-folia.local）
-  ├─ Timeline      1 Hz → 60 Hz 位置插值                    ├─ 注入 Shim.js → 设置岛 → 资源
-  ├─ ConfigStore   设置 JSON 落在 workshop/data/<id>/       ├─ WASAPI 环回 → 0..255 FFT/五带/power（~30–60 Hz）
-  ├─ HelperManager spawn/stdin/stdout/退出监视               └─ stdio JSON 行 ⇄ 插件（protocol v1）
-  └─ LibraryBridge 封面/曲目元数据
-                                                                    │ chrome.webview 消息
+Salt Player for Windows 1.19.0 (JVM/Compose)  ── spawn ──▶  spw-folia-host.exe (per fullscreen session)
+  spw-folia plugin (.spmod, PF4J, Kotlin)                    C# WinForms + WebView2
+  ├─ MenuHook      hookMethod on 更多 builder                ├─ fullscreen borderless window (DPI, multi-monitor)
+  ├─ PlaybackBridge PlaybackExtensionPoint                   ├─ loads web/ (virtual host spw-folia.local)
+  ├─ Timeline      1Hz→60Hz position interpolation           ├─ injects Shim.js → settings UI bundle → assets
+  ├─ ConfigStore   settings JSON in workshop/data/<id>/      ├─ WASAPI loopback → 0..255 FFT/bands/power (~30-60Hz)
+  ├─ HelperManager spawn/stdin/stdout/exit-watch             └─ stdio JSON-lines ⇄ plugin (protocol v1)
+  └─ LibraryBridge cover/track metadata
+                                                                    │ chrome.webview messages
                                                                     ▼
-                                              WebView2 页面 = Folia dist (/obs) + 注入脚本
-                                              ├─ Shim.js：假 EventSource → clock/audio/config 事件
-                                              ├─ 设置岛（React island）：歌词样式窗口、默认、15 格样式
-                                              └─ publisher.ts：设置+歌词+曲目+主题 → config → pushConfig()
+                                              WebView2 page = Folia dist (/obs) + injected scripts
+                                              ├─ Shim.js: fake EventSource → clock/audio/config events
+                                              ├─ settings UI (React island): 歌词样式 window, 默认, style grid 15
+                                              └─ publisher.ts: settings+lyrics+track+theme → config → pushConfig()
 ```
 
-## 3. 数据流（protocol v1，字段级细节见 [`protocol.md`](protocol.md)）
+## 3. Data flow (protocol v1 — see docs/protocol.md for field-level detail)
 
-- 插件 → 宿主：`hello`、`settings`（持久化设置种子）、`state`（posMs/durationMs/playing/rate/tsMs，~100 ms）、
-  `lyrics`（行+cells+offset）、`track`（元数据 + coverDataUrl）、可选 `config`、`quit`。
-- 宿主 → 插件：`ready`、`closed`、`settings`（UI 改动 → 持久化）、`action`、`log`。
-- 宿主 → 页面：`hello`、`settings`、`state→clock`、`lyrics`、`track`、`audio`（0..255 gamma 尺度、
-  1024 bin 原始频谱、暂停时呼吸量 0..40）、可选 `config`/`beat`。
-- 页面 → 宿主：`ready`、`settings`、`action`（close/reset/openDevTools）、`log`。
-- 页面全局 `window.__SPW_FOLIA__`：`on/emit/getSettings/setSettings/pushConfig/requestClose/inputs`。
-- **配置归属**：设置岛 / publisher 在页面内构建完整的 Folia `ObsBrowserSourceConfig`（节流 ≤10 Hz）
-  并调 `pushConfig`；Shim 把它派发成 config 事件。宿主从不构建配置。
-- 音频完全在宿主内（与 WebView2 同进程）：没有 IPC 跳数，不需要额外 exe。
+- Plugin → host: `hello`, `settings` (persisted settings seed), `state` (posMs/durationMs/playing/rate/tsMs ~100ms),
+  `lyrics` (lines+cells+offset), `track` (metadata+coverDataUrl), optional `config`, `quit`.
+- Host → plugin: `ready`, `closed`, `settings` (UI changed → persist), `action`, `log`.
+- Host → page: `hello`, `settings`, `state→clock`, `lyrics`, `track`, `audio` (0..255 gamma scale, 1024-bin raw
+  spectrum, breathing 0..40 when paused), optional `config`/`beat`.
+- Page → host: `ready`, `settings`, `action`(close/reset/openDevTools), `log`.
+- Page global `window.__SPW_FOLIA__`: `on/emit/getSettings/setSettings/pushConfig/requestClose/inputs`.
+- **Config ownership**: settings UI/publisher builds the full Folia `ObsBrowserSourceConfig` in-page (throttled
+  ≤10Hz) and calls `pushConfig`; Shim dispatches it as the config event. Host never builds config in v1.
+- Audio lives entirely in the host (same process as WebView2): no IPC hop, no extra exe.
 
-## 4. 入口 / 退出体验
+## 4. Entry / exit UX
 
-- 「更多」菜单 → **Folia** 条目（钟形/图形图标）→ 启动辅助进程，约 1 s 内进入全屏。
-- 全屏 = 只有 Folia 视觉器（像 Folia 的播放页），外加我们自己的一层最小 chrome：
-  右上角**设置齿轮**（打开歌词样式面板）、左上角**返回/关闭**按钮、右下角**播放页背景按钮**
-  （金色滑杆图标 → 面板里的「播放页透明背景」开关，透明开启时 chrome 保持可见）；
-  鼠标静止后隐藏光标，chrome 自动淡出；ESC = 设置面板开着就先关它，否则关窗口。
-- **首屏不自动弹设置**：设置面板只在用户点 ⚙ 或按 F1 时打开。每次打开 Folia 模式都以覆盖层关闭
-  的状态开始（页面不持久化面板开关）；同一次会话里组件不卸载，所以再次打开是即时的、预览帧不闪。
-  再次点菜单项时若会话已打开，不产生第二个窗口（置前）。
-- 关闭 → 宿主发 `closed`，插件停止状态推送、等待退出（2 s 后强杀），下次可干净重开。
-- 崩溃隔离：宿主崩溃不会拖垮 SPW；插件记日志并允许重开。插件禁用/卸载 → 发 `quit` + 优雅终止；
-  宿主不阻塞文件删除（用户数据在 `%LOCALAPPDATA%\spw-folia`）。
+- 更多 menu → item **Folia** (bell/graphic icon) → start helper, go fullscreen within ~1s.
+- Fullscreen = Folia visualizer only (like Folia's player view), plus minimal chrome we own:
+  top-right **settings gear** (opens the 歌词样式 panel), top-left **back/close** button, bottom-right
+  **player background button** (v0.1.7, gold sliders icon → panel with the 播放页透明背景 switch, keeps the
+  chrome visible while transparency is on); mouse hides cursor after idle, chrome auto-hides, ESC = close
+  settings panel if open else close window.
+- First run (no saved settings) opens the settings panel so the styles UI is immediately visible; thereafter
+  remembers last panel state. Clicking menu item again while session open → no second window (bring to front).
+- Close → host sends `closed`, plugin stops state feed, waits exit (kill after 2s), reopens cleanly next time.
+- Crash isolation: host crash never takes SPW down; plugin logs and allows relaunch. Plugin disable/uninstall →
+  `quit` + graceful kill; host never blocks file deletion (user-data in `%LOCALAPPDATA%\spw-folia`).
 
-## 5. 打包
+## 5. Packaging
 
-- 插件工程 `spw-folia/`（Gradle 9.8、JDK 25、Kotlin 2.4.20、Compose 编译器插件、
-  JitPack 上的官方 `com.xuncorp.spw.workshop` 0.1.0-dev23、`spmod {}` 元数据）。
-- 权限三项：`class-transform`、`library-read`、`key-bindings`
-  （`spw-folia/build.gradle.kts`）。缺 `class-transform` 就没有菜单项，缺 `library-read` 就没有
-  歌词/封面，缺 `key-bindings` 只是没有快捷键。
-- `.spmod` 的 zip 载荷：`classes/`（插件 jar）、`lib/`（运行时依赖，通常为空）、
-  `web/`（Folia dist + Shim.js + 设置岛 + 缩略图）、`native/`（`spw-folia-host.exe`、
-  `exe.config`、3 个 WebView2 dll）、`licenses/`（Folia AGPL-3.0 + NOTICE + 第三方许可）。
-  官方 gradle 插件只产 `classes/` + `lib/`，其余由 `packaging/tools/assemble-release.py` 合并进来
-  （见 [`release.md`](release.md)）。
-- 插件从安装目录**原地**运行辅助进程（不解压；`%APPDATA%` 可写）；WebView2 用户数据在
-  `%LOCALAPPDATA%\spw-folia\webview`。
-- 本地测试循环：解包 `.spmod` →
-  `%APPDATA%\Salt Player for Windows\workshop\plugins\dev.spw.folia-<ver>-LOCAL-ONLY\`，
-  在 `enabled.txt` 里追加 `dev.spw.folia`，在 `permissions.json` 预授权
-  `{"dev.spw.folia":{"reviewed":["class-transform","library-read","key-bindings"],
-  "granted":["class-transform","library-read","key-bindings"]}}`，重启 SPW，看 `spw-folia.log`。
-- 版本守卫：hook 目标在运行时由 `HostTargets` 解析——缓存 → 内置 profile（回归基准 / 快路径）→
-  宿主字节码的结构发现 → 旧的 classpath 扫描，每一层的结果都要过反射校验
-  （见 [`hook-target.md`](hook-target.md)）。低于 `HostTargets.Version.MIN_SUPPORTED`（1.19.0）
-  直接拒绝并记一行日志；未知的新版本在后台线程解析，而不是拒绝。
+- Plugin project `spw-folia/` (Gradle 9.8, JDK 25, Kotlin 2.4.20, Compose compiler plugin, official
+  `com.xuncorp.spw.workshop` 0.1.0-dev23 from JitPack, `spmod {}` metadata, permission `CLASS_TRANSFORM`).
+- `.spmod` = zip payload `classes/` (plugin jar), `lib/` (runtime deps), `web/` (Folia dist subset + Shim.js +
+  settings UI dist + fonts), `native/` (`spw-folia-host.exe`, `WebView2Loader.dll`), `licenses/` (Folia
+  AGPL-3.0 + NOTICE + third-party licenses).
+- Artifact name `plugin-<id>-<version>.spmod` (official gradle plugin produces classes/+lib/; extra `web/`,
+  `native/`, `licenses/` entries are added by a custom Zip task or post-processing — see task notes).
+- Plugin runs the helper **in place** from its install dir (no extraction; `%APPDATA%` is writable); WebView2
+  user-data → `%LOCALAPPDATA%\spw-folia\webview`.
+- Local test loop: unzip `.spmod` → `%APPDATA%\Salt Player for Windows\workshop\plugins\dev.spw.folia-<ver>-LOCAL-ONLY\`,
+  append `dev.spw.folia` to `enabled.txt`, pre-grant
+  `{"dev.spw.folia":{"reviewed":["class-transform","library-read","key-bindings"],"granted":["class-transform","library-read","key-bindings"]}}`
+  in `permissions.json`, restart SPW, check `logs.txt`.
+- Version guard: hook targets are resolved at runtime by `HostTargets` — cache → known profile
+  (regression baseline / fast path) → structural discovery of the host bytecode → legacy classpath
+  scan, every layer gated by reflection validation (`docs/hook-target.md`). Below
+  `HostTargets.Version.MIN_SUPPORTED` (1.19.0) the hook is refused with a log line; an unknown newer
+  build is resolved on a background thread instead of being refused.
 
-## 6. 保真要求（来自 Folia spec）
+## 6. Fidelity requirements (from Folia spec)
 
-- 15 种样式与顺序/名称：商籁 sonnet、凝彩 tempera、绘光 lumiere、花火 hanabi（order 26）、
-  流光 classic、心象 cadenza、云阶 partita、浮名 fume、倾诉 tilt、回环 claddagh、莫奈 monet、
-  时计 pendolo、群唱 cappella、镜台 diorama、静止 still。
-- 设置窗口与 Folia 一致：标签页 歌词动画/背景/字体/字幕、默认重置、
-  渲染质量（纹理分辨率 + GPU 提示）、动态与构图（镜头运动强度 / 文字动势）、
-  15 格样式的样式栏、每种样式自己的参数面板。
-- 音频尺度 **0..255 带 gamma**，暂停时呼吸；`beatImpact`/`downbeatImpact` 在拿不到节拍事件时
-  不驱动动画（滑杆值照常存进设置树）。
-- 默认值 = Folia 的存储默认值（例如纹理分辨率 1.5；截图里的 1.00x 是用户改过的状态）。
-- 样式切换走 Folia 的 softFocus / 图层过渡；背景 6 种模式（默认 latent）。
+- 15 styles + order/names: 商籁 sonnet、凝彩 tempera、绘光 lumiere、花火 hanabi (order 26)、流光 classic、心象 cadenza、
+  云阶 partita、浮名 fume、倾诉 tilt、回环 claddagh、莫奈 monet、时计 pendolo、群唱 cappella、镜台 diorama、静止 still.
+- Settings window 1:1 with screenshot 1 (tabs 歌词动画/背景/字体/字幕, 默认, 智能动感模式, 动感效果 推镜裂光+强度,
+  渲染质量 纹理分辨率+GPU notice, 动态与构图 镜头运动强度/文字动势, 样式 15 grid, per-style tuning panels).
+- Audio scale **0..255 with gamma**, breathing when paused, `beatImpact/downbeatImpact` only animate when we can
+  inject them (webview-spike probing); otherwise sliders stored but animation stays static (documented).
+- Defaults = Folia store defaults (e.g. 智能动感 off in code, 纹理分辨率 1.5; screenshot's 1.00x is a user state).
+- Style switching uses Folia's softFocus/layer transition; backgrounds 6 modes (default latent).
 
-## 7. 风险
+## 7. Status / milestones
 
-- **菜单 hook 稳定性**：`hookMethod` 匹配 JVM 名称 + 参数类型，因此能扛住 Kotlin 改名；
-  *混淆后* 的名字在运行时解析（缓存 → 内置 profile → 宿主字节码的结构发现），每个结果在被使用前
-  都过反射校验。但**页面结构重构**（不再有 `BlurPopupMenu` 形状的弹层，或弹层不再接收
-  `Track` / `PiscesMediaItem`）仍会打断发现——这时它会响亮失败，Folia 条目直接缺失，绝不会错误注入。
-  降级路径：旧 classpath 扫描，再不行是 `replaceComposable` / 用快捷键开窗。
-  详见 [`hook-target.md`](hook-target.md)。
-- **dist 自包含**：Folia dist 可能引用 CDN 字体/资源——必须本地打包并验证离线可用。
-- **WebView2 可用性**：系统运行时缺失时给出可读的失败信息（而不是黑窗口）。
-- **节拍特效**：需要节拍检测模型或注入的模块，当前不提供。
-- **音频环回**：独占模式 / ASIO 输出可能抓不到声音 → 宿主降级为静态/呼吸值。
-- **混淆漂移**：R8 改名不再打断 hook（结构发现）；真正会打断的是页面结构重构。
-  在 1.19.3 上字节码索引耗时约 1.3–1.5 s，因此只在后台线程跑，并按宿主版本缓存。
+- M1 spikes: hook target decoded + PoC in progress (task-1); Folia renderer in WebView2 verified, 120 fps (task-3);
+  spec docs done (task-2); audio/timeline in progress (task-4).
+- M2 integration: menu item + host process + first style end-to-end inside SPW.
+- M3 fidelity: all 15 styles + settings UI + persistence + real lyrics/clock.
+- M4 hardening: packaging, install/uninstall, state restore, version guard, perf (1080p60), docs (zh/en), LICENSE.
+- M5 publish: GitHub repo + topic + release `.spmod` + install guide.
+
+**Where the milestones actually stand (2026-11-02):** M1–M5 are all reached in the working tree and
+the project has been shipping tagged GitHub releases for a while — **the last one is v0.4.6**
+(2026-10-30). Development continued past it without publishing (v0.4.6.1 → v0.4.11), so the current
+**development** version is **v0.4.11 (unpublished; the code now reports `0.4.11` everywhere)**.
+v0.4.10 reshaped the SPW config page: it lost its 「帧率」 setting entirely (upstream's
+`frameRateLimiter` `-1 ms` tolerance makes every non-default cap land on a lower effective rate, so
+the default "no limit" — which simply follows the monitor refresh — is the only honest option) and
+gained a 「显示播放条」 switch (default on) that unmounts the bottom playback HUD when off.
+v0.4.11 then **splits that page into three groups** — 播放页 / 诊断与日志 / 支持与反馈 — each with
+its own `config` file (`config.json` / `diagnostics.json` / `support.json`), and adds a
+「显示问题反馈按钮」 switch (default **off**) for the top-right life-buoy button. The settings tree
+therefore carries **two** plugin-owned booleans of this kind, `showPlaybackBar` and
+`showProblemButton`, alongside `systemFonts` / `transitionAnimation` / `verboseLog`; the page reads
+them but never writes them back (ownership stays in the plugin's `preference_config.json`).
+
+Two consequences worth naming, because both are invisible in the UI:
+
+- **Moving a switch between groups = moving it between storage files.** `ConfigManager.getConfig(name)`
+  keeps one `ConfigHelper` per `config` file, so 「详细日志」 relocating from 播放页 to 诊断与日志
+  means its value now lives in `diagnostics.json` instead of `config.json`. A plain
+  `get(key, false)` would silently reset the user's setting; `FoliaConfigGroups.readBoolean()` falls
+  back to the legacy file and migrates the value across on first read (logged as
+  `config migrated <key>=… from … to …`).
+- **A plugin-owned switch must not become a second writer.** Both booleans are stripped in
+  `FoliaPlugin.onSettingsFromPage` before the page's tree is persisted, so the config page remains the
+  single source of truth.
+
+## 8. Risks
+
+- **Menu hook stability**: `hookMethod` matches JVM names + parameter types, so it survives Kotlin
+  renames; the *obfuscated* names are resolved at runtime (cache → known profile → structural
+  discovery over the host bytecode, v0.4.6+), and every result is reflection-validated before use.
+  A page-structure rewrite (no `BlurPopupMenu`-shaped popup, or a flyout that no longer takes
+  `Track`/`PiscesMediaItem`) still breaks discovery — it then fails loudly and the item is simply
+  absent, never mis-injected. Fallback: legacy classpath scan, then `replaceComposable` / a
+  key-binding-opened window (see `docs/hook-target.md`).
+- **Dist self-containment**: Folia dist may reference CDN fonts/assets — bundle locally, verify offline (spike).
+- **WebView2 availability**: system runtime 150.x present; loader dll bundled; fallback message if missing.
+- **Beat FX**: requires sensor model or injected module MVs; degrade gracefully.
+- **Audio loopback**: exclusive-mode/ASIO output may yield silence → host falls back to static/breathing values.
+- **Obfuscation drift**: R8 renames no longer break the hook (structural discovery, v0.4.6+); what
+  still breaks it is a *structural* rewrite of the page. The bytecode index costs ~1.3–1.5 s on
+  1.19.3, so it runs only on the background worker and is cached per host build.

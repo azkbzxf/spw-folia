@@ -18,12 +18,12 @@ for arg in "$@"; do
   esac
 done
 
-ROOT="D:/输出目录/dsh2"
+ROOT="D:/输出目录/spw-folia"
 APPDATA_DIR="C:/Users/24037/AppData/Roaming/Salt Player for Windows"
 PLUGINS="$APPDATA_DIR/workshop/plugins"
 PLUGIN_ID="dev.spw.folia"
-PLUGIN_VERSION="${PLUGIN_VERSION:-0.4.3}"
-DEST="$PLUGINS/${PLUGIN_ID}-${PLUGIN_VERSION}-LOCAL-ONLY"
+PLUGIN_VERSION="${PLUGIN_VERSION:-0.4.13}"
+DEST="$PLUGINS/${PLUGIN_ID}-${PLUGIN_VERSION}"
 SPMOD="$ROOT/spw-folia/build/libs/plugin-${PLUGIN_ID}-${PLUGIN_VERSION}.spmod"
 BACKUP="$ROOT/spw-folia/notes/appdata-backup-$(date +%Y%m%d-%H%M%S)"
 

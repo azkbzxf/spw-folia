@@ -13,8 +13,8 @@
   if (window.__SPW_FOLIA_OVERLAY__) return;
 
   var MODES = [
-    'sonnet', 'tempera', 'lumiere', 'fume', 'monet', 'pendolo', 'cappella', 'partita',
-    'claddagh', 'cadenza', 'diorama', 'tilt', 'still', 'window', 'classic'
+    'sonnet', 'tempera', 'lumiere', 'hanabi', 'machi', 'nebbia', 'classic', 'cadenza', 'partita',
+    'fume', 'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still'
   ];
 
   function el(tag, style, text) {

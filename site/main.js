@@ -2,11 +2,14 @@
 (function () {
   "use strict";
 
-  /* ── the 14 real Folia styles ─────────────────────────────── */
+  /* ── the 17 real Folia styles, in Folia's own shelf order ─────── */
   const STYLES = [
     { id: "sonnet",    zh: "商籁",  en: "Sonnet"    },
     { id: "tempera",   zh: "凝彩",  en: "Tempera"   },
     { id: "lumiere",   zh: "绘光",  en: "Lumiere"   },
+    { id: "hanabi",    zh: "花火",  en: "Hanabi"    },
+    { id: "machi",     zh: "町景",  en: "Machi"     },
+    { id: "nebbia",    zh: "雾笺",  en: "Nebbia"    },
     { id: "classic",   zh: "流光",  en: "Classic"   },
     { id: "cadenza",   zh: "心象",  en: "Cadenza"   },
     { id: "partita",   zh: "云阶",  en: "Partita"   },

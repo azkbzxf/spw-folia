@@ -111,6 +111,87 @@ const inlineCssIntoEntry = (): Plugin => ({
     },
 });
 
+/**
+ * 守护：17 张样式缩略图必须真的进了产物。
+ *
+ * `public/thumbs/*.jpg` 是**构建输入**而不是源码（被 .gitignore 掉，干净检出时连 public/ 都没有）。
+ * 少了它们 vite build 照样成功，只是产物里没有任何 thumbs —— 于是注入后货架 17 个 tile 全是
+ * 浏览器的破图图标（用户看到的“样式图片显示错误/乱码”）。这类“静默降级”只能靠构建期硬失败拦住，
+ * 所以这里在 writeBundle 阶段核对文件，缺一张就 throw（比发布后才发现便宜得多）。
+ */
+const requireStyleThumbs = (): Plugin => ({
+    name: 'spw-require-thumbs',
+    apply: 'build',
+    enforce: 'post',
+    writeBundle(options) {
+        const outDir = options.dir ?? path.join(here, 'dist');
+        const missing = STYLE_MODES.filter(mode => !fs.existsSync(path.join(outDir, 'thumbs', `${mode}.jpg`)));
+        if (missing.length > 0) {
+            throw new Error(
+                `[spw-folia] 产物缺少 ${missing.length} 张样式缩略图（dist/thumbs）：${missing.join(', ')}.\n`
+                + `    货架会渲染成破图。先跑 \`node scripts/make-thumbs.mjs\`（用真实 Folia 渲染器重新采集）再构建。`,
+            );
+        }
+    },
+});
+
+/** The 17 Folia visualizer modes in shelf order — the shelf renders one tile per entry.
+ *  NOTE: this is the one list `scripts/check-style-sync.mjs` treats as mechanical: run it with
+ *  `--write` to append a style upstream just added, and `--check` (wired into the build below) to
+ *  fail before a stale copy can ship. Don't hand-edit it out of step with the lockstep lists. */
+const STYLE_MODES = [
+    'sonnet', 'tempera', 'lumiere', 'hanabi', 'machi', 'nebbia', 'classic', 'cadenza', 'partita',
+    'fume', 'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still',
+];
+
+/**
+ * 守护：本地样式清单必须与上游源码（work/folia/…）一致。
+ *
+ * 样式清单散落在 `styles.tsx` / `settings.ts` / `transparencyCompat.ts` / 这份配置 / 缩略图脚本 /
+ * Overlay.js / 宣传站里，0.7.22 → 0.7.25 跟进时就漏了两处（`Overlay.js` 还留着不存在的
+ * `'window'`，`make-style-grid.mjs` 停在 15 项），而且**都不会报错**，只是静默少一个按钮 / 少一张图。
+ * `scripts/check-style-sync.mjs` 以上游源码为唯一事实源做交叉核对；这里把它挂进构建，
+ * 于是「上游加了样式但本地没跟」在 `vite build` 阶段就硬失败，而不是等用户发现货架少一格。
+ *
+ * 默认不在 build 时跑（`SPW_STYLE_SYNC=off` 可关）：`--check` 需要读上游源码树，而干净检出的
+ * 机器上 `work/` 可能压根不存在 —— 那种情况下构建不该失败。想让它拦发布时设 `SPW_STYLE_SYNC=1`。
+ */
+const styleManifestSync = (): Plugin => ({
+    name: 'spw-style-manifest-sync',
+    apply: 'build',
+    enforce: 'pre',
+    async buildStart() {
+        // 本项目的 tsconfig 没有 @types/node（`types: ["vite/client"]`），所以这里**不**在文件顶部
+        // import node 内置模块：多一个顶层 node 导入就多一条 TS2591 噪声错误，而基线 297 一条都不许新增。
+        // 走 globalThis 读 process，并在用到时动态 import —— 两条都只在 Node 侧执行。
+        const nodeProcess = (globalThis as any).process;
+        const mode = nodeProcess?.env?.SPW_STYLE_SYNC ?? 'auto';
+        if (mode === 'off' || mode === '0') return;
+        const script = path.join(here, 'scripts/check-style-sync.mjs');
+        if (!fs.existsSync(script)) return;
+        // `auto`：上游源码树在就核对，不在就跳过（干净检出不因缺 work/ 而失败）。
+        const upstream = path.join(workspaceRoot, 'work/folia/folia-major-main/src/types/visualizerModes.ts');
+        if (mode === 'auto' && !fs.existsSync(upstream)) {
+            console.log('[spw-style-sync] 跳过：没有上游源码树（work/folia/…），无法核对样式清单。');
+            return;
+        }
+        // 子进程跑（脚本自己负责 exit code 与中文报告），这样它崩了也只影响这一道闸门的判断。
+        // 规格字符串先存进变量再 import：本仓库 tsconfig 没有 @types/node，写成字面量
+        // `import('node:child_process')` 会被 tsc 当成未声明的名字报 TS2591，基线（297）一条都不许新增。
+        const childProcessModule = 'node:child_process';
+        const { spawnSync } = await import(childProcessModule);
+        const result = spawnSync(nodeProcess.execPath, [script, '--check'], { stdio: 'inherit', cwd: here });
+        if (result.status !== 0) {
+            throw new Error(
+                '[spw-folia] 样式清单与上游不一致（见上面 check-style-sync 的报告）。\n'
+                + '    机械的纯 id 列表：`node scripts/check-style-sync.mjs --write`\n'
+                + '    需要人判断的（styles.tsx / settings.ts / transparencyCompat.ts）按报告逐条改。\n'
+                + '    完整步骤：docs/upstream-sync.md',
+            );
+        }
+    },
+});
+
 /** The Folia checkout under work/ is a bare source tree: it has no node_modules of its own, so Vite
  *  resolves nothing bare from inside it. Up to v0.3.x the reused panels only imported a handful of
  *  packages that resolved through the aliases; 0.7.22's style previews pull in the whole visualizer
@@ -212,6 +293,40 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
             // v0.4.0: the 当前字体 row is KEPT. In 0.7.22 it is the only place the panel surfaces the
             // chosen family and a 选择自定义字体 button, and the shell now opens its own picker when
             // `onFontStyleChange('custom')` fires — the reveal is exactly the hook for that.
+            // 0.7.25 added the 副字幕行数/内容 control (SubtitleOverlayRowsSetting) to the 字幕 page and
+            // with it a **required** `subtitleOverlayLayout` prop. This window has no such setting to
+            // show: its SubtitleSettings carries `subtitleContentMode` only, App.tsx cannot pass the new
+            // prop, and the control's `getSubtitleOverlayRows(layout)` calls `layout.split('+')` with no
+            // default — opening the 字幕 tab would throw and blank the whole island (there is no error
+            // boundary). The player side is fine: `VisualizerSubtitleOverlay` defaults the prop to
+            // DEFAULT_SUBTITLE_OVERLAY_LAYOUT ('translation'), which is what this page already publishes
+            // via `subtitleContentMode`, so the control is removed here (B-class: plumbing this window
+            // does not have) and the panel goes back to being stateless about the layout.
+            {
+                what: 'subtitle overlay rows element',
+                find: '                                <SubtitleOverlayRowsSetting\n                                    t={t}\n                                    layout={subtitleOverlayLayout}\n                                    onChange={onSubtitleOverlayLayoutChange}\n                                />\n',
+                replace: '',
+            },
+            {
+                what: 'subtitle overlay rows import',
+                find: /^import SubtitleOverlayRowsSetting from '[^']*';\r?\n/m,
+                replace: '',
+            },
+            {
+                what: 'subtitle overlay layout props',
+                find: '    subtitleOverlayLayout: SubtitleOverlayLayout;\n    onSubtitleOverlayLayoutChange?: (layout: SubtitleOverlayLayout) => void;\n',
+                replace: '',
+            },
+            {
+                what: 'subtitle overlay layout destructure',
+                find: '        subtitleOverlayLayout,\n        onSubtitleOverlayLayoutChange,\n',
+                replace: '',
+            },
+            {
+                what: 'subtitle overlay layout type import',
+                find: 'import { type Theme, type SubtitleContentMode, type SubtitleOverlayLayout, type VisualizerBackgroundMode, type VisualizerMode } from \'../../../types\';',
+                replace: 'import { type Theme, type SubtitleContentMode, type VisualizerBackgroundMode, type VisualizerMode } from \'../../../types\';',
+            },
             {
                 what: 'harmony subtitle group',
                 find: "                            <Group def={HARMONY_GROUP}>\n                                <ToggleRow\n                                    label={t('options.showHarmonySubtitle')}\n                                    note={t('options.showHarmonySubtitleDesc')}\n                                    checked={showHarmonySubtitle}\n                                    disabled={!onToggleShowHarmonySubtitle}\n                                    onChange={next => onToggleShowHarmonySubtitle?.(next)}\n                                />\n                                <Reveal when={showHarmonySubtitle}>\n                                    <ToggleRow\n                                        sub\n                                        label={t('options.harmonySubtitleBackground')}\n                                        note={t('options.harmonySubtitleBackgroundDesc')}\n                                        checked={harmonySubtitleBackground}\n                                        disabled={!onToggleHarmonySubtitleBackground}\n                                        onChange={next => onToggleHarmonySubtitleBackground?.(next)}\n                                    />\n                                </Reveal>\n                            </Group>\n",
@@ -329,7 +444,8 @@ export default defineConfig(async () => ({
     base: './',
     plugins: [
         ...(await foliaVirtualModules()),
-        foliaSettingsSurgery(), react(), foliaStubs(), debugWhoImports(), inlineCssIntoEntry(), tailwindcss(),
+        styleManifestSync(), foliaSettingsSurgery(), react(), foliaStubs(), debugWhoImports(), inlineCssIntoEntry(),
+        requireStyleThumbs(), tailwindcss(),
     ],
     resolve: {
         alias: [

@@ -74,18 +74,16 @@ internal class FoliaHostBridge(
     @Volatile var onSettingsFromPage: ((String) -> Unit)? = null
 
     /**
-     * v0.4.0: 配置 page switch `transitionAnimation`. When false the helper is spawned with
-     * `--no-curtain`, so the intro animation that masks the transparent/passthrough hand-over is
-     * skipped. Read at spawn time only; toggling it affects the next open. The animation length is
-     * fixed in the host (0.8 s): WebView2's cold start dominates the opening time anyway.
+     * v0.4.8: 配置 page switch `transitionAnimation`. When false the helper is spawned with
+     * `--no-curtain`, which drops `splash=1` from the navigation URL so the page never installs the
+     * opening splash. Read at spawn time only; toggling it affects the next open.
+     *
+     * The animation itself is Folia's own `#app-splash` (dark backdrop + letter-hopping wordmark +
+     * waveform bars), drawn by the page. The host only decides when it fades out, so there is no
+     * palette, no duration and no drawing code on this side any more (v0.4.0 removed the
+     * cover-tinted WinForms veil that used to live here).
      */
     @Volatile var curtainEnabled: Boolean = false
-
-    /**
-     * v0.4.0: cover-derived palette for the opening animation, `#RRGGBB,#RRGGBB,…` (`--curtain-palette`).
-     * Prepared by the plugin from the current track's artwork; null lets the host use its own default.
-     */
-    @Volatile var curtainPalette: String? = null
 
     /**
      * issue #12 增加日志功能: spawn the helper with `--verbose-log`, which adds navigation lines and
@@ -164,13 +162,10 @@ internal class FoliaHostBridge(
             "--fullscreen",
             "--bundle-version", FoliaPlugin.PLUGIN_VERSION
         )
-        // v0.4.0: the 配置 page can turn the opening transition animation off; when on, the
-        // cover-derived palette travels with the spawn so the host has it on paint (the fade-in
-        // length is fixed by the host at 0.8 s).
+        // v0.4.8: the 配置 page can turn the opening splash off; the helper then navigates with
+        // `splash=0`, so the page never installs it (the host also skips its reveal timer).
         if (!curtainEnabled) {
             command += "--no-curtain"
-        } else {
-            curtainPalette?.takeIf { it.isNotBlank() }?.let { command += listOf("--curtain-palette", it) }
         }
         val settingsDir = resolveSettingsDir(web)?.let { physicalFile(it) }
         if (settingsDir != null) {
@@ -265,7 +260,17 @@ internal class FoliaHostBridge(
 
     fun sendSettings(settingsJson: String) {
         settingsTree = settingsJson
-        sendLine("{\"t\":\"settings\",\"settings\":$settingsJson}")
+        // v0.4.13 (issue: 三个配置开关全部不生效): the protocol is LINE oriented on both ends — we
+        // write `line + "\n"` and the helper reads `reader.ReadLine()`. The tree is embedded raw, so
+        // a pretty-printed tree (the bundled default-settings.json is 7188 bytes with 268 newlines)
+        // was split into hundreds of invalid lines that the helper dropped on the floor: the page
+        // never received `showPlaybackBar` / `showProblemButton` and the switches looked dead.
+        // Collapse before sending; it is byte-identical JSON, just without inter-token whitespace.
+        val payload = if (Json.needsCollapsing(settingsJson)) Json.singleLine(settingsJson) else settingsJson
+        if (payload !== settingsJson) {
+            log("settings -> helper (collapsed ${settingsJson.length} -> ${payload.length} bytes for the line protocol)")
+        }
+        sendLine("{\"t\":\"settings\",\"settings\":$payload}")
     }
 
     fun sendState(snapshot: PlaybackSnapshot) {
@@ -454,17 +459,40 @@ internal class FoliaHostBridge(
                 -1
             }
             if (!stopping) {
-                log("host process exited code=$code")
+                // v0.4.7: translate the exit code instead of only recording it. `docs/host-app.md` §2
+                // defined the mapping from the start, but the user was left with a window that
+                // "blinked and vanished" and a number they could do nothing with (see
+                // `docs/runtime-requirements.md` §3, which called this out explicitly).
+                val reason = describeExitCode(code)
+                log("host process exited code=$code${if (reason != null) " ($reason)" else ""}")
                 cleanup("exited", p)
+                reason?.let { onHostExitReason?.invoke(it) }
             }
         }, "spw-folia-host-exit").apply { isDaemon = true }.start()
     }
+
+    /** Callback for a *diagnosable* helper death; the plugin turns it into a toast. */
+    var onHostExitReason: ((String) -> Unit)? = null
 
     private fun handleHostLine(line: String, source: Process) {
         when (val t = Json.stringField(line, "t")) {
             "ready" -> {
                 ready = true
                 log("host ready: $line")
+                // v0.4.13 (issue: 三个配置开关全部不生效): re-send the settings tree here.
+                //
+                // The host caches nothing for us: PostToPage drops any payload that arrives before
+                // WebView2 is ready (`post-page-skip reason=not-ready`) and only the *callers* are
+                // supposed to replay it. The plugin pushed the tree once at startup, i.e. before
+                // this helper existed, and the host-echo path does not cover a fresh window either —
+                // so `showPlaybackBar` / `showProblemButton` never reached the page on first open
+                // and the switches looked dead until a manual reload. `ready` is exactly the moment
+                // the page can receive messages, so replay the last known tree there.
+                settingsTree?.let { tree ->
+                    log("settings replay on ready (${tree.length} bytes)")
+                    runCatching { sendSettings(tree) }
+                        .onFailure { log("settings replay failed: ${it::class.java.name}: ${it.message}") }
+                }
                 replaySnapshot()
                 startPump()
             }
@@ -705,6 +733,22 @@ internal class FoliaHostBridge(
     }
 
     companion object {
+        /**
+         * `docs/host-app.md` §2 exit-code table, as user-facing text.
+         *
+         * Returns null for codes that carry no useful message: 0 (normal close) needs no toast, and
+         * an unrecognised code is reported by the log line itself — inventing a sentence for it
+         * would be exactly the kind of unbacked claim v0.4.7 removed from the self-check.
+         */
+        fun describeExitCode(code: Int): String? = when (code) {
+            0 -> null
+            1 -> "辅助进程启动失败（WebView2 初始化失败、浏览器进程崩溃或未处理异常）"
+            2 -> "辅助进程参数错误或页面资源缺失（bundle 目录 / index.html 不存在）"
+            3 -> "WebView2 Runtime 未安装或无法启动"
+            -2146232576 -> ".NET Framework 4.8 运行库未能加载（CLR 0x80131700，Store/MSIX 版常见）"
+            else -> null
+        }
+
         /** 100 ms state cadence: docs/protocol.md asks for >=20 Hz; the timeline interpolates. */
         private const val STATE_PERIOD_MS = 100L
 

@@ -130,10 +130,18 @@ def main() -> int:
 
     data = target.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
+    # The budget that protects users: this is the file they download. 16 MB is ~11.89 MB (v0.4.7)
+    # plus ~35% headroom — loose enough for normal growth, tight enough that a P4-8-style
+    # regression (+7 MB) trips it. The staging tripwire in size-report.mjs guards the other side.
+    SHIPPED_BUDGET_MB = 16
+    shipped_mb = len(data) / (1024 * 1024)
+    over_budget = shipped_mb > SHIPPED_BUDGET_MB
     meta = {
         "file": target.name,
         "sizeBytes": len(data),
-        "sizeMB": round(len(data) / (1024 * 1024), 2),
+        "sizeMB": round(shipped_mb, 2),
+        "budgetMB": SHIPPED_BUDGET_MB,
+        "withinBudget": not over_budget,
         "sha256": sha,
         "entries": added,
         "pluginId": manifest.get("Plugin-Id"),
@@ -145,6 +153,14 @@ def main() -> int:
     }
     (out_dir / (target.name + ".json")).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(json.dumps(meta, indent=2))
+    if over_budget:
+        print(
+            f"ERROR: shipped .spmod is {shipped_mb:.2f} MB, over the {SHIPPED_BUDGET_MB} MB budget.\n"
+            f"  This is the file users download. Check what grew (size-report.json 'biggest') before\n"
+            f"  raising the budget: an accidental settings-island import can add ~7 MB on its own.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

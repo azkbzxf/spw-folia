@@ -16,8 +16,8 @@ SITE = os.path.dirname(HERE)
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(SITE, ".cache", "scan")
 
 MODES = [
-    "sonnet", "tempera", "lumiere", "classic", "cadenza", "partita", "fume",
-    "tilt", "claddagh", "monet", "pendolo", "cappella", "diorama", "still",
+    "sonnet", "tempera", "lumiere", "hanabi", "machi", "nebbia", "classic", "cadenza", "partita",
+    "fume", "tilt", "claddagh", "monet", "pendolo", "cappella", "diorama", "still",
 ]
 SIZES = [("thumbs", "styles", 960, 540, 85), ("large", "styles/large", 1600, 900, 82)]
 

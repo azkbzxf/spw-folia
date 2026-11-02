@@ -13,7 +13,6 @@
         "allowSyntheticDefaultImports": true,
         "esModuleInterop": true,
         "types": ["vite/client"],
-        "baseUrl": ".",
         "paths": {
             "@/*": ["../../work/folia/folia-major-main/src/*"],
             "~/*": ["./src/*"]

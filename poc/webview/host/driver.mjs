@@ -49,6 +49,9 @@ const args = [
   '--bundle', resolve(repoRoot, 'poc/webview/dist/dist'),
   '--demo',
   '--no-overlay',
+  // v0.4.9: the driver takes screenshots at three clock positions; the transparency colour key would
+  // tint every sub-alpha page pixel into them, so keep it off for capture runs.
+  '--no-colour-key',
   '--fps-log', join(outDir, 'driver-fps.log'),
   '--user-data', join(outDir, 'webview2-userdata'),
 ];

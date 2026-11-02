@@ -1,8 +1,7 @@
-# spw-folia 集成协议 v1（v0.3.0 增补播放控制通道，向后兼容）
+# spw-folia 集成协议 v1（冻结草案，2026-10-18；v0.3.0 增补播放控制通道，向后兼容）
 
 > 本文件是 **插件(Kotlin) ↔ 宿主进程(C#) ↔ WebView2 页面(JS)** 的接口契约。
-> 改动协议字段时先改本文件：已有消息只允许追加字段，不重命名、不改语义。
-> 设计目标：页面内计算 `config`，宿主只做搬运；无 HTTP 服务、无网络依赖。
+> 任何一方改动字段必须先改本文件并通知 Lead。设计目标：页面内计算 `config`，宿主只做搬运；无 HTTP 服务、无网络依赖。
 
 ## 0. 进程与职责
 
@@ -21,10 +20,25 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 
 ## 1. 插件 → 宿主（stdin，每行一个 JSON 对象，UTF-8）
 
+> **铁律：一条消息必须严格占一行 —— 内嵌的子 JSON 里不允许出现裸换行。**
+>
+> 两端都是行导向的：插件 `BufferedWriter.write(line)` + `"\n"`，宿主
+> `Console.OpenStandardInput()` + `reader.ReadLine()`。而 `settings` / `lyrics` / `track`
+> 这些字段是**原样内嵌**（字符串拼接，不经过再序列化），所以子 JSON 里任何一个 `\n` 都会把
+> 一条消息拆成多条，全部解析失败并被丢弃。
+>
+> **v0.4.12 就是这样让三个配置开关全部失效的**：内置 `default-settings.json` 是美化格式
+> （7188 字节 / 268 个换行），启动那一次 `settings` 推送被拆成几百条非法片段，页面永远收不到
+> `showPlaybackBar` / `showProblemButton`。
+>
+> 规则：发送前对外部来源的 JSON 调用 `Json.singleLine()`（它会跳过字符串字面量内部，只压缩
+> token 之间的空白），补好的实现与回归见 `packaging/tools/verify-json-singleline.mjs`。
+> 纯 ASCII 压缩后的载荷与压缩前 `JSON.parse` 结果必须完全等价。
+
 | t | 字段 | 说明 |
 |---|---|---|
 | `hello` | `protocol:1`, `pluginVersion`, `spwVersion`, `devUrl?`, `bundleDir?` | 启动握手；`devUrl` 存在时加载开发服务器（仅开发） |
-| `settings` | `settings: object` | 全量持久化设置（启动时一次；UI 每次改动后回传一次做确认） |
+| `settings` | `settings: object` | 全量持久化设置。**打开窗口时下发一次（宿主在 `ready` 之前丢弃，插件在收到 `ready` 后重发一次，见 §2 `ready`）**；UI 每次改动后回传一次做确认。载荷必须先 `Json.singleLine()` 压成单行 |
 | `state` | `posMs:int`, `durationMs:int`, `playing:bool`, `rate:number`, `tsMs:int64` | 播放时钟，建议 100ms 一次（≥20Hz）。页面按 `tsMs + (now-tsMs)*rate` 插值 |
 | `lyrics` | `lines:[{startMs,endMs,main,sub,cells:[{startMs,endMs,text}]}]`, `offsetMs:int`, `translationMode?` | 曲目/歌词变化时发送；空数组=无歌词。**`cells` 是真实逐字时轴（SPW `LyricsLine.Cell`，绝对毫秒）**，v0.4.2 起页面侧 `toPublisherLyrics` 把它映射成 Folia 的 `words[]`（issue #13），缺失时才退回按字符均分的 `fallbackWords` |
 | `track` | `id`, `title`, `artist`, `album`, `durationMs`, `coverDataUrl?`, `coverPath?` | 封面优先 data URL（JPEG/PNG base64），否则宿主负责本地读取。宿主转发页面时同时给出 `coverUrl` 镜像（v0.1.2+，见 §1.1） |
@@ -43,7 +57,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 
 | t | 字段 | 说明 |
 |---|---|---|
-| `ready` | `protocol:1`, `pid`, `webviewVersion`, `bundle` | WebView2 与 bundle 就绪，可开始发 state |
+| `ready` | `protocol:1`, `pid`, `webviewVersion`, `bundle` | WebView2 与 bundle 就绪，可开始发 state。**插件收到后必须重发 `settings`**：宿主在 WebView2 就绪前把 `settings` 直接丢弃（`post-page-skip reason=not-ready`），首次推送必然落在窗口里，不重发就等于页面永远收不到开关值 —— v0.4.12 三个开关失效的第二半原因 |
 | `closed` | `reason:"user"|"error"|"plugin"` | 窗口关闭（ESC/Alt+F4/崩溃）；随后进程退出。**插件必须据此清理状态，再点菜单可重新启动** |
 | `settings` | `settings: object` | UI 修改了设置 → 插件持久化（并可选校验/夹紧） |
 | `action` | `name:"reset"|"openDevTools"|"reload"` | UI 请求的动作 |
@@ -90,6 +104,8 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe (C#/.NET, 全屏窗口 + WebVi
 | `webView2` | `CoreWebView2Environment.GetAvailableBrowserVersionString()`；缺失时 `null`（对应 exit 3） |
 | `dotnet` | 注册表 `NET Framework Setup\NDP\v4\Full\Release`（4.8 = 528040，4.8.1 = 533320+） |
 | `os` / `os64` / `process64` | 系统版本与两个位数标志 |
+| `windowsBuild` / `windowsVersion` / `windowsRevision` | v0.4.7：面板判定用的构建号（`Environment.OSVersion.Version.Build`）。**不要再从 `os` 展示串里反推**——JVM 侧的 `os.version` 恒为 `10.0`，见 `runtime-requirements.md` §5 案例 6 |
+| `webView2Error` / `dotnetError` | v0.4.7：对应值为 null 时的失败原因。有原因 → 面板判「无法判定」，不是「未安装」 |
 | `bundle` / `bundleIndex` | 页面 bundle 目录、`index.html` 是否存在（缺失 = exit 2） |
 | `settingsDir` / `settingsEntry` | 设置岛目录、`settings-ui.js` 是否存在 |
 | `userData` | WebView2 用户数据目录 |
@@ -133,6 +149,24 @@ SPW 宿主进程内的播放器接口（见 `docs/playback-controls.md` 的反�
 
 ## 4. 设置对象（settings）与 config 构建
 - `settings` 是设置 UI 的状态树（JSON），字段见 `docs/folia-spec/settings-ui.md` §4；键名**沿用 Folia 存储键**（styleId、smartBeat…），便于对照。
+- **注入成员（插件写、页面只读，不属于持久化快照）**：设置树顶层还有几个键由插件在 `withInjectedMembers()`
+  里写入，页面**不回写、不持久化**——`systemFonts`（AWT 枚举的系统字体）、`transitionAnimation`、
+  `verboseLog`，以及两个 plugin-owned 布尔开关：
+  - **`showPlaybackBar`**（v0.4.10 新增，默认 `true`；为假时页面把底部播放条整个不挂载）；
+  - **`showProblemButton`**（v0.4.11 新增，默认 `false`；为假时播放页右上角的救生圈按钮及其面板
+    整个不挂载，`data-spw-chrome="problem-report"` 连 hit region 一起消失）。
+
+  两者的形态与链路完全一致：Kotlin 从配置页的 `config.json` 读到值 → 塞进设置树顶层布尔
+  （`FoliaPlugin.SHOW_PLAYBACK_BAR_KEY` / `SHOW_PROBLEM_BUTTON_KEY`）→ 页面 `useInjectedSwitch.ts`
+  读 `getSettings()` 初值并监听 `settings` 事件热更新。所有权在插件的 `preference_config.json`，
+  页面只是读者；**回写时统一剥离**——`FoliaPlugin.onSettingsFromPage` 在落盘前把这两个成员从页面回传的
+  树里删掉，避免双写方与启动竞态覆盖。
+  新增同类开关照这条走：插件读 config → 塞进设置树顶层 → 页面读 `getSettings()` + 监听 `settings` 事件。
+- **v0.4.10 删除的键**：`frameRate`（v0.4.9 的配置页「帧率」下拉）。插件不再读它、宿主不再注入任何
+  限流脚本；`Shim.js` 还会在每次文档创建时**清掉**上游读的 localStorage 键 `visualizer_frame_rate`
+  （旧值残留会让升级后的页面永久静默限流），原值随 `ready` 的 `frameRateCleared` 上报。宿主仍
+  **接受并忽略**旧的 `--frame-rate` 参数，纯粹为了旧插件包能照常 spawn。理由见
+  [`docs/upstream-sync.md`](upstream-sync.md) §10.2。
 - config 构建由页面内 **settings publisher**（`publisher.js`）完成：`inputs(settings, lyrics, state, track, coverColors, theme)` → `ObsBrowserSourceConfig`（字段同 `src/types/obsBrowserSource.ts`，见 `docs/folia-spec/runtime-contracts.md` 与 webview-spike 的 `shared/` 提取）。
 - 主题（theme）由页面从封面图像 canvas 取色推导（暗/亮、主色、次色、背景色），输出 `Theme`；无封面用默认暗色主题。
 - 节流：settings/lyrics/theme 变化时重算 config（≤10Hz）；state 不进 config（走 clock 事件）。

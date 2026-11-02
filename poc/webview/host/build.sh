@@ -36,7 +36,7 @@ console.log('DefaultConfig.json:', fs.statSync('DefaultConfig.json').size, 'byte
   "$(cygpath -w "$(pwd)/DpiSupport.cs")" \
   "$(cygpath -w "$(pwd)/MonitorSupport.cs")" \
   "$(cygpath -w "$(pwd)/HostForm.cs")" \
-  "$(cygpath -w "$(pwd)/IntroCurtain.cs")" \
+  "$(cygpath -w "$(pwd)/SplashBridge.cs")" \
   "$(cygpath -w "$(pwd)/AudioProvider.cs")" \
   "$(cygpath -w "$(pwd)/audio/AudioInterop.cs")" \
   "$(cygpath -w "$(pwd)/audio/SpectrumAnalyzer.cs")" \
