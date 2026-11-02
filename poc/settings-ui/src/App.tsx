@@ -387,22 +387,28 @@ const App: React.FC<AppProps> = ({ injected }) => {
             {/* v0.4.11: the switch decides whether this exists at all — a CSS-hidden button would
              *  still report a hit region and would still own ESC through ProblemReportPanel. */}
             {showProblemButton ? (
-                <>
-                    <button
-                        type="button"
-                        className="spw-chrome-btn spw-chrome-btn--problem"
-                        data-spw-chrome="problem-report"
-                        data-visible={chromeAlwaysOn || (chromeVisible && !open) ? 'true' : 'false'}
-                        data-flat={chromeAlwaysOn ? 'true' : 'false'}
-                        aria-label="出现问题"
-                        title="出现问题"
-                        onClick={() => setProblemPanelOpen(value => !value)}
-                    >
-                        <LifeBuoy size={20} strokeWidth={1.75} />
-                    </button>
-                    <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
-                </>
+                <button
+                    type="button"
+                    className="spw-chrome-btn spw-chrome-btn--problem"
+                    data-spw-chrome="problem-report"
+                    data-visible={chromeAlwaysOn || (chromeVisible && !open) ? 'true' : 'false'}
+                    data-flat={chromeAlwaysOn ? 'true' : 'false'}
+                    aria-label="出现问题"
+                    title="出现问题"
+                    onClick={() => setProblemPanelOpen(value => !value)}
+                >
+                    <LifeBuoy size={20} strokeWidth={1.75} />
+                </button>
             ) : null}
+            {/* v0.4.11: the panel stays mounted whatever the switch says.
+             *  Wrapping the button AND the panel in one conditional fragment shifted every following
+             *  sibling's position in the child list, and React's reconciler then threw
+             *  `insertBefore/removeChild NotFoundError` against the upstream Folia tree (visible in
+             *  the host log as `[spw-folia] uncaught: NotFoundError…`). It also destabilised the
+             *  settings overlay: abandoning a reconciliation pass left `open` state stale, so the
+             *  panel closed itself right after --open-settings opened it. Mounting the panel
+             *  unconditionally keeps sibling positions fixed; it renders nothing while closed. */}
+            <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
             {/* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar).
              *  Hidden while the settings overlay owns the stage; unmounts itself entirely under
              *  mouse passthrough so no pixels and no hit region remain there. */}

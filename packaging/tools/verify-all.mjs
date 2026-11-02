@@ -68,14 +68,26 @@ function staticChecks() {
     const files = groups.map((g) => g.file);
     record('each 配置 group has its own file', new Set(files).size === files.length, JSON.stringify(groups));
 
-    // 1d. the moved 详细日志 switch must still have its migration path in place
+    // 1d. the moved 详细日志 switch must still have its migration path in place.
+    //
+    // The check asserts the CONTRACT, not a file name: the legacy constant must still point at
+    // config.json AND some module must actually call FoliaConfigGroups.readBoolean (the only code
+    // that moves a legacy value into the new file). It used to look in FoliaPlugin.kt only, which
+    // false-failed the moment v0.4.12 moved the switch reads into FoliaConfigSync.kt — and that
+    // false failure was hiding a REAL regression at the same time: the rewrite had dropped the
+    // migration call entirely, so upgraded users silently lost their 详细日志 choice.
     const groupsSrc = read('spw-folia/src/main/kotlin/dev/spw/folia/FoliaConfigGroups.kt');
     const verboseGroup = pref.configs.find((c) => (c.preferences ?? []).some((p) => p.key === 'verboseLog'));
     record('详细日志 moved to diagnostics.json', verboseGroup && verboseGroup.config === 'diagnostics.json',
         verboseGroup && verboseGroup.config);
+    const sweep = ['FoliaPlugin.kt', 'FoliaConfigSync.kt', 'FoliaConfigGroups.kt']
+        .map((f) => read('spw-folia/src/main/kotlin/dev/spw/folia/' + f))
+        .join('\n');
+    // Count CALLS, not the doc comment that also names the function.
+    const migrationCalls = (sweep.match(/FoliaConfigGroups\.readBoolean\s*\(/g) || []).length;
     record('legacy config.json fallback still wired',
-        /LEGACY_CONFIG\s*=\s*"config\.json"/.test(groupsSrc) && /FoliaConfigGroups\.readBoolean/.test(pluginKt),
-        null);
+        /LEGACY_CONFIG\s*=\s*"config\.json"/.test(groupsSrc) && migrationCalls > 0,
+        'calls=' + migrationCalls);
 
     // 1e. no setting may be offered twice (a duplicate key would silently split its storage)
     const dupes = declared.filter((k, i) => declared.indexOf(k) !== i);

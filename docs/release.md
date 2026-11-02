@@ -3,16 +3,17 @@
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
 
-**Version state (read this first):** the last **published** release is **v0.4.6** (GitHub Releases,
-2026-10-30). Everything after it — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10 and the **current
-development version v0.4.11** — is built and tested locally only and was **never published**. Do not
-describe those versions as downloadable, and do not point users at their tags.
+**Version state (read this first):** the last **published** release is **v0.4.13** (GitHub Releases,
+2026-11-03). Before it, v0.4.6 (2026-10-30) was the last published one; everything in between —
+v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was built and tested locally only
+and was **never published**, so their changes ship inside v0.4.13. Do not point users at the tags of
+those intermediate versions.
 
-Last verified: 2026-11-02 (ledger re-checked against GitHub Releases and the local `dist/release/`
-artifacts; v0.4.5/v0.4.6 bytes, entry counts and sha256 below were recomputed from the actual
-downloaded assets, not copied from notes). Payload numbers quoted for the host exe
+Last verified: 2026-11-03 (v0.4.13 assembled from a fresh `packaging/` staging and gated with
+`verify-all.mjs` → 10/10). The v0.4.5/v0.4.6 bytes, entry counts and sha256 below were recomputed
+from the actual downloaded assets, not copied from notes. Payload numbers quoted for the host exe
 (`spw-folia-host.exe` 164,864 B) and WebView2 150.0.4078.83 are the v0.4.5/v0.4.6 measurements and
-still hold.
+still hold (v0.4.13 did not touch `native/`).
 
 ## 1. What ships
 
@@ -321,11 +322,12 @@ repository; per-version change essays and full payload breakdowns live in
 [`docs/archive/`](archive/) (and in the GitHub Releases bodies, which ship `SHA256SUMS.txt` next to
 every `.spmod`).
 
-**The last published release is v0.4.6.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10 and the current
-development version v0.4.11 were built and tested locally only — they have **no** GitHub release and
-**no** tag, so they must not be presented as downloadable. (The version numbers written inside the
-code were stale for a while — `build.gradle.kts` / `FoliaPlugin.PLUGIN_VERSION` still said `0.4.7`
-until the 0.4.10 cleanup, which is why some local build artifacts carry a "0.4.7" name.)
+**The last published release is v0.4.13.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
+v0.4.12 were built and tested locally only — they have **no** GitHub release and **no** tag, so they
+must not be presented as downloadable; their changes ship inside v0.4.13. (The version numbers
+written inside the code were stale for a while — `build.gradle.kts` / `FoliaPlugin.PLUGIN_VERSION`
+still said `0.4.7` until the 0.4.10 cleanup, which is why some local build artifacts carry a "0.4.7"
+name.)
 
 | Version | `.spmod` bytes | entries | sha256 | released |
 | --- | --- | --- | --- | --- |
@@ -357,7 +359,9 @@ until the 0.4.10 cleanup, which is why some local build artifacts carry a "0.4.7
 | v0.4.8 | — | — | — | local only（无独立产物，改动并入 v0.4.9/v0.4.10 开发线） |
 | v0.4.9 | — | — | — | local only（同上） |
 | v0.4.10 | — | — | — | local only。只产出过**插件包** `spw-folia/build/libs/plugin-dev.spw.folia-0.4.10.spmod`（334,174 B，92 文件，`Plugin-Version: 0.4.10`），**未**组装完整 `.spmod`（`dist/release/` 里没有 0.4.10 产物），所以没有 bytes/entries/sha256 可记 |
-| **v0.4.11** | **15,406,708** | **3,976** | `e7bd36687e9499c6882bfb2b549610b63e5a3dae85732b69127b1bf0f012fa22` | local only（**当前开发版本，2026-11-02 本地组装**）。配置页重新分组（播放页 / 诊断与日志 / 支持与反馈）、新增 `showProblemButton` 开关（默认关）、自检复检纳入检查表。产物已组装并通过 `verify-layout.mjs`（pass=true, consoleErrors=0, 17/17 缩略图）与 `verify-all.mjs`（10/10）；**未上传**，无 GitHub release |
+| **v0.4.11** | **15,406,708** | **3,976** | `e7bd36687e9499c6882bfb2b549610b63e5a3dae85732b69127b1bf0f012fa22` | local only（2026-11-02 本地组装）。配置页重新分组（播放页 / 诊断与日志 / 支持与反馈）、新增 `showProblemButton` 开关（默认关）、自检复检纳入检查表。**未上传** |
+| v0.4.12 | 15,419,925 | 3,977 | `238d36a8c713b8d3c2bf4f9764eaccc557d593456d039c0aada8d67c71bf4342` | local only（2026-11-02 本地组装）。重写配置同步（`FoliaConfigSync`），**引入了「三个开关全部不生效」的回归**，由 v0.4.13 修复。**未上传** |
+| **v0.4.13** | **15,438,647** | **3,982** | `5cb1cdafacdea46559e4b57ad1934522e6b20874d2531aabad2b46cac948f308` | **2026-11-03 发布**。修复 v0.4.12 的开关回归（行协议换行截断 + `ready` 后重发 + spawn 期开关同步 + 详细日志旧值迁移），并补齐 `verify-json-singleline` / `verify-playback-switches` / `verify-live-settings-payload` 三个回归脚本。`verify-all.mjs` 10/10。详见 [`release-notes-v0.4.13.md`](release-notes-v0.4.13.md) |
 
 `local only` builds were verified on a real install but never uploaded; their changes shipped inside
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes

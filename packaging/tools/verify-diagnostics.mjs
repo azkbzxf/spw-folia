@@ -272,10 +272,20 @@ async function main() {
         knownKeys.every((k) => declaredKeys.includes(k)), { declared: declaredKeys, known: knownKeys });
 
     // ---- D. the migration path for the moved 详细日志 switch ----------------------------
-    const pluginSrc = readFileSync(join(ROOT, 'spw-folia', 'src', 'main', 'kotlin', 'dev', 'spw', 'folia', 'FoliaPlugin.kt'), 'utf8');
-    assert('D1 详细日志 reads through the migrating reader',
-        /readVerboseLog\(\)/.test(pluginSrc) && /FoliaConfigGroups\.readBoolean/.test(pluginSrc),
-        null);
+    // Contract, not file name: the legacy value must be read through FoliaConfigGroups.readBoolean
+    // (the only code that also WRITES it into the new file) from whichever module owns the reads.
+    // v0.4.12 moved the switch reads out of FoliaPlugin.kt into FoliaConfigSync.kt; keying this
+    // check to FoliaPlugin.kt false-failed while a real regression sat underneath it — the rewrite
+    // had dropped the migration call, so upgraded users lost their 详细日志 choice.
+    const kotlinDir = join(ROOT, 'spw-folia', 'src', 'main', 'kotlin', 'dev', 'spw', 'folia');
+    const owners = ['FoliaPlugin.kt', 'FoliaConfigSync.kt'].map((f) => {
+        try { return readFileSync(join(kotlinDir, f), 'utf8'); } catch { return ''; }
+    });
+    const migrationCalls = owners
+        .map((s) => (s.match(/FoliaConfigGroups\.readBoolean\s*\(/g) || []).length)
+        .reduce((a, b) => a + b, 0);
+    assert('D1 详细日志 reads through the migrating reader', migrationCalls > 0,
+        'FoliaConfigGroups.readBoolean calls=' + migrationCalls);
     const groups = readFileSync(join(ROOT, 'spw-folia', 'src', 'main', 'kotlin', 'dev', 'spw', 'folia', 'FoliaConfigGroups.kt'), 'utf8');
     assert('D2 the legacy config file is still consulted', /LEGACY_CONFIG\s*=\s*"config\.json"/.test(groups), null);
     assert('D3 the new group file is diagnostics.json',

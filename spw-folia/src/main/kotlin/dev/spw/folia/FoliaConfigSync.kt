@@ -186,9 +186,23 @@ internal class FoliaConfigSync(
         }
 
         // 诊断与日志组（v0.4.11 搬过去的；旧值从 config.json 迁移）
-        val verbose = readBoolean(diagnosticsText, VERBOSE_LOG_KEY)
-            ?: readBoolean(playerText, VERBOSE_LOG_KEY)
-        if (verbose != null && verbose != verboseLog) {
+        //
+        // v0.4.13: restore the one-time migration that the v0.4.12 rewrite dropped. Reading the
+        // legacy value is not enough — if it is never written across, config.json and
+        // diagnostics.json disagree forever, and the next 配置-page edit of any other switch can
+        // re-read the stale file and flip 详细日志 back. `FoliaConfigGroups.readBoolean` is the
+        // owner of that move (primaryPresent → use it; else legacy → use it AND write it to the
+        // primary file), so route this one read through it instead of hand-rolling the fallback.
+        val verboseMigrated = FoliaConfigGroups.readBoolean(
+            manager = m,
+            primary = DIAGNOSTICS_CONFIG,
+            legacy = PLAYER_CONFIG,
+            key = VERBOSE_LOG_KEY,
+            fallback = verboseLog,
+            log = { message -> log(message) },
+        )
+        val verbose = verboseMigrated.value
+        if (verbose != verboseLog) {
             verboseLog = verbose
             changed = true
             log("config $VERBOSE_LOG_KEY=$verbose (host --verbose-log=${if (verbose) "on" else "off"})")
