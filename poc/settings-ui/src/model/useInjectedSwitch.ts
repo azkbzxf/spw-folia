@@ -1,7 +1,8 @@
 /* SPW「模组管理 → 配置」里的开关，以**设置树顶层布尔**的形式由插件下发，页面只读（v0.4.10 起）。
  *
- * 目前两个：`showPlaybackBar`（显示播放条，默认开）与 `showProblemButton`（显示问题反馈按钮，默认关）。
- * 两者的所有权都在插件侧（`preference_config.json` → `config.json`），页面只是**读者**。
+ * 目前三个：`showPlaybackBar`（显示播放条，默认开）、`showProblemButton`（显示问题反馈按钮，默认关）
+ * 与 `previewAnimation`（歌词样式预览动画，默认开；关掉后货架每格只画简约图案，不加载渲染器）。
+ * 三者的所有权都在插件侧（`preference_config.json` → `config.json`），页面只是**读者**。
  *
  * 为什么不放进 `model/settings.ts` 的 zustand store / `SettingsSnapshot`：
  * 那棵树是**页面自己的**持久化状态（页面改动 → emit → 插件写盘）。把插件拥有的开关塞进去会有两个问题：
@@ -23,10 +24,14 @@ import { bridgeOn, getBridge } from '~/bridge';
 export const SHOW_PLAYBACK_BAR_KEY = 'showPlaybackBar';
 /** 显示右上角救生圈问题按钮的控制键（与 `FoliaPlugin.SHOW_PROBLEM_BUTTON_KEY` 同一拼写）。 */
 export const SHOW_PROBLEM_BUTTON_KEY = 'showProblemButton';
+/** 歌词样式预览动画的控制键（与 `FoliaPlugin.PREVIEW_ANIMATION_KEY` 同一拼写）。 */
+export const PREVIEW_ANIMATION_KEY = 'previewAnimation';
 
 /** 各自的默认值：与引入开关之前的版本行为一致。 */
 export const DEFAULT_SHOW_PLAYBACK_BAR = true;
 export const DEFAULT_SHOW_PROBLEM_BUTTON = false;
+/** 默认开：关掉会让货架失去「真实渲染器小图」这个卖点，必须是用户主动选择。 */
+export const DEFAULT_PREVIEW_ANIMATION = true;
 
 type SettingsObject = Record<string, unknown>;
 
@@ -121,5 +126,13 @@ export const useShowPlaybackBar = (): boolean => useInjectedSwitch(SHOW_PLAYBACK
 
 /** 播放页右上角「出现问题」救生圈按钮是否显示。 */
 export const useShowProblemButton = (): boolean => useInjectedSwitch(SHOW_PROBLEM_BUTTON_KEY, DEFAULT_SHOW_PROBLEM_BUTTON);
+
+/**
+ * 歌词样式货架是否画实时动画小图。
+ *
+ * 这是一个**粗开关**：false 时调用方要连同 `import` 一起断掉渲染器链（见 `ShelfLive`），
+ * 不是画出来再 `display:none`。热更新由 `settings` 事件驱动，配置页改完立刻生效。
+ */
+export const usePreviewAnimation = (): boolean => useInjectedSwitch(PREVIEW_ANIMATION_KEY, DEFAULT_PREVIEW_ANIMATION);
 
 export default useInjectedSwitch;

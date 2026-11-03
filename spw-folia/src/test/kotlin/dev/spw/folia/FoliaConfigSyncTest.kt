@@ -13,6 +13,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.file.Path
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 
 /**
@@ -219,6 +220,11 @@ class FoliaConfigSyncTest {
             FoliaConfigSyncAccess.defaultTransitionAnimation,
             sync.transitionAnimation,
         )
+        assertEquals(
+            "歌词样式预览动画 defaults to on",
+            FoliaConfigSyncAccess.defaultPreviewAnimation,
+            sync.previewAnimation,
+        )
     }
 
     /** A real tree must still be read, so the fix did not trade the hang for a dead feature. */
@@ -238,6 +244,49 @@ class FoliaConfigSyncTest {
             assertTrue("打开过渡动画 must be read", sync.transitionAnimation)
             assertEquals("显示播放条 must be read", false, sync.showPlaybackBar)
             assertTrue("显示问题反馈按钮 must be read", sync.showProblemButton)
+        } finally {
+            sync.stop()
+        }
+    }
+
+    /**
+     * v0.4.15: the 「歌词样式预览动画」 switch (`previewAnimation`) must behave exactly like the
+     * other hot switches — read from disk, default **on**, and pushed once per real change.
+     *
+     * It is a user-visible performance knob: off makes the page's style shelf draw a static glyph
+     * per style instead of importing a renderer. A reader that silently ignored it would look like
+     * "the setting does nothing", which is the exact class of defect [FoliaConfigSync] exists to
+     * prevent — so it is asserted here rather than only through the release gate's static contract.
+     */
+    @Test(timeout = 15_000)
+    fun `previewAnimation is read from disk and pushed once per change`() {
+        val dir = tmp.newFolder()
+        val configFile = File(dir, "config.json")
+        configFile.writeText("""{"previewAnimation":false}""")
+        val rec = Recorder()
+        // Count the pushes directly instead of grepping the log: the sync log line also contains the
+        // word "pushing", so a text search would not tell the two apart.
+        val pushes = AtomicInteger(0)
+        val sync = FoliaConfigSync(rec::log, DirResolver(dir)) { pushes.incrementAndGet() }
+
+        sync.start(FakeConfigManager(dir))
+        try {
+            assertEquals(
+                "关闭歌词样式预览动画 must be read from config.json",
+                false,
+                sync.previewAnimation,
+            )
+            assertEquals("one change must push the tree exactly once", 1, pushes.get())
+
+            // A re-read of the same value must not push: every push remounts the shelf, so a push
+            // per watcher tick would restart it once a second.
+            sync.sync("watch")
+            assertEquals("an unchanged value must not push again", 1, pushes.get())
+
+            configFile.writeText("""{"previewAnimation":true}""")
+            sync.sync("watch")
+            assertEquals("turning it back on must be read too", true, sync.previewAnimation)
+            assertEquals("the second change must push again", 2, pushes.get())
         } finally {
             sync.stop()
         }
@@ -318,4 +367,7 @@ private object FoliaConfigSyncAccess {
 
     /** Mirrors `FoliaConfigSync.DEFAULT_TRANSITION_ANIMATION`. */
     const val defaultTransitionAnimation = false
+
+    /** Mirrors `FoliaConfigSync.DEFAULT_PREVIEW_ANIMATION`. */
+    const val defaultPreviewAnimation = true
 }

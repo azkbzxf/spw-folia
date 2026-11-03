@@ -144,6 +144,7 @@ internal object FoliaDiagnostics {
         "transitionAnimation",
         "showPlaybackBar",
         "showProblemButton",
+        "previewAnimation",
         "verboseLog",
     )
 

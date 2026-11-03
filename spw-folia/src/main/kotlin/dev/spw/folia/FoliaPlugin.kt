@@ -161,15 +161,22 @@ class FoliaPlugin(
         // v0.3.0 playback bar: queue snapshot + controls (reflection over the host player).
         bridge.queueProvider = { FoliaPlaybackControls.queueJson() }
         bridge.onSettingsFromPage = { tree ->
-            // The page echoes the tree it was given, including the members we injected for it. Both
-            // are stripped before they reach the in-memory tree or the settings file:
+            // The page echoes the tree it was given, including the members we injected for it. All
+            // four are stripped before they reach the in-memory tree or the settings file:
             //   * `systemFonts` is derived data (recomputed on every start); persisting it would add
             //     ~10-20 KB of names that go stale as soon as a font is installed;
-            //   * `showPlaybackBar` is owned by the 配置 page (config.json), so keeping a copy in the
-            //     settings file would give one fact two writers and let the page's echo win.
+            //   * `showPlaybackBar` / `showProblemButton` / `previewAnimation` are owned by the 配置
+            //     page (config.json), so keeping a copy in the settings file would give one fact two
+            //     writers and let the page's echo win.
             val cleanTree = Json.withoutMember(
-                Json.withoutMember(FoliaSystemFonts.withoutSystemFontsJson(tree), SHOW_PLAYBACK_BAR_KEY),
-                SHOW_PROBLEM_BUTTON_KEY,
+                Json.withoutMember(
+                    Json.withoutMember(
+                        FoliaSystemFonts.withoutSystemFontsJson(tree),
+                        SHOW_PLAYBACK_BAR_KEY,
+                    ),
+                    SHOW_PROBLEM_BUTTON_KEY,
+                ),
+                PREVIEW_ANIMATION_KEY,
             )
             settingsTree = cleanTree
             bridge.settingsTree = withInjectedMembers(cleanTree)
@@ -492,9 +499,9 @@ class FoliaPlugin(
      *
      * The switches are owned by SPW's ConfigManager (`preference_config.json` → one file per group)
      * and the plugin never renders its own UI for them; it only mirrors them. Two are spawn-time
-     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and two are hot
-     * (`showPlaybackBar`, `showProblemButton`), injected into the settings tree so the page remounts
-     * the HUD / the 救生圈 button without a restart.
+     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and three are hot
+     * (`showPlaybackBar`, `showProblemButton`, `previewAnimation`), injected into the settings tree
+     * so the page remounts the HUD / the 救生圈 button / the style shelf without a restart.
      */
     private fun registerConfigSync() {
         val manager = try {
@@ -512,11 +519,12 @@ class FoliaPlugin(
     /**
      * Applies the root-level members the page must receive but must never persist.
      *
-     * Three of them today, and they differ in where the truth lives:
+     * Four of them today, and they differ in where the truth lives:
      *  - `systemFonts` — derived data enumerated locally, stripped on the way back by
      *    [FoliaSystemFonts.withoutSystemFontsJson];
      *  - `showPlaybackBar` / `showProblemButton` (v0.4.11) — 配置 page switches owned by the plugin,
-     *    rewritten from [FoliaConfigSync] on every push instead of trusted from the incoming tree.
+     *    rewritten from [FoliaConfigSync] on every push instead of trusted from the incoming tree;
+     *  - `previewAnimation` (v0.4.15) — the same kind of switch, same rule.
      *
      * One helper for all of them matters because four call sites publish the tree (startup, host
      * open, shortcut edits, page echo); missing one used to mean "the setting silently stops
@@ -748,7 +756,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.4.15"
+        const val PLUGIN_VERSION = "0.4.16"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -787,6 +795,15 @@ class FoliaPlugin(
          * Default **off**; also the root-level settings-tree member the page reads.
          */
         private const val SHOW_PROBLEM_BUTTON_KEY = "showProblemButton"
+
+        /**
+         * v0.4.15: 配置 page switch that lets the 歌词样式 shelf draw live animated thumbnails.
+         * Default **on**; also the root-level settings-tree member the page reads.
+         *
+         * Off is the cheap path: the page draws a plain glyph per style instead of importing the
+         * renderer chunks, so opening 设置 costs no WebGL contexts and no memory for pictures.
+         */
+        private const val PREVIEW_ANIMATION_KEY = "previewAnimation"
 
         /** Dev checkout root, used only as a fallback while assets are not packaged next to the plugin. */
         private const val DEV_ROOT = "D:/输出目录/dsh2"

@@ -59,6 +59,18 @@ internal class FoliaConfigSync(
     var showProblemButton: Boolean = DEFAULT_SHOW_PROBLEM_BUTTON
         private set
 
+    /**
+     * 配置 page switch 「歌词样式预览动画」 (v0.4.15).
+     *
+     * Read here and injected into the settings tree exactly like [showPlaybackBar]: the plugin owns
+     * the value, the page only obeys it. Default **on** — the page's style shelf then animates and
+     * caches its thumbnails; turning it off makes the shelf draw a plain glyph instead of importing
+     * a renderer, which is the cheap path on a weak GPU.
+     */
+    @Volatile
+    var previewAnimation: Boolean = DEFAULT_PREVIEW_ANIMATION
+        private set
+
     @Volatile
     var transitionAnimation: Boolean = DEFAULT_TRANSITION_ANIMATION
         private set
@@ -149,7 +161,7 @@ internal class FoliaConfigSync(
     fun applyTo(tree: String): String {
         val withBar = Json.withBoolMember(tree, SHOW_PLAYBACK_BAR_KEY, showPlaybackBar)
         val withProblem = Json.withBoolMember(withBar, SHOW_PROBLEM_BUTTON_KEY, showProblemButton)
-        return withProblem
+        return Json.withBoolMember(withProblem, PREVIEW_ANIMATION_KEY, previewAnimation)
     }
 
     // ------------------------------------------------------------------ sync ----
@@ -244,6 +256,13 @@ internal class FoliaConfigSync(
                 log("config $SHOW_PROBLEM_BUTTON_KEY=$value (problem button ${if (value) "shown" else "hidden"})")
             }
         }
+        readBoolean(playerText, PREVIEW_ANIMATION_KEY)?.let { value ->
+            if (value != previewAnimation) {
+                previewAnimation = value
+                changed = true
+                log("config $PREVIEW_ANIMATION_KEY=$value (style shelf animation ${if (value) "on" else "static glyphs"})")
+            }
+        }
 
         // 诊断与日志组（v0.4.11 搬过去的；旧值从 config.json 迁移）
         //
@@ -276,6 +295,7 @@ internal class FoliaConfigSync(
             log(
                 "config sync ($reason): unchanged " +
                     "(showPlaybackBar=$showPlaybackBar showProblemButton=$showProblemButton " +
+                    "previewAnimation=$previewAnimation " +
                     "transitionAnimation=$transitionAnimation verboseLog=$verboseLog)"
             )
         }
@@ -373,11 +393,13 @@ internal class FoliaConfigSync(
         const val TRANSITION_ANIMATION_KEY = "transitionAnimation"
         const val SHOW_PLAYBACK_BAR_KEY = "showPlaybackBar"
         const val SHOW_PROBLEM_BUTTON_KEY = "showProblemButton"
+        const val PREVIEW_ANIMATION_KEY = "previewAnimation"
         const val VERBOSE_LOG_KEY = "verboseLog"
 
         const val DEFAULT_TRANSITION_ANIMATION = false
         const val DEFAULT_SHOW_PLAYBACK_BAR = true
         const val DEFAULT_SHOW_PROBLEM_BUTTON = false
+        const val DEFAULT_PREVIEW_ANIMATION = true
         const val DEFAULT_VERBOSE_LOG = false
 
         /** How long a switch edit may take to reach the page when the host's callback never fires. */

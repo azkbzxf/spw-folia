@@ -171,7 +171,7 @@ SPW「模组管理 → 配置」里的这一页由 `spw-folia/src/main/resources
 
 | 组标题 | config 文件 | 用途 | 条目 |
 | --- | --- | --- | --- |
-| 播放页 | `config.json` | 用户调节观感 | 打开过渡动画、显示播放条、**显示问题反馈按钮**（新增） |
+| 播放页 | `config.json` | 用户调节观感 | 打开过渡动画、显示播放条、**歌词样式预览动画**（v0.4.16 新增）、显示问题反馈按钮 |
 | **诊断与日志**（v0.4.11 新增组） | **`diagnostics.json`**（新文件） | 排查问题 | 详细日志 |
 | 支持与反馈 | `support.json` | 求助 | 出现问题 |
 
@@ -181,7 +181,8 @@ SPW「模组管理 → 配置」里的这一页由 `spw-folia/src/main/resources
 | --- | --- | --- | --- | --- | --- | --- |
 | 播放页 | 1 | `switch` | `transitionAnimation` | 打开过渡动画 | 关 | 宿主 **`--no-curtain`**（开关关闭时才传）：页面按 `splash=0` 导航，不装上游开屏 |
 | 播放页 | 2 | `switch` | `showPlaybackBar` | 显示播放条 | **开**（v0.4.10 新增） | 设置树顶层 `showPlaybackBar` 布尔 → 页面 `useShowPlaybackBar()` → 为假时 `<PlaybackBar/>` 整体不挂载 |
-| 播放页 | 3 | `switch` | `showProblemButton` | 显示问题反馈按钮 | **关**（v0.4.11 新增） | 设置树顶层 `showProblemButton` 布尔 → 页面 `useShowProblemButton()` → 为假时右上角救生圈按钮与其面板**都不挂载** |
+| 播放页 | 3 | `switch` | `previewAnimation` | 歌词样式预览动画 | **开**（v0.4.16 新增） | 设置树顶层 `previewAnimation` 布尔 → 页面 `usePreviewAnimation()` → 为假时货架走 `ShelfStatic`（只画简约字形，**一个渲染器 chunk 都不加载**）；为真时走 `ShelfLiveView`（真实渲染器小图 + 磁盘缓存） |
+| 播放页 | 4 | `switch` | `showProblemButton` | 显示问题反馈按钮 | **关**（v0.4.11 新增） | 设置树顶层 `showProblemButton` 布尔 → 页面 `useShowProblemButton()` → 为假时右上角救生圈按钮与其面板**都不挂载** |
 | 诊断与日志 | 1 | `switch` | `verboseLog` | 详细日志 | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志（v0.4.11 从「播放页」移入本组，见下） |
 | 支持与反馈 | — | `button` | （`on_click: FoliaPlugin.onReportProblem`） | 出现问题 | — | 环境自检 + 预填反馈 |
 
@@ -235,6 +236,77 @@ Kotlin 在 `registerTransitionAnimationConfig()` 里读 config →
 - 同时**关掉该按钮的键盘/面板联动**：按钮不在时不监听它的 ESC，面板若开着也会随开关一起关掉。
 - **为什么默认关**：它会遮挡画面右上角。而「播放窗口打不开」这种最需要求助的场景，配置页
   「支持与反馈 → 出现问题」按钮仍然可用——那正是那个按钮存在的理由。
+
+#### 4.1.3 「歌词样式预览动画」开关 + 小图缓存（v0.4.16）
+
+货架那 17 格小图（`data-spw-shelf` 里每个 `[data-value]`）默认是**真实渲染器**画的：上游
+`LyricStylePicture` → `LivePicture` 逐格串行把样式画到一张窗口大小的舞台上，冻结成静态图，
+指针停留 280ms 才让那一格跑起来。这条路很贵，真机量过（1920×1200、DSF 1、宽 7 列）：
+
+| 场景 | 出图耗时 | 峰值造图并发 | 新增样式渲染器 chunk |
+| --- | --- | --- | --- |
+| 冷启第一次打开设置 | **24.3 s**（17 格串行，均 1.37 s/格，最慢 nebbia 3.9 s） | 1 | 19 |
+| 同页关掉再打开 | 0.05 s | 0 | 0（上游 `pictureImages` 的页内 Map） |
+| **重启进程后再打开** | **23.0 s** | 1 | 19 |
+| **v0.4.16 起，重启进程后再打开** | **0.37 s** | **0** | **0**（磁盘缓存命中） |
+
+> 两个口径别混：`19` 是**样式渲染器** chunk（`assets/Visualizer*`，验收脚本按 resource entry 求差集）；
+> 基线测量脚本另报过「81 个 chunk」，那是 `settings/assets/` 下**全部**新加载资源（含 three/pixi 等
+> 共享库与 shell），不是同一件事。缓存命中后两组数字都是 0 + 1（`ShelfLiveView` 这个 lazy 壳本身，
+> live 模式必然加载），所以验收把「渲染器」与「壳」分开断言。
+
+期间主线程还有 22 次长任务、最长一次 1.7 s、累计阻塞 2.5 s —— 这就是「一开设置就卡一下」的真实体积。
+
+两处改动：
+
+**① 磁盘缓存（`src/model/previewImageCache.ts`）**。上游 `preview/pictureImages.ts` 那只 Map 只活在
+**页面生命周期**里，重启进程就全没了。这一层把已经冻结好的静态图（canvas 全部编码成 `<img>`）
+写进 IndexedDB，下次开窗口直接贴出来 —— 贴进的是**上游那只 Map**（`keepImage`），于是
+`LivePicture` 一上来就认为「这张图已经有了」：不排队造图、不拉渲染器 chunk、不起 rAF；指针停留时
+照旧走上游既有的 `image → live` 路径挂真渲染器。**没有改一行上游代码。**
+
+- 库/表/键：`spw-folia-preview` / `pictures` / keyPath `key`（这三个名字是验收脚本的取证口径）。
+- 键 = `v1|` + 上游 `stylePictureKey(...)` 原始串。**复用上游那个函数而不是自己拼字段清单**（它已经把
+  mode/stage/theme/isDaylight/sample/fontScale/tuning/mod 设置全写进 JSON），但**不传三个上传图参数**：
+  上游会把上传图对象编码成 WeakMap 序号，每次重启都不一样，拿它做磁盘键永远不命中。上传图在场时
+  整条缓存直接关掉（`uploadsBlockCaching`）。
+- canvas 用 **WebP q0.85**（不支持则回落 PNG）。PNG 下 hanabi 575 KB / machi 618 KB / pendolo 563 KB
+  会撞单条上限被静默跳过，而它们恰好是最慢的三格；WebP 后 17 格合计 1.47 MB → 298 KB。
+- 上限 32 条 / 8 MB / 单条 512 KB，按 `savedAt` 淘汰最旧。读写失败一律静默回落现场造图。
+- 开局 `making=false` 等磁盘查完（另有 1.2 s 兜底）：否则上游 `FIRST_IMAGE_REST_MS`（450 ms）之后
+  第一格就开造了，缓存命中成空话。
+
+**② `previewAnimation` 开关（默认开）**。关掉时货架换成 `src/model/ShelfStatic.tsx`：每格只画
+`modeGlyphs` 的 24×24 线性字形（与随机格 Shuffle 图标同一手法），**没有 hover 动画**。
+
+关键实现点在**模块加载层面断链**，不是「渲染了但不显示」：
+
+- `ShelfLive.tsx` 是极轻的路由，实时版用 `React.lazy(() => import('./ShelfLiveView'))` 拉。
+  开关关时那个工厂函数一次都不跑 → 那块 chunk 不下载 → `LyricStylePicture → LivePicture → registry
+  → entry.render` 整条链不存在。入口 `settings-ui.js` 因此从 917 KB 降到 697 KB。
+- 硬证据（真机 resource entries，匹配 `/Visualizer|ShelfLiveView/`）：**关 = 0 条，开 > 0 条**。
+- `shelfShared.tsx` / `shelfDiskState.ts` 的拆分也是为这个：静态路径不能碰到实时版的 import 链。
+- 热切换双向都成立（关→开才第一次调用 lazy 工厂；开→关实时版卸载，渲染器/rAF/WebGL context 按上游
+  自己的 cleanup 释放），不需要重开窗口。
+
+**探针契约**（`window.__SPW_SHELF_STATE__()`，验收脚本按它取证，改字段名会让门禁 FAIL）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `tiles` / `pictures` / `images` / `making` / `running` | 沿用上游 `data-picture` 标记的计数 |
+| `chosen` / `glyphs` / `runningValue` / `runningPicture` | 同上 |
+| `animated` | 货架是实时版（= `[data-spw-shelf-mode] === "live"`） |
+| `cached` | 当前显示「磁盘恢复图」的格子数；**static 模式恒 0** |
+| `pending` | 还没有图、也还没在造图的**样式格**数（随机格不计）；**static 模式恒 0** |
+
+**已知且有意接受**：入口 chunk 里仍能看到上游 preview 代码（`LyricPreviewProvider`、`LivePicture` 的
+`data-picture` 字符串等）。来源是 `App.tsx` → `VisPlaygroundSettingsPanel` → `RandomPoolGroup` →
+`lyricStyleChoices` 这条静态 import，**改动前就存在**：设置面板的随机池区域引用 `drawLyricStyleChoice`。
+它不影响开关的效果（随机池本身画的就是字形图案，`drawRandomPoolChoice`），真机 resource entries 在
+关掉时确实是 0。要连入口 chunk 一起清干净得改 `App.tsx` 的静态 import 图，是另一件事。
+
+验收：`packaging/tools/verify-preview-animation-switch.mjs`（已接入 `verify-all.mjs`，五组断言
+A 默认开 / B 关掉零渲染器 / C 跨进程缓存命中 / D 热切换 / E 同页重开不退化）。
 
 ## 5. 元数据（tuning）与样式面板
 

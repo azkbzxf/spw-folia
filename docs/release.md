@@ -3,11 +3,12 @@
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
 
-**Version state (read this first):** the last **published** release is **v0.4.15** (GitHub Releases,
-2026-11-03). Before it, v0.4.14 (the v0.4.13 hang fix) and v0.4.6 (2026-10-30); everything between
-v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was built and
-tested locally only and was **never published**, so their changes ship inside v0.4.13+. Do not point
-users at the tags of those intermediate versions.
+**Version state (read this first):** the newest assembled build is **v0.4.16** (2026-11-03,
+`dist/release/spw-folia-0.4.16.spmod`, sha256 `4d3cde0f…`). Before it, v0.4.15 (the first-open
+self-close fix + the feedback-URL truncation fix) and v0.4.14 (the v0.4.13 hang fix). Everything
+between v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was
+built and tested locally only and was **never published**, so their changes ship inside v0.4.13+.
+Do not point users at the tags of those intermediate versions.
 
 **v0.4.13 was published and withdrawn the same day.** It fixed the three dead config switches but
 shipped an unbounded retry recursion that hung SPW's UI for 9 minutes on a machine whose config files
@@ -15,9 +16,10 @@ did not exist yet (`failure.kind=TERMINATED_HANG`). The Release and tag were del
 are preserved in `dist/release/taken-down/v0.4.13-handoff/`. **v0.4.14 is that release, fixed** — see
 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) and [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md).
 
-Last verified: 2026-11-03 (v0.4.14 assembled from a fresh `packaging/` staging and gated with
-`verify-all.mjs` → **18/18**, including 46 JVM unit tests, the v0.4.13 hang guards, and the three
-regression suites that were previously orphaned). The v0.4.5/v0.4.6 bytes, entry counts and sha256
+Last verified: 2026-11-03 (v0.4.16 assembled from a fresh `packaging/` staging and gated with
+`verify-all.mjs` → **22/22**, including 48 JVM unit tests, the v0.4.13 hang guards, the three
+regression suites that were previously orphaned, and the new cross-process preview-cache suite).
+The v0.4.5/v0.4.6 bytes, entry counts and sha256
 below were recomputed from the actual downloaded assets, not copied from notes. Payload numbers
 quoted for the host exe (`spw-folia-host.exe` 164,864 B) and WebView2 150.0.4078.83 are the
 v0.4.5/v0.4.6 measurements and still hold (v0.4.13/v0.4.14 did not touch `native/`).
@@ -63,8 +65,9 @@ packaging/
   out/                         # verification evidence (screenshots, reports, fps log)
 ```
 
-Payload of the last published artifact (**v0.4.6**), measured directly from the downloaded
-`spw-folia-0.4.6.spmod` (uncompressed sizes inside the zip):
+Payload of the **v0.4.6** artifact, measured directly from the downloaded
+`spw-folia-0.4.6.spmod` (uncompressed sizes inside the zip). Kept as the historical baseline —
+it is **not** the current release; the newest is v0.4.16 (see the ledger at the end).
 
 | area | files | size |
 | --- | --- | --- |
@@ -329,9 +332,11 @@ repository; per-version change essays and full payload breakdowns live in
 [`docs/archive/`](archive/) (and in the GitHub Releases bodies, which ship `SHA256SUMS.txt` next to
 every `.spmod`).
 
-**The last published release is v0.4.13.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
+**The last published release is v0.4.16.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
 v0.4.12 were built and tested locally only — they have **no** GitHub release and **no** tag, so they
-must not be presented as downloadable; their changes ship inside v0.4.13. (The version numbers
+must not be presented as downloadable; their changes ship inside the later published releases.
+v0.4.13 **was** published and was withdrawn the same day (see the row below and
+[`postmortem-v0.4.13.md`](postmortem-v0.4.13.md)) — never re-upload it. (The version numbers
 written inside the code were stale for a while — `build.gradle.kts` / `FoliaPlugin.PLUGIN_VERSION`
 still said `0.4.7` until the 0.4.10 cleanup, which is why some local build artifacts carry a "0.4.7"
 name.)
@@ -371,6 +376,7 @@ name.)
 | **v0.4.13** | **15,438,647** | **3,982** | `5cb1cdafacdea46559e4b57ad1934522e6b20874d2531aabad2b46cac948f308` | ~~2026-11-03 发布~~ **当日下架（已删除 Release 与 tag）**。修复 v0.4.12 的开关回归，但同版本引入的重试递归在「两个配置文件都不存在」时无限递归，卡死 SPW 界面 9 分钟（`failure.kind=TERMINATED_HANG`）。取证包：`dist/release/taken-down/v0.4.13-handoff/`。**不要重新上架此版本**，用 v0.4.14 |
 | **v0.4.14** | **15,442,237** | **3,983** | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | **2026-11-03 发布**，v0.4.13 的修复版。①重试改为常量上限循环 + 同线程递归深度兜底（绝不再递归）；②`isOs64` 改三态，读不到位数不再假失败；③`runReg` 先起守护线程读管道再带超时等待，3s 硬超时真正生效；④`stringField` 非法转义返回 null（防止坏行被错派发）；⑤`save()` 返回 false 不再被记成已保存；⑥验收门禁补齐：3 个此前从未被调用的回归脚本接入、`fails.length >= 0` 恒真断言修正、`live-settings-payload` 不再依赖开发者本机安装、新增 v0.4.13 卡死守卫与 46 个 JVM 单测。`verify-all.mjs` 18/18。详见 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) 与 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md) |
 | **v0.4.15** | **15,443,035** | **3,983** | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | **2026-11-03 发布**。修 v0.4.14 的两个用户可见缺陷：①**设置面板首次打开几秒后自动退出** —— 根因是设置岛被加载两次（宿主注入带 `?v=`，而 35 个 chunk 反向 `import "../settings-ui.js"` 不带查询串，浏览器按完整 URL 区分模块），第二实例 `createRoot` 了同一个容器并卸载了第一棵树；修复用 `window` 级挂载标记 + 控制器所有者标记 + 容器 root 检测三道防线（模块作用域在两次加载间不共享，只能放 `window`）。②**反馈网址打不开**（GitHub `Whoa there!`）—— 上限按字符数 6000 算，但中文百分号编码后每字 9 字符，实际网址 ~15000 超限；改为按编码后长度截断，并修掉 emoji 输入会抛 `URIError` 的问题。门禁新增 3 条守卫（扫描打包产物 44 处反向引用），拆掉防线即 FAIL（已实测）。`verify-all.mjs` **21/21**、47 个 JVM 单测。详见 [`release-notes-v0.4.15.md`](release-notes-v0.4.15.md) |
+| **v0.4.16** | **15,462,458** | **4,007** | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | **2026-11-03 发布**。①**歌词样式小图缓存到本机**：上游 `pictureImages` 那只 Map 只活在页面生命周期里，重启窗口后 17 格要重画一遍（真机实测 23.0 s，主线程最长单次阻塞 1.77 s）；新增 IndexedDB 二级缓存（库 `spw-folia-preview` / 表 `pictures`，键 = `v1\|` + 上游 `stylePictureKey`，**不传上传图**以避开 WeakMap 序号跨进程漂移），命中时把冻结图贴回上游 Map，`LivePicture` 便不再排队造图 → 重启后 **23.0 s → 0.37 s**、`peakMaking 1→0`、样式渲染器 chunk 增量 `19→0`。canvas 用 WebP q0.85（PNG 下 hanabi/machi/pendolo 会撞 512 KB 单条上限被静默跳过，而它们恰是最慢三格；17 格 1.47 MB → 298 KB）。②**新增 `previewAnimation` 开关（默认开）**：关闭时货架走 `ShelfStatic`，经 `React.lazy` 在**模块加载层面**断链，真机 resource entries 匹配 `Visualizer\|ShelfLiveView` 为 **0**（不是渲染了不显示），热切换双向生效。③顺带修真缺陷：上游 `freezeStage` 只清理冻结那一刻在 `getAnimations()` 里的动画，群唱 `cappella-char-fade`（37 个）漏网、挂回新页面会从头重播；落盘前统一剥掉 `animation`/`transition`，恢复后 `getAnimations` 为 0。验收新增真机套件 `verify-preview-animation-switch.mjs`（37 条断言，含反恒真 A7 与跨进程 C 组），`verify-all.mjs` **22/22**、48 个 JVM 单测。详见 [`release-notes-v0.4.16.md`](release-notes-v0.4.16.md) |
 
 `local only` builds were verified on a real install but never uploaded; their changes shipped inside
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes
@@ -388,13 +394,18 @@ Notes on how to read this table:
   unifies them; the artifacts named `*-0.4.7*.spmod` in `dist/release/` are therefore older local
   builds, not the published 0.4.7 — and 0.4.7 itself was never published either.
 
-Current release payload (**v0.4.6**, the last published artifact): `web/` 3,820 files /
+Current release payload (**v0.4.16**): `web/` 3,891 files / 33,900,280 B, `native/` 5 files /
+1,116,126 B (host `spw-folia-host.exe` 178,688 B), `licenses/` 7 files / 49,757 B, `classes/`
+104 files / 828,860 B — 35,895,023 B uncompressed across 4,007 file entries, shipped as
+15,462,458 B with sha256 `4d3cde0f…`.
+
+For reference, the v0.4.6 artifact (the historical baseline) was: `web/` 3,820 files /
 26,112,116 B, `native/` 5 files / 1,097,142 B (host `spw-folia-host.exe` 164,864 B), `licenses/`
 7 files / 49,370 B, `classes/` 80 files / 626,269 B — 27,884,897 B uncompressed, shipped as
 12,476,192 B with sha256 `fc06fd07…`. The v0.4.5 artifact differs only in `classes/`
 (62 files / 493,078 B → 12,227,007 B total, sha256 `3b2a7474…`). Verify a downloaded artifact with:
 
 ```bash
-sha256sum spw-folia-0.4.6.spmod    # compare with the ledger row and the release's SHA256SUMS.txt
+sha256sum spw-folia-0.4.16.spmod    # compare with the ledger row and the release's SHA256SUMS.txt
 node packaging/tools/verify-layout.mjs   # packaged-layout acceptance on a clean unpack
 ```

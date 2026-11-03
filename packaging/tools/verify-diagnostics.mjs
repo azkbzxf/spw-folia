@@ -264,8 +264,13 @@ async function main() {
         .filter((p) => p.type === 'switch')
         .map((p) => ({ key: p.key, def: p.default_value }));
     const declaredKeys = declaredSwitches.map((s) => s.key).sort();
-    assert('C1 the 配置 page declares the v0.4.11 switches',
-        declaredKeys.join(',') === 'showPlaybackBar,showProblemButton,transitionAnimation,verboseLog',
+    // The expected set is written out on purpose: this assertion's job is to make somebody LOOK
+    // when the 配置 page grows or loses a switch, not to mirror whatever the file says (that would
+    // be a tautology). It therefore has to be edited together with `preference_config.json` — and
+    // NOT named after a version, because then the name lies after the next switch lands (it read
+    // "the v0.4.11 switches" through v0.4.16's `previewAnimation`).
+    assert('C1 the 配置 page declares every known switch',
+        declaredKeys.join(',') === 'previewAnimation,showPlaybackBar,showProblemButton,transitionAnimation,verboseLog',
         declaredKeys.join(','));
     assert('C2 显示问题反馈按钮 defaults to off',
         (declaredSwitches.find((s) => s.key === 'showProblemButton') || {}).def === false,

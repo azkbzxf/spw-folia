@@ -8,8 +8,9 @@
 本文覆盖两处界面，别混：
 
 - **`歌词样式` 设置页**（Folia 原组件，注入覆盖层内）——Folia 的设置树，受上游能力限制。
-- **SPW 配置页**（`spw-folia/src/main/resources/preference_config.json`）——插件自己的**五个**入口
-  （v0.4.11 重新分组后，按「播放页 3 项 / 诊断与日志 1 项 / 支持与反馈 1 项」三组摆放），
+- **SPW 配置页**（`spw-folia/src/main/resources/preference_config.json`）——插件自己的**六个**入口
+  （v0.4.11 重新分组后，按「播放页 4 项 / 诊断与日志 1 项 / 支持与反馈 1 项」三组摆放；
+  v0.4.16 在播放页组新增「歌词样式预览动画」），
   见 [`docs/settings-ui-impl.md`](settings-ui-impl.md) §4.1。
 
 v0.4.0 与 v0.1.3 的区别集中在两处：**自定义字体重新回归**（可导入字体包或选择系统字体），
@@ -59,6 +60,7 @@ v0.4.0 与 v0.1.3 的区别集中在两处：**自定义字体重新回归**（�
 | **SPW 配置页** | **详细日志（`key: verboseLog`，`default_value: false`）** | **生效**。落在 `diagnostics.json`，控制宿主是否带 `--verbose-log`；同样在下一次打开 Folia 生效，v0.4.13 起变更即同步到 bridge。 |
 | **SPW 配置页** | **显示播放条（`key: showPlaybackBar`，`default_value: true`，v0.4.10 新增）** | **生效**。链路：插件读 config → `FoliaPlugin.withInjectedMembers()` 以设置树顶层布尔下发 → 页面 `useShowPlaybackBar()`（`src/model/useInjectedSwitch.ts`）读 `getSettings()` 初值并监听 `settings` 事件热更新 → 为 `false` 时底部播放控制条（`chrome/playback/PlaybackBar.tsx`，时间轴/播放暂停/上下首/随机/播放列表）**整个不挂载**，连热区一起消失。关掉后重开窗口仍然生效（配置持久化在 SPW 侧，不是页面临时状态）。v0.4.13 真机验证：改动后 ≤1 s 内插件捕获并推送，无需重开窗口。 |
 | **SPW 配置页** | **显示问题反馈按钮（`key: showProblemButton`，`default_value: false`，v0.4.11 新增）** | **生效**。控制播放页**右上角的救生圈按钮**（`data-spw-chrome="problem-report"`，`LifeBuoy` 图标）及其诊断面板，链路与 `showPlaybackBar` 完全同构。**默认关**（它会遮挡画面右上角）。关闭时按钮**不渲染**——React 根本不挂载，不是 CSS 隐藏，因此也不上报 hit region（鼠标穿透下不会留点不到的死区）；同时该按钮的键盘/面板联动一并关掉：按钮不在时不监听它的 ESC，面板若开着也随开关关掉。**逃生口仍在**：配置页「支持与反馈 → 出现问题」按钮不依赖播放窗口，播放窗口打不开时照样能用——这正是它存在的理由。 |
+| **SPW 配置页** | **歌词样式预览动画（`key: previewAnimation`，`default_value: true`，v0.4.16 新增）** | **生效**。控制「歌词样式」货架上 17 格小图是实时渲染还是简约图案，链路与 `showPlaybackBar` 完全同构（`usePreviewAnimation()`）。**关**时货架换成 `ShelfStatic`，通过 `React.lazy` 在**模块加载层面**断开渲染器链——真机 resource entries 匹配 `Visualizer`/`ShelfLiveView` 的条目数为 **0**（不是「画了不显示」），大预览/各 tab/滑块不受影响，hover 也不会把渲染器拉回来。开关开着时，第一次画完的小图会缓存到 IndexedDB（`spw-folia-preview`），重启窗口后 **23.0 s → 0.37 s**。热切换双向即时生效。详见 [`docs/settings-ui-impl.md`](settings-ui-impl.md) §4.1.3。 |
 | 歌词动画 | 纹理分辨率、镜头运动强度、文字动势、背景短线密度、外围边框等样式参数 | 通过 `visualizerTunings` 传给渲染器。 |
 | 歌词动画 | 各样式专属参数（商籁/凝彩/绘光/花火/…/静止） | 同上；只保留可渲染的项。 |
 | 歌词动画 | 歌词样式磁贴（15 种 + 随机） | 写入 `visualizerMode`；随机磁贴打开随机池，手选样式则关闭随机（与上游 `preserveRandom` 语义一致）。 |

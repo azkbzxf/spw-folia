@@ -57,11 +57,15 @@ colour theming.
   when everything is present it opens a pre-filled feedback page and selects the log file in Explorer.
   Logging switches now live in their own **Config → Diagnostics & logs** group (verbose logging records
   navigation, page console output and stalls), separate from the look-and-feel switches on the player
-  page. (That grouping is new in the v0.4.11 development build; in the published v0.4.6 the verbose-log
-  switch still sits in the **Player page** group.)
+  page. (That grouping has been in place since v0.4.11.)
   See [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md).
-- **The life-buoy button can be turned off** (new in development build v0.4.11; always shown in v0.4.6
-  and earlier) — that button covers the top-right corner of the picture, so **Config → Player page** now
+- **Style thumbnails can be cached, and switched off** (v0.4.16) — the 17 tiles in 歌词样式 used to be
+  drawn by the real renderer every single time the panel opened (about 23 s to fill in after a
+  restart). They are now **cached on disk**: reopening after a restart paints them in 0.37 s.
+  **Config → Player page → 歌词样式预览动画** can turn the animation off; with it off each tile draws a
+  plain glyph and **no renderer is loaded at all**, which is much lighter on a weak GPU.
+- **The life-buoy button can be turned off** (since v0.4.11) — that button covers the top-right corner
+  of the picture, so **Config → Player page** now
   offers a **default-off** "Show problem feedback button" switch. When it is off the button is not
   rendered at all and takes no hit region. The escape hatch stays available either way: **Support &
   feedback → Report a problem** on the config page does not depend on the player window, so it still
@@ -137,7 +141,7 @@ troubleshooting live in [docs/runtime-requirements.md](docs/runtime-requirements
 
 ## Versions
 
-The current **published** release is **v0.4.6** (2026-10-30). The `.spmod` and its SHA-256 checksum
+The current **published** release is **v0.4.16** (2026-11-03). The `.spmod` and its SHA-256 checksum
 for every release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases); per-version
 notes and acceptance evidence are archived in [docs/archive/](docs/archive/) rather than repeated here.
 
@@ -152,15 +156,18 @@ whole screen in a transparent window, and a 「出现问题」 environment self-
 feedback was added (see [docs/logging-and-diagnostics.md](docs/logging-and-diagnostics.md)).
 v0.4.5 adapts to SPW 1.19.3's obfuscation renames; v0.4.6 replaces the menu hook with **host-bytecode
 structural discovery**, so a host rename no longer needs a plugin release (see
-[docs/hook-target.md](docs/hook-target.md)).
+[docs/hook-target.md](docs/hook-target.md)). From v0.4.13 the settings page offers all 17 styles
+(bundling upstream Folia 0.7.25, which adds 町景 Machi and 雾笺 Nebbia). v0.4.16 **caches the style
+thumbnails on disk** (reopening the settings window after a restart: 23 s → 0.37 s) and adds a
+「歌词样式预览动画」 switch (on by default; turned off, each tile draws a plain glyph and no renderer
+is loaded at all).
 
-> Versions after v0.4.6 (0.4.6.1 / 0.4.7 / 0.4.8 / 0.4.9 / 0.4.10 and the in-development 0.4.11) are
-> **not published** — they were only built and tested locally. Download from the `v0.4.6` tag or an
-> earlier one until the next release lands.
->
-> **Style-count note:** the **17 styles** above are what the current development build (bundled Folia
-> 0.7.25) ships. The **published v0.4.6 bundles Folia 0.7.22 and therefore has 15** — 「町景 Machi」and
-> 「雾笺 Nebbia」arrive with v0.4.8's upstream bump and are not downloadable yet.
+> **Release-line note:** v0.4.13 was published and withdrawn the same day (it could hang SPW for
+> minutes when the config files did not exist yet); v0.4.14 replaced it. v0.4.15 fixed the settings
+> panel closing itself on first open and the over-long feedback URL. v0.4.6.1 / 0.4.7 / 0.4.8 /
+> 0.4.9 / 0.4.10 / 0.4.11 / 0.4.12 were **never published** — their changes shipped in later
+> releases. Download only from tags that still exist (v0.4.6, v0.4.14, v0.4.15, v0.4.16 and earlier
+> valid ones).
 
 ## Build from source
 

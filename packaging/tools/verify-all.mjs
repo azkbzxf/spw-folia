@@ -106,6 +106,14 @@ const SUITES = [
     { name: 'settings tree survives the line protocol (singleLine)', file: 'verify-json-singleline.mjs' },
     { name: 'PRETTY dropped vs COLLAPSED applied', file: 'verify-playback-switches.mjs' },
     { name: 'live settings payload end-to-end', file: 'verify-live-settings-payload.mjs' },
+    // v0.4.16: the 歌词样式预览动画 switch and the style shelf's cross-process picture cache.
+    // NOTE: unlike the suites above, this one drives the DEV artifacts under poc/ (poc/settings-ui/
+    // dist, poc/webview/…) instead of the packaged copies, because the switch and the cache are
+    // implemented there. That is still a real WebView2 host running the shipped bundle for that
+    // build — but it means this suite is only meaningful AFTER `npx vite build` in poc/settings-ui.
+    // The script exits 2 (not 1) when those artifacts are absent, so a stale local build shows up
+    // as "missing payload" rather than as a silent pass.
+    { name: '歌词样式预览动画 switch + 小图缓存', file: 'verify-preview-animation-switch.mjs' },
 ];
 
 // ---------------------------------------------------------------- 1f. hang guards ----
