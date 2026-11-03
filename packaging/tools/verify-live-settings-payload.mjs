@@ -6,6 +6,12 @@
 //
 // Verifies the page really mounts/unmounts the HUD and the 问题反馈 button from that payload —
 // which is what the user sees when they flip the three switches.
+//
+// v0.4.14: this suite used to read the DEVELOPER'S LIVE INSTALL
+// (`%APPDATA%\...\workshop\data\dev.spw.folia\config.json`) and crash with ENOENT on any machine
+// where the plugin had never been run — i.e. on every clean checkout and every CI box. That is the
+// same class of flaw as the v0.4.13 acceptance blind spot: a test that depends on ambient state the
+// build does not control. The tree now comes from the bundled default, so the suite is hermetic.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,13 +50,36 @@ function singleLine(json) {
     return out;
 }
 
-const configPath = 'C:/Users/24037/AppData/Roaming/Salt Player for Windows/workshop/data/dev.spw.folia/config.json';
-const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-const persistedTree = cfg.settingsJson;
-console.log('persisted settingsJson = ' + persistedTree.length + ' bytes, '
+// The tree the plugin actually persists/plays back. Prefer the developer's real install when it is
+// present (maximally realistic), but NEVER depend on it: fall back to the bundled canonical tree so
+// the suite runs on a clean machine. Before v0.4.14 this read the live path unconditionally and threw
+// ENOENT whenever the plugin had not been run — which made the gate un-runnable rather than failing
+// a real assertion.
+const liveConfigPath = path.join(
+    process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'),
+    'Salt Player for Windows', 'workshop', 'data', 'dev.spw.folia', 'config.json',
+);
+const bundledTreePath = path.join(REPO, 'packaging', 'testdata', 'default-settings.json');
+
+let persistedTree;
+let source;
+if (fs.existsSync(liveConfigPath)) {
+    const cfg = JSON.parse(fs.readFileSync(liveConfigPath, 'utf8'));
+    persistedTree = cfg.settingsJson;
+    source = 'live install (' + liveConfigPath + ')';
+    console.log('config switches: bar=' + cfg.showPlaybackBar + ' problem=' + cfg.showProblemButton
+        + ' transition=' + cfg.transitionAnimation);
+} else {
+    persistedTree = fs.readFileSync(bundledTreePath, 'utf8');
+    source = 'bundled default-settings.json';
+}
+if (typeof persistedTree !== 'string' || !persistedTree.trim()) {
+    console.error('FAIL  no settings tree available from ' + source);
+    process.exit(1);
+}
+console.log('settings tree source = ' + source);
+console.log('tree = ' + persistedTree.length + ' bytes, '
     + (persistedTree.match(/\n/g) || []).length + ' newlines');
-console.log('config switches: bar=' + cfg.showPlaybackBar + ' problem=' + cfg.showProblemButton
-    + ' transition=' + cfg.transitionAnimation);
 
 const child = spawn(EXE, [
     '--bundle', BUNDLE, '--windowed', '--width', '1280', '--height', '800',

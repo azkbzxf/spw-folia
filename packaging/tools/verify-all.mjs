@@ -20,7 +20,7 @@
 // Exit code 0 = PASS, 1 = FAIL, 2 = missing packaged payload (run bash packaging/build-package.sh).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -100,7 +100,102 @@ const SUITES = [
     { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
     { name: '显示问题反馈按钮 switch', file: 'verify-problem-button-switch.mjs' },
     { name: '显示播放条 switch', file: 'verify-playback-bar-switch.mjs' },
+    // v0.4.14: these three existed since v0.4.13 but were never wired in, so the "10/10" was
+    // reported WITHOUT them — the very suites that encode the v0.4.12/0.4.13 line-protocol lesson.
+    // An orphaned gate script is a check nobody runs.
+    { name: 'settings tree survives the line protocol (singleLine)', file: 'verify-json-singleline.mjs' },
+    { name: 'PRETTY dropped vs COLLAPSED applied', file: 'verify-playback-switches.mjs' },
+    { name: 'live settings payload end-to-end', file: 'verify-live-settings-payload.mjs' },
 ];
+
+// ---------------------------------------------------------------- 1f. hang guards ----
+
+/**
+ * Static guards against the v0.4.13 TERMINATED_HANG returning.
+ *
+ * That build shipped with 10/10 green gates because every suite drove a machine that HAD a
+ * `config.json`, so the "config file unreadable" branch was never executed by a test — only by
+ * real users, who got a frozen UI and a forced kill. The checks below make the specific SHAPE of
+ * that defect impossible to reintroduce silently; the behavioural proof lives in the JVM tests
+ * (`FoliaConfigSyncTest`), which also run in this gate.
+ */
+function hangGuards() {
+    const syncSrc = read('spw-folia/src/main/kotlin/dev/spw/folia/FoliaConfigSync.kt');
+
+    // Guard 1: no call path inside the sync machinery may reach `sync(` again. v0.4.13's recursion
+    // was `sync(reason = "$reason/retry")`; a JVM monitor is reentrant, so @Synchronized let it run.
+    // Scope = the whole sync region (sync + syncInternal), because the retry could be moved into
+    // either one by a future edit — checking only sync() would miss exactly that.
+    const regionStart = syncSrc.indexOf('fun sync(reason: String)');
+    const regionEnd = syncSrc.indexOf('private fun startWatcher');
+    const region = regionStart >= 0 && regionEnd > regionStart
+        ? syncSrc.slice(regionStart, regionEnd)
+        : '';
+    const regionWithoutDecl = region.replace('fun sync(reason: String)', '');
+    const selfRecursive = /\bsync\s*\(\s*reason\s*=/.test(regionWithoutDecl);
+    record('sync machinery never re-enters sync()', region.length > 0 && !selfRecursive,
+        region.length === 0
+            ? 'could not locate the sync region'
+            : (selfRecursive ? 'found a recursive sync(reason=...) call' : ''));
+
+    // Guard 2: the retry bound must be a const, not a resettable flag. v0.4.13 used an
+    // AtomicBoolean that the retry path CLEARED before recursing, so "retry once" never ended.
+    const hasConstBound = /const\s+val\s+EMPTY_RETRY_COUNT\s*=\s*[0-9]+/.test(syncSrc);
+    const hasResetFlag = /retriedAfterEmpty/.test(syncSrc);
+    record('retry bound is a constant, not a resettable flag', hasConstBound && !hasResetFlag,
+        !hasConstBound ? 'EMPTY_RETRY_COUNT missing' : (hasResetFlag ? 'retriedAfterEmpty is back' : ''));
+
+    // Guard 3: a re-entrancy backstop must exist, because @Synchronized cannot stop same-thread
+    // re-entry — that is exactly WHY the recursion ran straight through the lock.
+    record('sync has a re-entrancy depth backstop', /MAX_SYNC_DEPTH/.test(syncSrc), '');
+
+    // Guard 4: every verify-* script on disk must be wired into this gate or explicitly excused.
+    // An orphaned gate script is a check nobody runs — which is how three of them sat unused through
+    // the v0.4.13 release while the notes claimed they ran.
+    const wired = new Set([...SUITES.map((s) => s.file), 'verify-all.mjs']);
+    const EXCUSED = new Set([
+        // Manual-only: documented in docs/release.md as a separate step (needs a staged payload at
+        // a specific DPI and takes minutes).
+        'verify-layout.mjs',
+        // Browser-flow suites that require a packaged WebView2 payload + specific host flags;
+        // driven manually, not per-gate.
+        'verify-splash-gates.mjs',
+        'verify-splash-browser.mjs',
+        // Legacy v0.3.0 suites for features since replaced; kept as documentation of past coverage.
+        'verify-playback-controls.mjs',
+        'verify-mouse-back.mjs',
+        'verify-transparent-hud.mjs',
+    ]);
+    const present = readdirSync(HERE).filter((f) => /^verify-.*\.(mjs|py)$/.test(f));
+    const orphaned = present.filter((f) => !wired.has(f) && !EXCUSED.has(f)).sort();
+    record('no orphaned verify-* scripts', orphaned.length === 0, orphaned.join(','));
+}
+
+/** Runs the JVM unit tests — the only suite that actually EXECUTES the config-failure branches. */
+function runJvmTests() {
+    const dir = join(ROOT, 'spw-folia');
+    const gradlew = join(dir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+    if (!existsSync(gradlew)) return { ok: false, detail: 'gradlew missing', out: '' };
+    // `--rerun-tasks` is required: Gradle marks the test task UP-TO-DATE when nothing changed, which
+    // emits no per-test lines and would let this gate report "0 passed / 0 failed" as a PASS. A
+    // vacuous pass in the release gate is exactly how v0.4.13 shipped — the check must prove it ran.
+    const r = spawnSync(gradlew, ['--offline', 'test', '--rerun-tasks', '--console=plain'], {
+        cwd: dir,
+        encoding: 'utf8',
+        timeout: 600000,
+        shell: process.platform === 'win32',
+    });
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    const passed = (out.match(/ PASSED/g) || []).length;
+    const failed = (out.match(/ FAILED/g) || []).length;
+    // A run that executed no tests is a FAILURE, not a pass: silence must never look like success.
+    const ran = passed + failed > 0;
+    return {
+        ok: r.status === 0 && failed === 0 && ran,
+        detail: ran ? `${passed} passed / ${failed} failed` : 'no tests were executed',
+        out,
+    };
+}
 
 function runSuite(file) {
     const script = join(HERE, file);
@@ -127,6 +222,14 @@ function main() {
 
     console.log('== static contract ==');
     staticChecks();
+
+    console.log('\n== hang guards (v0.4.13 TERMINATED_HANG) ==');
+    hangGuards();
+
+    // The JVM suite is the only thing that actually EXECUTES the config-failure branches, so it runs
+    // on every gate including --static. v0.4.13 shipped green precisely because no gate did.
+    const jvm = runJvmTests();
+    record('jvm unit tests (config failure paths)', jvm.ok, jvm.detail);
 
     if (!STATIC_ONLY) {
         console.log('\n== real host + real WebView2 ==');

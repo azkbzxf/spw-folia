@@ -170,7 +170,15 @@ internal object Json {
         return null
     }
 
-    /** Extracts the (unescaped) string value of [key] from a flat JSON object line. */
+    /**
+     * Extracts the (unescaped) string value of [key] from a flat JSON object line.
+     *
+     * Returns null when the literal is malformed — including a broken four-hex-digit escape. That
+     * matters for the line protocol: the result is used to dispatch messages
+     * (`when (stringField(line, "t"))`), so returning a *plausible but wrong* string can route a
+     * corrupt line into the wrong handler instead of dropping it. A truncated escape used to decode
+     * to garbage rather than failing, because the bad sequence was neither consumed nor reported.
+     */
     fun stringField(json: String, key: String): String? {
         val raw = rawField(json, key) ?: return null
         if (raw.length < 2 || raw[0] != '"') return null
@@ -186,16 +194,18 @@ internal object Json {
                     't' -> sb.append('\t')
                     'b' -> sb.append('\b')
                     'f' -> sb.append('\u000c')
+                    '/' -> sb.append('/')
+                    '"' -> sb.append('"')
+                    '\\' -> sb.append('\\')
                     'u' -> {
-                        if (i + 4 < raw.length) {
-                            val code = raw.substring(i + 1, i + 5).toIntOrNull(16)
-                            if (code != null) {
-                                sb.append(code.toChar())
-                                i += 4
-                            }
-                        }
+                        // Four hex digits must follow, inside the literal.
+                        if (i + 4 >= raw.length - 1) return null
+                        val code = raw.substring(i + 1, i + 5).toIntOrNull(16) ?: return null
+                        sb.append(code.toChar())
+                        i += 4
                     }
-                    else -> sb.append(n)
+                    // An unknown escape is a malformed literal, not a literal character.
+                    else -> return null
                 }
             } else {
                 sb.append(c)

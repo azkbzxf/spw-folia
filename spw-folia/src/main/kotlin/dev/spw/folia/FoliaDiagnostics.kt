@@ -269,7 +269,15 @@ internal object FoliaDiagnostics {
      *  - build known **and** < 17763 → [Verdict.FAIL] (the only branch that may say 「版本太低」)
      *  - build not readable at all → [Verdict.UNKNOWN] (this is the branch v0.4.6 got wrong)
      */
-    private fun osCheck(windows: FoliaEnvironmentProbe.WindowsInfo): Check {
+    /**
+     * H1 — Windows build.
+     *
+     * `internal` (not private) so the tests can pin the VERDICT, not just the parsed value. The
+     * v0.4.6 false-FAIL regression was asserted one layer too low: the test proved
+     * `buildFromVersionProperty` returns null, which says nothing about whether `osCheck` then
+     * answers UNKNOWN. A regression in the `when` below would have left every test green.
+     */
+    internal fun osCheck(windows: FoliaEnvironmentProbe.WindowsInfo): Check {
         val build = windows.build
         val is64 = windows.isOs64
         val detail = windows.describe()
@@ -279,13 +287,25 @@ internal object FoliaDiagnostics {
             if (windows.ubr.present) append("; ubr: ").append(windows.ubr.describe())
         }
         return when {
-            !is64 -> Check(
+            // `is64 == false` is a REAL failure (32-bit JVM: the x64 helper cannot run).
+            // `is64 == null` means we could not read the architecture at all — absence of evidence
+            // is UNKNOWN, never FAIL. v0.4.13 collapsed both to `false` and reported
+            // 「当前不是 64 位系统」 on healthy machines; see WindowsInfo.isOs64.
+            is64 == false -> Check(
                 id = "os",
                 label = "64 位 Windows",
                 verdict = Verdict.FAIL,
-                detail = "$detail — 当前不是 64 位系统",
+                detail = "$detail — 当前 JVM 是 32 位，无法运行 64 位辅助进程",
                 evidence = evidence,
-                fix = "spw-folia 只支持 64 位 Windows 10 1809+；32 位系统无法运行辅助进程",
+                fix = "spw-folia 只支持 64 位 Windows 10 1809+；请使用 64 位 Salt Player for Windows",
+            )
+
+            is64 == null -> Check(
+                id = "os",
+                label = "Windows 10 x64（1809+）",
+                verdict = Verdict.UNKNOWN,
+                detail = "$detail — 读不到系统位数（os.arch 与 sun.arch.data.model 都不可用）",
+                evidence = evidence,
             )
 
             build == null -> Check(

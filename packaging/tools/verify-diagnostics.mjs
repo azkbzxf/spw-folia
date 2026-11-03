@@ -242,8 +242,19 @@ async function main() {
     assert('B1 no "missing file" FAIL on a machine that merely lacks a staged payload',
         falseMisses.length === 0, falseMisses.map((r) => r.label + ': ' + r.detail));
     const unknowns = rows.filter((r) => r.verdict === 'unknown');
+    // B2 used to read `unknowns.length === 0 || fails.length >= 0`, which is a tautology: the
+    // second operand is true for ANY array, so this — the only assertion claiming to enforce the
+    // four-state contract — could never fail. The real contract is directional: an undecidable
+    // check must be reported as UNKNOWN, and in particular must NOT be reported as a FAIL.
+    const unknownAsFail = fails.filter((r) => /无法判定|unknown|读不到|不可用/i.test(String(r.detail || '')));
     assert('B2 undecidable checks are reported as unknown, not as failures',
-        unknowns.length === 0 || fails.length >= 0, unknowns.map((r) => r.label));
+        unknownAsFail.length === 0, unknownAsFail.map((r) => r.label + ': ' + r.detail));
+    // And the four verdict words must actually be legal values — a typo would otherwise render as
+    // an unstyled row that every other assertion here silently accepts.
+    const legalVerdicts = new Set(['pass', 'fail', 'unknown', 'advisory']);
+    const bogusVerdicts = rows.filter((r) => !legalVerdicts.has(String(r.verdict)));
+    assert('B3 every row carries one of the four legal verdicts',
+        bogusVerdicts.length === 0, bogusVerdicts.map((r) => r.label + ': ' + r.verdict));
 
     // ---- C. declaration ⇄ code contract -------------------------------------------------
     const prefPath = join(ROOT, 'spw-folia', 'src', 'main', 'resources', 'preference_config.json');

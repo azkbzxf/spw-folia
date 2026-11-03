@@ -38,6 +38,14 @@ import java.util.function.Consumer
 @OptIn(UnstableSpwWorkshopApi::class)
 internal class FoliaConfigSync(
     private val log: (String) -> Unit,
+    /**
+     * Resolves the on-disk path of a named config group. Null means "ask the host's ConfigManager"
+     * (production). The seam exists ONLY so the failure paths below can be tested: v0.4.13 shipped
+     * with a 9-minute hang because every acceptance suite ran against a machine that always had
+     * `config.json` present, so the "no readable file" branch was never executed by anything but
+     * real users. Tests inject a resolver over a temp directory instead.
+     */
+    private val files: ConfigFileResolver? = null,
     /** Publishes the current settings tree to the page; no-op when no window is running. */
     private val pushTree: () -> Unit,
 ) {
@@ -66,8 +74,23 @@ internal class FoliaConfigSync(
     private val started = AtomicBoolean(false)
     private val firstSyncDone = AtomicBoolean(false)
 
-    /** Guards the one-shot retry used when a config file is caught mid-write. */
-    private val retriedAfterEmpty = AtomicBoolean(false)
+    /**
+     * Re-entrancy depth of [sync] on the CALLING thread — the hard backstop.
+     *
+     * `@Synchronized` cannot stop re-entry: the JVM monitor is reentrant for the same thread, so a
+     * `sync()` that iterates back into `sync()` walks straight through the lock. That is exactly how
+     * the v0.4.13 retry escaped its own guard and hung SPW for nine minutes (1450 nested calls,
+     * `failure.kind=TERMINATED_HANG`). The retry is now a bounded loop, but this counter stays as
+     * defence in depth: any FUTURE accidental re-entry degrades to a single ERROR line instead of a
+     * dead host.
+     */
+    private val syncDepth = ThreadLocal.withInitial { 0 }
+
+    /**
+     * Set once the "no config file yet" line has been written, so a normal fresh install does not
+     * emit one line per watcher tick (86k lines/day) for an entirely expected condition.
+     */
+    private val noConfigLogged = AtomicBoolean(false)
 
     /**
      * Binds the manager, does the first sync, registers the fast-path listener and starts the
@@ -136,29 +159,66 @@ internal class FoliaConfigSync(
      *
      * [reason] is only for the log. Every read goes through [ConfigHelper.reload] first, because the
      * manager hands back cached helpers whose values predate an edit made through the 配置 page.
+     *
+     * **This method must never call itself.** See [syncDepth] and the v0.4.13 post-mortem: the retry
+     * for an unreadable config file was once a recursive `sync("$reason/retry")`, which is an
+     * unbounded descent because the JVM monitor does not stop same-thread re-entry. The retry now
+     * lives inside [syncInternal] as a loop with a compile-time constant bound.
      */
     @Synchronized
     fun sync(reason: String) {
+        val depth = syncDepth.get()
+        if (depth >= MAX_SYNC_DEPTH) {
+            // Not reachable through normal code any more; kept so a future edit that reintroduces
+            // re-entry costs one log line instead of another hung host.
+            log("config sync ($reason): refusing to re-enter sync (depth=$depth) — this is a bug")
+            return
+        }
+        syncDepth.set(depth + 1)
+        try {
+            syncInternal(reason)
+        } finally {
+            syncDepth.set(depth)
+        }
+    }
+
+    private fun syncInternal(reason: String) {
         val m = manager ?: return
-        val playerText = readConfigText(configFileOf(m, PLAYER_CONFIG))
-        val diagnosticsText = readConfigText(configFileOf(m, DIAGNOSTICS_CONFIG))
+
+        // Read both config files, retrying AT MOST EMPTY_RETRY_COUNT times.
+        //
+        // The retry exists for one narrow window: the host's save truncates config.json and then
+        // rewrites it, so a read landing between the two steps sees an empty file. That window is
+        // only worth waiting on when a file actually EXISTS and reads back empty. A file that is
+        // simply absent is a normal fresh install — retrying there cannot succeed, and the v0.4.13
+        // build spent 559 s / 1450 nested frames proving it (failure.kind=TERMINATED_HANG).
+        var playerText: String? = null
+        var diagnosticsText: String? = null
+        var attempt = 0
+        while (true) {
+            val playerFile = configFileOf(m, PLAYER_CONFIG)
+            val diagnosticsFile = configFileOf(m, DIAGNOSTICS_CONFIG)
+            playerText = readConfigText(playerFile)
+            diagnosticsText = readConfigText(diagnosticsFile)
+            if (playerText != null || diagnosticsText != null) break
+
+            val caughtMidWrite = (playerFile?.isFile == true) || (diagnosticsFile?.isFile == true)
+            if (!caughtMidWrite || attempt >= EMPTY_RETRY_COUNT) break
+
+            attempt++
+            log("config sync ($reason): config file empty (mid-write?); retry $attempt/$EMPTY_RETRY_COUNT")
+            if (!sleepQuietly(EMPTY_RETRY_DELAY_MS)) return
+        }
         if (playerText == null && diagnosticsText == null) {
-            // A missing file is normal on a fresh install, but an EMPTY one is what we see while the
-            // host rewrites config.json (its save truncates first, then writes). Treating that window
-            // as "no config" silently skipped a whole sync — the next change then looked like it did
-            // not apply, which is the very symptom this class exists to prevent. Wait one watcher
-            // tick and try once more before giving up.
-            if (retriedAfterEmpty.compareAndSet(false, true)) {
-                log("config sync ($reason): no config file readable; retrying once")
-                Thread.sleep(EMPTY_RETRY_DELAY_MS)
-                retriedAfterEmpty.set(false)
-                sync(reason = "$reason/retry")
-            } else {
-                log("config sync ($reason): no config file readable")
+            // Expected on a fresh install: the file appears the first time the 配置 page saves. Log
+            // it once, not once per watcher tick (1 Hz would be ~86k lines/day for nothing), and keep
+            // running on the compiled-in defaults.
+            if (noConfigLogged.compareAndSet(false, true)) {
+                log("config sync ($reason): no config file yet; using defaults until the 配置 page saves one")
             }
             return
         }
-        retriedAfterEmpty.set(false)
+        noConfigLogged.set(false)
 
         var changed = false
 
@@ -253,6 +313,12 @@ internal class FoliaConfigSync(
      * only way both sides are guaranteed to agree.
      */
     private fun configFileOf(manager: ConfigManager, name: String): java.io.File? {
+        files?.let { resolver ->
+            return runCatching { resolver.resolve(name) }.getOrElse { t ->
+                log("config resolve $name failed: ${t::class.java.name}: ${t.message}")
+                null
+            }
+        }
         val helper = runCatching { manager.getConfig(name) }.getOrElse { t ->
             log("config open $name failed: ${t::class.java.name}: ${t.message}")
             return null
@@ -271,6 +337,21 @@ internal class FoliaConfigSync(
                 log("config read ${file.name} failed: ${t::class.java.name}: ${t.message}")
                 null
             }
+    }
+
+    /**
+     * Sleeps [ms] but wakes immediately on interrupt.
+     *
+     * @return true when the sleep completed, false when the thread was interrupted — the caller must
+     *   then return without touching more state, so [stop] can retire the watcher promptly instead of
+     *   leaving it parked in a `Thread.sleep` for up to one retry delay.
+     */
+    private fun sleepQuietly(ms: Long): Boolean = try {
+        Thread.sleep(ms)
+        true
+    } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
     }
 
     /** A stored boolean, or null when the file does not carry the key as a boolean literal. */
@@ -302,7 +383,34 @@ internal class FoliaConfigSync(
         /** How long a switch edit may take to reach the page when the host's callback never fires. */
         const val SYNC_INTERVAL_MS = 1000L
 
-        /** Wait before the single retry taken when config.json was caught mid-write (see [sync]). */
+        /** Wait between attempts when a config file exists but reads back empty (mid-write). */
         const val EMPTY_RETRY_DELAY_MS = 120L
+
+        /**
+         * Hard upper bound on the mid-write retry loop.
+         *
+         * A compile-time constant, deliberately NOT a resettable flag: v0.4.13 used an `AtomicBoolean`
+         * that the retry path cleared before recursing, which turned "retry once" into "retry
+         * forever". The host's truncate-then-write window is a few milliseconds, so 2 attempts
+         * (+120 ms) is already generous.
+         */
+        const val EMPTY_RETRY_COUNT = 2
+
+        /**
+         * Hard upper bound on nested [sync] depth on one thread. Normal calls are depth 0; anything
+         * above this means a code path re-entered itself and is a bug.
+         */
+        const val MAX_SYNC_DEPTH = 3
     }
+}
+
+/**
+ * Maps a config group name (`config.json` / `diagnostics.json`) to its file on disk.
+ *
+ * Production passes null and lets [FoliaConfigSync] ask the host's `ConfigManager`. Tests pass an
+ * implementation over a temp directory so the "file missing / empty / mid-write" branches can be
+ * executed deterministically — the exact branches a shipped release hung on.
+ */
+internal fun interface ConfigFileResolver {
+    fun resolve(name: String): java.io.File?
 }

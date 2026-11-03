@@ -109,6 +109,9 @@ internal object FoliaEnvironmentProbe {
 
     private const val REG_TIMEOUT_SECONDS = 3L
 
+    /** How long to wait for the drain thread once the child has exited (EOF is imminent). */
+    private const val DRAIN_JOIN_MS = 500L
+
     // ------------------------------------------------------------------------ Windows ----
 
     /** Everything the OS check needs, all three components measured independently. */
@@ -148,13 +151,41 @@ internal object FoliaEnvironmentProbe {
         val buildEvidence: Evidence
             get() = if (registryBuild.present) registryBuild else propertyBuild
 
-        /** 64-bit OS. `amd64`/`x86_64`/`arm64` are 64-bit; `x86`/`i386` are not. */
-        val isOs64: Boolean
+        /**
+         * 64-bit OS, or **null when it cannot be determined**.
+         *
+         * ## Why this is nullable (v0.4.14)
+         *
+         * It used to be a plain `Boolean` that returned `false` when neither `sun.arch.data.model`
+         * nor `os.arch` could be read. Downstream, `osCheck` maps `!is64` to a hard FAIL
+         * 「当前不是 64 位系统」 — i.e. it manufactured a FAILURE out of the ABSENCE of evidence, on a
+         * perfectly healthy machine. That is the exact bug class this file exists to prevent (see
+         * the class doc: "Only evidence can produce a failure"), reintroduced on a different branch.
+         *
+         * Two real triggers:
+         *  1. both properties unreadable (a locked-down JVM / security manager);
+         *  2. a 64-bit OS running a 32-bit JVM, where `os.arch` legitimately reads `x86`.
+         *
+         * Returning null makes the caller answer UNKNOWN, which is the honest verdict.
+         */
+        val isOs64: Boolean?
             get() {
-                val model = archDataModel.value
-                if (model != null) return model == "64"
-                val a = arch.value?.lowercase(Locale.ROOT) ?: return false
-                return a.contains("64")
+                archDataModel.value?.let { model ->
+                    // "64" / "32" is the documented spelling; anything else is not evidence.
+                    return when (model.trim()) {
+                        "64" -> true
+                        "32" -> false
+                        else -> null
+                    }
+                }
+                val a = arch.value?.lowercase(Locale.ROOT) ?: return null
+                return when {
+                    a.contains("64") -> true
+                    // 32-bit spellings. Note this says nothing about the OS when the JVM is 32-bit,
+                    // which is why the caller must treat `false` as "cannot run us", not "not 64-bit".
+                    a == "x86" || a.contains("i386") || a.contains("i686") -> false
+                    else -> null
+                }
             }
 
         /** Human-readable identity, e.g. `Windows 11 (26H2, build 26300.9711, amd64)`. */
@@ -479,24 +510,58 @@ internal object FoliaEnvironmentProbe {
      * **not** used for decisions. That matters: `reg.exe` writes its error text in the OEM code
      * page (CP936 on this machine) while the JVM decodes UTF-8, so it arrives as `????: …` and any
      * logic keyed on it would be guesswork. The exit code is the contract.
+     *
+     * ## Why the deadline is armed BEFORE the read (v0.4.14)
+     *
+     * The v0.4.13 version drained the pipe with `readText()` and only then called
+     * `waitFor(REG_TIMEOUT_SECONDS, …)`. `readText()` blocks until EOF, so the 3 s bound was armed
+     * only after the wait it was supposed to bound had already finished — meaning the timeout could
+     * never fire for the one failure it exists for: a `reg.exe` that hangs WITHOUT closing stdout
+     * (an antivirus intercepting it, or a wedged registry). The caller is the config page, so that
+     * hang freezes SPW's UI — the same user-visible symptom as the v0.4.13 `TERMINATED_HANG`.
+     *
+     * The drain now runs on its own thread and the main path waits with a deadline; `destroyForcibly`
+     * on timeout closes the pipe and releases both sides.
      */
     private fun runReg(args: List<String>): RegResult {
         var process: Process? = null
-        return try {
+        try {
             process = ProcessBuilder(listOf("reg.exe") + args)
                 .redirectErrorStream(true)
                 .start()
-            // Drain before waiting: a full pipe buffer would block the child forever.
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            if (!process.waitFor(REG_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                RegResult(-1, output)
-            } else {
-                RegResult(process.exitValue(), output)
+            val stdout = StringBuilder()
+            // Drain on a daemon thread so a stalled child cannot pin the caller. A full pipe buffer
+            // would otherwise block the child forever, and reading inline would block US forever.
+            val drain = Thread({
+                runCatching {
+                    process.inputStream.bufferedReader().use { reader ->
+                        val buf = CharArray(4096)
+                        while (true) {
+                            val n = reader.read(buf)
+                            if (n < 0) break
+                            synchronized(stdout) { stdout.append(buf, 0, n) }
+                        }
+                    }
+                }
+            }, "spw-folia-reg-drain").apply {
+                isDaemon = true
+                start()
             }
+
+            val exited = process.waitFor(REG_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (!exited) {
+                process.destroyForcibly()
+                // Do not join the drain: it is a daemon and holds no resources the caller needs.
+                return RegResult(-1, "")
+            }
+            // The child closed its end, so EOF is imminent; a short join just makes the output
+            // complete and deterministic instead of racing the reading thread.
+            drain.join(DRAIN_JOIN_MS)
+            val text = synchronized(stdout) { stdout.toString() }
+            return RegResult(process.exitValue(), text)
         } catch (t: Throwable) {
             runCatching { process?.destroyForcibly() }
-            RegResult(-1, "")
+            return RegResult(-1, "")
         } finally {
             runCatching { process?.destroyForcibly() }
         }

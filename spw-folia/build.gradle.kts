@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.spw"
-version = "0.4.13"
+version = "0.4.14"
 
 // A global init.gradle on this machine injects Aliyun mirrors into every project and
 // thereby suppresses settings repos, so declare the repositories this build needs here.
@@ -84,7 +84,7 @@ spmod {
     PluginId = "dev.spw.folia"
     PluginName = "spw-folia"
     PluginDescription = "Folia fullscreen lyric mode for Salt Player for Windows"
-    PluginVersion = "0.4.13"
+    PluginVersion = "0.4.14"
     PluginProvider = "azkbzxf"
     // v0.4.0: preference_config.json declares the plugin's 配置 page (SPW 模组管理 → 配置),
     // which carries the 打开过渡动画 switch read by FoliaPlugin via ConfigManager.
@@ -189,7 +189,11 @@ dependencies {
     testImplementation("org.jetbrains.compose.runtime:runtime-desktop:1.12.1")
     // Constants such as PluginPermission are read from the real workshop API, so the test class path
     // needs it as a runtime dependency as well (the main source set only compiles against it).
-    testRuntimeOnly("com.github.Moriafly.spw-workshop-api:spw-workshop-api:0.1.0-dev23")
+    //
+    // v0.4.14: promoted from testRuntimeOnly to testImplementation. The config-sync regression test
+    // has to implement `ConfigManager` / `ConfigHelper` to drive the "config file unreadable" paths
+    // that hung v0.4.13, and implementing an interface needs it at COMPILE time too.
+    testImplementation("com.github.Moriafly.spw-workshop-api:spw-workshop-api:0.1.0-dev23")
 }
 
 tasks.withType<Test>().configureEach {

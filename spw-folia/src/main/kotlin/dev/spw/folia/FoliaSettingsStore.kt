@@ -133,10 +133,28 @@ internal class FoliaSettingsStore(
             val helper = WorkshopApi.manager.createConfigManager().getConfig()
             helper.set("settingsJson", tree)
             val ok = helper.save()
-            lastSaved = tree
-            log("settings saved (${tree.length} bytes, ok=$ok)")
+            if (ok) {
+                lastSaved = tree
+                log("settings saved (${tree.length} bytes)")
+            } else {
+                // save() returned false: the tree is NOT on disk. Recording it as lastSaved would make
+                // the debouncer skip every later attempt (`if (tree == lastSaved) return`), silently
+                // losing the setting until the user happens to touch something else. Re-arm instead.
+                rearm(tree)
+                log("settings save returned false (${tree.length} bytes); will retry")
+            }
         } catch (t: Throwable) {
+            rearm(tree)
             log("settings save failed: ${t::class.java.name}: ${t.message}")
+        }
+    }
+
+    /** Puts [tree] back in the pending slot so the next tick retries it. */
+    private fun rearm(tree: String) {
+        synchronized(this) {
+            if (closed) return
+            pending = tree
+            if (pendingSince == 0L) pendingSince = System.currentTimeMillis()
         }
     }
 
