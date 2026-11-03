@@ -408,10 +408,82 @@ export const buildIssueBody = (report: EnvReport | null, checks: CheckRow[]): st
     return lines.join('\n');
 };
 
-/** The GitHub issue form URL with title/body pre-filled (capped so browsers do not truncate it). */
+/**
+ * Budget for the **percent-encoded** body, in characters of the final URL.
+ *
+ * v0.4.14 capped the body at 6000 *characters*, which looks generous and is wrong: the body is
+ * Chinese, and `encodeURIComponent` turns each CJK character into **nine** characters
+ * (`问` → `%E9%97%AE`). A 6000-character body became a ~15,000-character URL and GitHub replied with
+ * a blank 「Whoa there! Your request URL is too long.」 page — the feedback button, the one control
+ * meant to get help, was dead on arrival. Because the safe length depends on the CJK/ASCII mix
+ * (~820 chars for pure Chinese, ~7,380 for pure ASCII) no character cap can be correct; the cap has
+ * to be measured on the encoded result. Mirrors `FoliaDiagnostics.MAX_ENCODED_BODY_CHARS`.
+ */
+const MAX_ENCODED_BODY_CHARS = 6000;
+
+/**
+ * Percent-encoded length of `text`, **without throwing on a lone surrogate**.
+ *
+ * `encodeURIComponent` throws `URIError: URI malformed` when the string contains an unpaired
+ * surrogate — and a binary search that probes mid-string WILL probe such a cut whenever the body
+ * contains an emoji or any non-BMP character. Calling it directly during the search therefore turns
+ * the feedback button into an exception instead of a link, which is worse than the bug being fixed.
+ *
+ * The estimate is computed arithmetically: per UTF-16 code unit, 1 byte for unreserved characters,
+ * 3 for most, 9 for a 3-byte UTF-8 character (CJK), 12 for an astral pair. It errs on the safe side,
+ * so a body that passes the estimate also passes the real encoder.
+ */
+const encodedLength = (text: string): number => {
+    let total = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        const code = text.charCodeAt(i);
+        if (code < 0x80) {
+            // Unreserved ASCII (A-Za-z0-9-_.!~*'()) stays 1 char; everything else becomes %XX (3).
+            const unreserved =
+                (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) ||
+                (code >= 0x61 && code <= 0x7a) || code === 0x2d || code === 0x2e ||
+                code === 0x5f || code === 0x21 || code === 0x7e || code === 0x2a ||
+                code === 0x27 || code === 0x28 || code === 0x29;
+            total += unreserved ? 1 : 3;
+        } else if (code < 0x800) {
+            total += 6;
+        } else if (code >= 0xd800 && code <= 0xdbff) {
+            // High surrogate: consume the low half too and count the pair as 4 UTF-8 bytes = 12.
+            total += 12;
+            i += 1;
+        } else {
+            total += 9;
+        }
+    }
+    return total;
+};
+
+/** The GitHub issue form URL with title/body pre-filled, capped so GitHub accepts it. */
 export const issueUrl = (body: string): string => {
-    const capped = body.length > 6000 ? `${body.slice(0, 6000)}\n\n(完整内容见附件日志)` : body;
-    return `${FEEDBACK_ISSUE_URL}?title=${encodeURIComponent('问题反馈：')}&body=${encodeURIComponent(capped)}`;
+    const title = '问题反馈：';
+    const suffix = '\n\n(内容过长已截断；完整日志见插件安装目录，可直接拖入本 issue)';
+    const budget = MAX_ENCODED_BODY_CHARS - encodedLength(title) - encodedLength(suffix);
+
+    let text = body;
+    if (encodedLength(text) > budget) {
+        // Binary-search the longest prefix whose ENCODED form fits. Uses the non-throwing estimate so
+        // a mid-surrogate probe cannot raise, and only the final accepted prefix is really encoded.
+        let lo = 0;
+        let hi = text.length;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (encodedLength(text.slice(0, mid)) <= budget) lo = mid;
+            else hi = mid - 1;
+        }
+        // Never split a surrogate pair: a lone high surrogate encodes to a replacement char.
+        let cut = lo;
+        if (cut > 0) {
+            const code = text.charCodeAt(cut - 1);
+            if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+        }
+        text = `${text.slice(0, cut)}${suffix}`;
+    }
+    return `${FEEDBACK_ISSUE_URL}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(text)}`;
 };
 
 /* Icon colours: green = satisfied, amber = really missing, grey = could not judge / informational.

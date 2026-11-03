@@ -3,11 +3,11 @@
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
 
-**Version state (read this first):** the last **published** release is **v0.4.14** (GitHub Releases,
-2026-11-03). Before it, v0.4.6 (2026-10-30) was the last published one; everything in between —
-v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was built and tested locally only
-and was **never published**, so their changes ship inside v0.4.13/v0.4.14. Do not point users at the
-tags of those intermediate versions.
+**Version state (read this first):** the last **published** release is **v0.4.15** (GitHub Releases,
+2026-11-03). Before it, v0.4.14 (the v0.4.13 hang fix) and v0.4.6 (2026-10-30); everything between
+v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was built and
+tested locally only and was **never published**, so their changes ship inside v0.4.13+. Do not point
+users at the tags of those intermediate versions.
 
 **v0.4.13 was published and withdrawn the same day.** It fixed the three dead config switches but
 shipped an unbounded retry recursion that hung SPW's UI for 9 minutes on a machine whose config files
@@ -369,7 +369,8 @@ name.)
 | **v0.4.11** | **15,406,708** | **3,976** | `e7bd36687e9499c6882bfb2b549610b63e5a3dae85732b69127b1bf0f012fa22` | local only（2026-11-02 本地组装）。配置页重新分组（播放页 / 诊断与日志 / 支持与反馈）、新增 `showProblemButton` 开关（默认关）、自检复检纳入检查表。**未上传** |
 | v0.4.12 | 15,419,925 | 3,977 | `238d36a8c713b8d3c2bf4f9764eaccc557d593456d039c0aada8d67c71bf4342` | local only（2026-11-02 本地组装）。重写配置同步（`FoliaConfigSync`），**引入了「三个开关全部不生效」的回归**，由 v0.4.13 修复。**未上传** |
 | **v0.4.13** | **15,438,647** | **3,982** | `5cb1cdafacdea46559e4b57ad1934522e6b20874d2531aabad2b46cac948f308` | ~~2026-11-03 发布~~ **当日下架（已删除 Release 与 tag）**。修复 v0.4.12 的开关回归，但同版本引入的重试递归在「两个配置文件都不存在」时无限递归，卡死 SPW 界面 9 分钟（`failure.kind=TERMINATED_HANG`）。取证包：`dist/release/taken-down/v0.4.13-handoff/`。**不要重新上架此版本**，用 v0.4.14 |
-| **v0.4.14** | **15,442,237** | **3,983** | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | **2026-11-03 发布**，v0.4.13 的修复版。①重试改为常量上限循环 + 同线程递归深度兜底（绝不再递归）；②`isOs64` 改三态，读不到位数不再假失败；③`runReg` 先起守护线程读管道再带超时等待，3s 硬超时真正生效；④`stringField` 非法转义返回 null（防止坏行被错派发）；⑤`save()` 返回 false 不再被记成已保存；⑥验收门禁补齐：3 个此前从未被调用的回归脚本接入、`fails.length >= 0` 恒真断言修正、`live-settings-payload` 不再依赖开发者本机安装、新增 v0.4.13 卡死守卫与 46 个 JVM 单测。`verify-all.mjs` **18/18**。详见 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) 与 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md) |
+| **v0.4.14** | **15,442,237** | **3,983** | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | **2026-11-03 发布**，v0.4.13 的修复版。①重试改为常量上限循环 + 同线程递归深度兜底（绝不再递归）；②`isOs64` 改三态，读不到位数不再假失败；③`runReg` 先起守护线程读管道再带超时等待，3s 硬超时真正生效；④`stringField` 非法转义返回 null（防止坏行被错派发）；⑤`save()` 返回 false 不再被记成已保存；⑥验收门禁补齐：3 个此前从未被调用的回归脚本接入、`fails.length >= 0` 恒真断言修正、`live-settings-payload` 不再依赖开发者本机安装、新增 v0.4.13 卡死守卫与 46 个 JVM 单测。`verify-all.mjs` 18/18。详见 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) 与 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md) |
+| **v0.4.15** | **15,443,035** | **3,983** | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | **2026-11-03 发布**。修 v0.4.14 的两个用户可见缺陷：①**设置面板首次打开几秒后自动退出** —— 根因是设置岛被加载两次（宿主注入带 `?v=`，而 35 个 chunk 反向 `import "../settings-ui.js"` 不带查询串，浏览器按完整 URL 区分模块），第二实例 `createRoot` 了同一个容器并卸载了第一棵树；修复用 `window` 级挂载标记 + 控制器所有者标记 + 容器 root 检测三道防线（模块作用域在两次加载间不共享，只能放 `window`）。②**反馈网址打不开**（GitHub `Whoa there!`）—— 上限按字符数 6000 算，但中文百分号编码后每字 9 字符，实际网址 ~15000 超限；改为按编码后长度截断，并修掉 emoji 输入会抛 `URIError` 的问题。门禁新增 3 条守卫（扫描打包产物 44 处反向引用），拆掉防线即 FAIL（已实测）。`verify-all.mjs` **21/21**、47 个 JVM 单测。详见 [`release-notes-v0.4.15.md`](release-notes-v0.4.15.md) |
 
 `local only` builds were verified on a real install but never uploaded; their changes shipped inside
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes

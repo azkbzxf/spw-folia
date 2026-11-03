@@ -169,6 +169,40 @@ function hangGuards() {
     const present = readdirSync(HERE).filter((f) => /^verify-.*\.(mjs|py)$/.test(f));
     const orphaned = present.filter((f) => !wired.has(f) && !EXCUSED.has(f)).sort();
     record('no orphaned verify-* scripts', orphaned.length === 0, orphaned.join(','));
+
+    // Guard 5: the settings island must refuse a SECOND mount. Its module is instantiated twice
+    // because the host injects `settings-ui.js?v=<version>` while the lazily-loaded chunks import the
+    // entry back by bare path (`from"../settings-ui.js"`, no query) and browsers key ES modules by
+    // full URL. The second instance used to createRoot() the SAME container, which unmounted the live
+    // tree and silently closed the panel the user had just opened — v0.4.14's
+    // 「第一次打开设置，几秒钟后自动退出」. The guard must be on `window`, not module scope.
+    const mountSrc = read('poc/settings-ui/src/mount.tsx');
+    record('settings island guards a duplicate mount across module instances',
+        /__SPW_FOLIA_SETTINGS_UI_MOUNTED__/.test(mountSrc) && /window/.test(mountSrc),
+        /__SPW_FOLIA_SETTINGS_UI_MOUNTED__/.test(mountSrc) ? '' : 'per-instance `let root` only');
+    record('settings controller refuses to be stolen by a second instance',
+        /__SPW_FOLIA_SETTINGS_UI_OWNER__/.test(read('poc/settings-ui/src/bridge.ts')),
+        '');
+    // If a future build stops loading the entry twice, the two guards above stay harmless (they only
+    // reject a duplicate). If it keeps loading twice without them, this gate fails.
+    //
+    // The back-import lives in the CHUNKS, not in the entry itself: the style-shelf/visualizer chunks
+    // do `from"../settings-ui.js"` (no `?v=`), which is what mints the second module instance.
+    const settingsAssets = join(PKG, 'web', 'settings', 'assets');
+    if (existsSync(settingsAssets)) {
+        let backImports = 0;
+        for (const f of readdirSync(settingsAssets)) {
+            if (!f.endsWith('.js')) continue;
+            const text = readFileSync(join(settingsAssets, f), 'utf8');
+            backImports += (text.match(/["']\.\.\/settings-ui\.js["']/g) || []).length;
+        }
+        const servedEntry = join(PKG, 'web', 'settings', 'settings-ui.js');
+        const guarded = existsSync(servedEntry)
+            && /__SPW_FOLIA_SETTINGS_UI_MOUNTED__/.test(readFileSync(servedEntry, 'utf8'));
+        record('every chunk back-import of the entry is guarded',
+            backImports === 0 || guarded,
+            backImports === 0 ? 'no back-imports found' : `${backImports} back-import(s) — guarded=${guarded}`);
+    }
 }
 
 /** Runs the JVM unit tests — the only suite that actually EXECUTES the config-failure branches. */

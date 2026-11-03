@@ -109,6 +109,8 @@ declare global {
     interface Window {
         __SPW_FOLIA__?: SpwFoliaBridge;
         __SPW_FOLIA_UI__?: SettingsUiController;
+        /** Same object as `__SPW_FOLIA_UI__`; Shim.js reads whichever exists (protocol §7.5). */
+        __SPW_FOLIA_SETTINGS_UI__?: SettingsUiController;
         __SPW_FOLIA_LAST_CONFIG__?: ObsBrowserSourceConfig;
         /** v0.3.0 dev-only: every `control` the page emitted, in order (fake bridge + verify scripts). */
         __SPW_FOLIA_TEST_CONTROLS__?: PlaybackControlPayload[];
@@ -573,13 +575,33 @@ const uiActionToCommand = (action: string | undefined): 'open' | 'close' | 'togg
     }
 };
 
+/**
+ * Owner token shared through `window`, because module scope is not shared between instances of
+ * this bundle (see MOUNTED_FLAG in mount.tsx: the entry is loaded twice, once with `?v=` and once
+ * without, because the lazily-loaded chunks import it back by bare path).
+ *
+ * Two live instances must not fight over the controller: the second one used to overwrite
+ * `window.__SPW_FOLIA_UI__` with its own controller, whose `open` flag is an independent `false`
+ * (module-level `openState`). The host and the tray then addressed the wrong tree, and the panel the
+ * user had open disappeared. With this token the LAST registration wins only if no live owner
+ * exists; a late duplicate registers nothing and leaves the working instance in charge.
+ */
+const CONTROLLER_TOKEN = '__SPW_FOLIA_SETTINGS_UI_OWNER__';
+
 export const registerSettingsUiController = (controls: { open: () => void; close: () => void }): (() => void) => {
+    const host = window as Window & { [CONTROLLER_TOKEN]?: object };
     const controller: SettingsUiController = {
         open: controls.open,
         close: controls.close,
         toggle: () => (isSettingsUiOpen() ? controls.close() : controls.open()),
         isOpen: isSettingsUiOpen,
     };
+    // Idempotent within one instance: re-registering the same tree must not create a second owner.
+    if (host[CONTROLLER_TOKEN] && host[CONTROLLER_TOKEN] !== controller && window.__SPW_FOLIA_UI__) {
+        console.info('[spw-folia] settings controller already owned by another instance; keeping the live one');
+        return () => undefined;
+    }
+    host[CONTROLLER_TOKEN] = controller;
     window.__SPW_FOLIA_UI__ = controller;
     window.__SPW_FOLIA_SETTINGS_UI__ = controller;
     // protocol §7.5: `__SPW_FOLIA__.ui` is the stable host-facing surface; the object is created by
@@ -605,6 +627,9 @@ export const registerSettingsUiController = (controls: { open: () => void; close
     return () => {
         offLocal();
         offShim();
+        // Release ownership only if we are still the owner (a later instance may have taken over).
+        const h = window as Window & { [CONTROLLER_TOKEN]?: object };
+        if (h[CONTROLLER_TOKEN] === controller) delete h[CONTROLLER_TOKEN];
     };
 };
 

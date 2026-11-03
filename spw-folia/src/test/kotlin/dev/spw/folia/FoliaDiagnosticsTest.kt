@@ -266,13 +266,47 @@ class FoliaDiagnosticsTest {
         assertTrue(conclusion, conclusion.contains("不代表没有"))
     }
 
+    /**
+     * The v0.4.14 regression: this used to assert only `url.length < 15_000`, while the cap was
+     * applied to the RAW body — so the shipped URL really was ~15,000 characters and GitHub answered
+     * 「Whoa there! Your request URL is too long.」, i.e. the feedback button was dead on arrival.
+     *
+     * The bound that matters is the one browsers and GitHub actually enforce (~8 KB). Assert that,
+     * for the pure-CJK worst case that made the old character cap wrong.
+     */
     @Test
-    fun `issue url is capped and encoded`() {
-        val long = "x".repeat(20_000)
-        val url = FoliaDiagnostics.issueUrl(long)
-        assertTrue(url.startsWith("https://github.com/azkbzxf/spw-folia/issues/new?"))
-        assertTrue(url.contains("&labels=bug"))
-        assertTrue("the body must be capped for the browser", url.length < 15_000)
+    fun `issue url stays under the browser limit for any input`() {
+        val cases = mapOf(
+            "ascii" to "x".repeat(20_000),
+            "pure CJK" to "问".repeat(20_000),
+            "mixed" to ("unknown 插件权限 class-transform: 宿主返回 false\n").repeat(2_000),
+            "emoji" to "😀".repeat(10_000),
+        )
+        for ((name, input) in cases) {
+            val url = FoliaDiagnostics.issueUrl(input)
+            assertTrue(
+                "$name: URL is ${url.length} chars; GitHub/browsers reject over ~8192",
+                url.length < 8_000,
+            )
+            assertTrue("$name: form endpoint", url.startsWith("https://github.com/azkbzxf/spw-folia/issues/new?"))
+            assertTrue("$name: title kept", url.contains("title="))
+            assertTrue("$name: labels kept", url.contains("&labels=bug"))
+            // Half an escape would be a subtly-broken URL; make sure truncation never emitted one.
+            val bodyPart = url.substringAfter("&body=").substringBefore("&labels=")
+            assertTrue("$name: no dangling %XX escape at the end", !Regex("%[0-9A-Fa-f]?$").containsMatchIn(bodyPart))
+        }
+    }
+
+    /** A short body must pass through essentially intact (no needless truncation). */
+    @Test
+    fun `short issue body is not truncated`() {
+        val body = "### 问题描述\n\n播放窗口打不开。"
+        val url = FoliaDiagnostics.issueUrl(body)
+        // The body is percent-encoded in the URL, so compare after decoding it back.
+        val encodedBody = url.substringAfter("&body=").substringBefore("&labels=")
+        val decoded = java.net.URLDecoder.decode(encodedBody, "UTF-8")
+        assertEquals("a short body must survive whole", body, decoded)
+        assertTrue("no truncation marker on a short body", !decoded.contains("截断"))
     }
 
     // ------------------------------------------------------------------ exit-code translation ----

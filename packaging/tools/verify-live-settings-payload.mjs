@@ -55,26 +55,41 @@ function singleLine(json) {
 // the suite runs on a clean machine. Before v0.4.14 this read the live path unconditionally and threw
 // ENOENT whenever the plugin had not been run — which made the gate un-runnable rather than failing
 // a real assertion.
+// The tree the plugin persists and plays back. The BUNDLED tree is the canonical one — it is what a
+// fresh install ships and what every other suite uses — so it is the primary source and this suite
+// stays hermetic. The developer's live install is only a *preferred-but-optional* extra: it is read
+// when it happens to carry a usable `settingsJson`, and silently skipped otherwise.
+//
+// Before v0.4.14 this read the live path unconditionally and threw ENOENT on any clean machine.
+// The first fix then made it prefer the live file whenever it EXISTED — which failed differently
+// (the plugin writes `settingsJson` only after the user touches a setting, so the file exists but
+// is empty). Correct rule: presence of the FILE says nothing; valour of the CONTENT decides.
 const liveConfigPath = path.join(
     process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'),
     'Salt Player for Windows', 'workshop', 'data', 'dev.spw.folia', 'config.json',
 );
 const bundledTreePath = path.join(REPO, 'packaging', 'testdata', 'default-settings.json');
 
-let persistedTree;
-let source;
+let persistedTree = fs.readFileSync(bundledTreePath, 'utf8');
+let source = 'bundled default-settings.json';
 if (fs.existsSync(liveConfigPath)) {
-    const cfg = JSON.parse(fs.readFileSync(liveConfigPath, 'utf8'));
-    persistedTree = cfg.settingsJson;
-    source = 'live install (' + liveConfigPath + ')';
-    console.log('config switches: bar=' + cfg.showPlaybackBar + ' problem=' + cfg.showProblemButton
-        + ' transition=' + cfg.transitionAnimation);
-} else {
-    persistedTree = fs.readFileSync(bundledTreePath, 'utf8');
-    source = 'bundled default-settings.json';
+    try {
+        const cfg = JSON.parse(fs.readFileSync(liveConfigPath, 'utf8'));
+        const live = cfg.settingsJson;
+        if (typeof live === 'string' && live.trim().startsWith('{') && live.trim().length > 2) {
+            persistedTree = live;
+            source = 'live install (' + liveConfigPath + ')';
+            console.log('config switches: bar=' + cfg.showPlaybackBar + ' problem=' + cfg.showProblemButton
+                + ' transition=' + cfg.transitionAnimation);
+        } else {
+            source = 'bundled default-settings.json (live config.json has no usable settingsJson yet)';
+        }
+    } catch (e) {
+        source = 'bundled default-settings.json (live config.json unreadable: ' + e.message + ')';
+    }
 }
 if (typeof persistedTree !== 'string' || !persistedTree.trim()) {
-    console.error('FAIL  no settings tree available from ' + source);
+    console.error('FAIL  no settings tree available (bundled default-settings.json is empty?)');
     process.exit(1);
 }
 console.log('settings tree source = ' + source);

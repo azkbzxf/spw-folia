@@ -150,8 +150,24 @@ internal object FoliaDiagnostics {
     private const val ISSUE_FORM = "https://github.com/azkbzxf/spw-folia/issues/new"
     private const val LOG_TAIL_LINES = 60
 
-    /** GitHub accepts long bodies in the query string, but browsers/OS clip very long URLs. */
-    private const val MAX_BODY_CHARS = 6000
+    /**
+     * Budget for the **percent-encoded** `body` value, in characters of the final URL.
+     *
+     * ## Why this is not a character cap on the body (v0.4.15)
+     *
+     * v0.4.14 capped the body at 6000 *characters*, which looks generous and is wrong: the body is
+     * Chinese, and percent-encoding turns each CJK character into **nine** characters
+     * (`问` → `%E9%97%AE`). A 6000-character body therefore produced a ~15,000-character URL, and
+     * GitHub answered with a blank **「Whoa there! Your request URL is too long.」** page — the
+     * feedback button, the one control meant to get help, was dead on arrival.
+     *
+     * The safe body length varies with the CJK/ASCII mix (about 820 characters for pure Chinese vs
+     * 7,380 for pure ASCII), so no character count can be correct. The cap must be applied to the
+     * encoded result, which is what [issueUrl] now does.
+     *
+     * 6,000 leaves room for `title`, `labels` and the scheme/host under browsers' ~8 KB URL ceiling.
+     */
+    private const val MAX_ENCODED_BODY_CHARS = 6000
 
     /**
      * Runs the whole self-check and reports it.
@@ -905,17 +921,39 @@ internal object FoliaDiagnostics {
         }
     }
 
-    /** The exact form URL, capped so the OS/browser does not truncate it. */
+    /**
+     * The exact form URL, capped so the browser and GitHub accept it.
+     *
+     * The cap is applied to the **encoded** length (see [MAX_ENCODED_BODY_CHARS]); truncating the
+     * raw body by character count is what produced a 15,000-character URL and the
+     * 「Whoa there! Your request URL is too long.」 page in v0.4.14.
+     *
+     * Truncation is done at a character boundary and never splits a `%XX` escape, because half an
+     * escape produces an invalid URL that the browser may clip at a different point.
+     */
     fun issueUrl(body: String): String {
         val title = "问题反馈："
-        val trimmed = if (body.length > MAX_BODY_CHARS) {
-            body.substring(0, MAX_BODY_CHARS) + "\n\n(完整日志见附件)"
-        } else {
-            body
+        val suffix = "\n\n(内容过长已截断；完整日志见插件安装目录，可直接拖入本 issue)"
+        val budget = MAX_ENCODED_BODY_CHARS - urlEncode(title).length - urlEncode(suffix).length
+
+        var text = body
+        if (urlEncode(text).length > budget) {
+            // Binary-search the longest prefix whose ENCODED form fits. A linear walk would re-encode
+            // a multi-kilobyte string thousands of times; ~14 iterations is enough for any input.
+            var lo = 0
+            var hi = text.length
+            while (lo < hi) {
+                val mid = (lo + hi + 1) / 2
+                if (urlEncode(text.substring(0, mid)).length <= budget) lo = mid else hi = mid - 1
+            }
+            // Never leave a lone high surrogate behind: it would encode as '?' and look like corruption.
+            var cut = lo
+            if (cut > 0 && Character.isHighSurrogate(text[cut - 1])) cut -= 1
+            text = text.substring(0, cut) + suffix
         }
         return ISSUE_FORM +
             "?title=" + urlEncode(title) +
-            "&body=" + urlEncode(trimmed) +
+            "&body=" + urlEncode(text) +
             "&labels=" + urlEncode("bug")
     }
 
