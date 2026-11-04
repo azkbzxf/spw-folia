@@ -1,417 +1,247 @@
-# spw-folia — packaging & release pipeline
+# 打包与发布
 
-Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
-assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
+本文只讲**现在怎么打包、怎么发布**：发布物由什么组成、构建顺序、组装命令、体积门限、发版检查表、
+打包布局验收。它不记录"某个版本怎么一步步做出来"——那属于 Git 历史与 GitHub Releases。
 
-**Version state (read this first):** the newest assembled build is **v0.4.17** (2026-11-04,
-`dist/release/spw-folia-0.4.17.spmod`, sha256 `9ff9f66e…`). It fixes the four issue #18 items
-(凝彩 dead after 0.7.25's three new tuning keys, 「显示播放条」 moved into the player page's
-bottom-right menu, 「出现问题」 opening Documents instead of the log folder, and click zones on the
-picture). Before it, v0.4.16 (style-thumbnail cache + 歌词样式预览动画 switch), v0.4.15 (the
-first-open self-close fix + the feedback-URL truncation fix) and v0.4.14 (the v0.4.13 hang fix).
-Everything between v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
-v0.4.12 — was built and tested locally only and was **never published**, so their changes ship
-inside v0.4.13+. Do not point users at the tags of those intermediate versions.
+当前版本 **v0.4.17**（内嵌 Folia 0.7.25，17 种样式）。产物体积、条数与哈希见文末台账。
 
-**v0.4.13 was published and withdrawn the same day.** It fixed the three dead config switches but
-shipped an unbounded retry recursion that hung SPW's UI for 9 minutes on a machine whose config files
-did not exist yet (`failure.kind=TERMINATED_HANG`). The Release and tag were deleted; the forensics
-are preserved in `dist/release/taken-down/v0.4.13-handoff/`. **v0.4.14 is that release, fixed** — see
-[`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) and [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md).
+---
 
-Last verified: 2026-11-04 (v0.4.17 assembled from a fresh `packaging/` staging, gated with
-`verify-all.mjs` → **24/24**, including 57 JVM unit tests, the v0.4.13 hang guards, the three
-regression suites that were previously orphaned, the v0.4.16 preview-cache suite, and two new
-suites for this release: the defaults-first tuning merge — which is the 凝彩 fix — and the
-real-explorer landing test for 「出现问题」. `verify-layout.mjs` on a clean unpack → 13/13).
-The v0.4.5/v0.4.6 bytes, entry counts and sha256
-below were recomputed from the actual downloaded assets, not copied from notes. Payload numbers
-quoted for the host exe (`spw-folia-host.exe` 164,864 B) and WebView2 150.0.4078.83 are the
-v0.4.5/v0.4.6 measurements and still hold (v0.4.13/v0.4.14 did not touch `native/`).
+## 1. 发布物是什么
 
-## 1. What ships
+`.spmod` 就是一个 zip。解开后是 SPW 的插件目录：
 
 ```
-packaging/
-  web/                         # -> .spmod/web/            (the page the host loads offline)
-    index.html                 #    Folia OBS browser-source entry (PWA tags removed)
-    assets/…                   #    complete Folia web chunk graph incl. every lazy per-style chunk
-    preview.html               #    generated: live-preview iframe entry (patched index.html + preview shim)
-    _host/preview-shim.js      #    generated: child-document shim that stubs EventSource for the preview
-    settings/settings-ui.js    # -> injected settings island (task-5 build)
-    settings/styles/           #    inlined CSS is in the JS; these are extra assets
-    settings/thumbs/*.jpg      #    real Folia style thumbnails (14 staged as of v0.3.0; 15 with 花火)
-    _host/shim.js, overlay.js  #    audit copies of the scripts embedded in the exe
-  native/                      # -> .spmod/native/ (plugin resolveHelper also accepts lib/)
-    spw-folia-host.exe         #    C# .NET Framework 4.8 helper (164,864 B in v0.4.5/v0.4.6)
-    spw-folia-host.exe.config  #    PerMonitorV2 DPI + supportedRuntime v4.8
-    Microsoft.Web.WebView2.Core.dll
-    Microsoft.Web.WebView2.WinForms.dll
-    WebView2Loader.dll
-  licenses/                    # -> .spmod/licenses/
-    AGPL-3.0.txt               #    full AGPL text (Folia + our code)
-    NOTICE.md / SOURCE-OFFER.md / THIRD-PARTY.md
-    AUDIO-MIT.txt              #    WASAPI analyzer (MIT)
+packaging/                      # 暂存树，最终成为 .spmod 的 payload
+  web/                          -> web/            宿主加载的页面（离线）
+    index.html                  #    Folia OBS 浏览器源入口（已去掉 PWA 标签）
+    assets/…                    #    完整 Folia 产物（含每个样式的懒加载 chunk）
+    preview.html                #    生成物：设置页大预览 iframe 入口
+    _host/preview-shim.js       #    生成物：预览子文档的 shim（顶替 EventSource）
+    preview/placeholder_cover*.jpg  # 无封面时的占位图
+    nebbia-strokes.json         #    雾笺笔顺数据（4.5 MB，上游构建产物）
+    settings/settings-ui.js     # -> 注入的设置岛
+    settings/thumbs/*.jpg       #    17 张真实样式缩略图
+    licenses/nebbia-strokes/    #    雾笺笔顺数据的 Arphic 许可证全文 + 修改声明
+    _host/shim.js, overlay.js   #    内嵌进 exe 的脚本的审计副本
+  native/                       # -> native/（插件 resolveHelper 也认 lib/）
+    spw-folia-host.exe          #    C# .NET Framework 4.8 辅助进程
+    spw-folia-host.exe.config   #    PerMonitorV2 DPI + supportedRuntime v4.8
+    Microsoft.Web.WebView2.Core.dll / .WinForms.dll / WebView2Loader.dll
+  licenses/                     # -> licenses/
+    AGPL-3.0.txt                #    Folia + 本项目的 AGPL 正文
+    NOTICE.md / THIRD-PARTY.md / SOURCE-OFFER.md / AUDIO-MIT.txt
     WebView2-SDK-LICENSE.txt / WebView2-SDK-NOTICE.txt
-  tools/                       # build + verification tooling (never shipped)
-    stage-web.mjs              # complete-dist staging (all chunks; SW/PWA excluded, guarded; settings dedupe)
-    apply-image-overrides.mjs  # overlay packaging/image-overrides/ onto the staged web tree
-    make-image-overrides.py    # regenerate the overrides from the upstream dist (needs Pillow)
-    size-report.mjs            # size budget + top files
-    verify-layout.mjs          # packaged end-to-end acceptance test
-  image-overrides/             # committed size-optimized copies of upstream images (never shipped as a tree)
-    MANIFEST.md
-    assets/…                   # 256-colour palette PNG / q88 JPEG, same names+formats as upstream
-    preview/…                  # the two generated preview covers
-  testdata/default-settings.json  # settings tree fixture for the smoke test
-  web-stage-report.json        # what was staged/excluded (audit)
-  size-report.json             # size budget result
-  SHA256SUMS.txt               # sha256 of every shipped file
-  out/                         # verification evidence (screenshots, reports, fps log)
+  licenses-src/                 # 上面三份手写声明的唯一真源（改这里，不要改 licenses/）
+  tools/                        # 构建与验收脚本（永不随包）
+  image-overrides/              # 上游图片的瘦身副本（按同名同格式替换，不整树分发）
+  testdata/default-settings.json # 冒烟用的设置树样本
+  web-stage-report.json / size-report.json / SHA256SUMS.txt   # 审计产物
 ```
 
-Payload of the **v0.4.6** artifact, measured directly from the downloaded
-`spw-folia-0.4.6.spmod` (uncompressed sizes inside the zip). Kept as the historical baseline —
-it is **not** the current release; the newest is v0.4.16 (see the ledger at the end).
-
-| area | files | size |
-| --- | --- | --- |
-| `web/` (complete Folia dist + settings island + 2 host-script copies) | 3,820 | 24.90 MiB (26,112,116 B) |
-| `native/` (exe 164,864 B + config + 3 dlls) | 5 | 1.05 MiB (1,097,142 B) |
-| `licenses/` | 7 | 0.05 MiB (49,370 B) |
-| `classes/` (Gradle-built plugin classes + metadata JSONs) | 80 | 0.60 MiB (626,269 B) |
-| **total** | **3,912** | **26.59 MiB** (27,884,897 B uncompressed) |
-
-The shipped `.spmod` compresses that to **12,476,192 B (11.90 MiB)**; the v0.4.5 artifact was
-**12,227,007 B** with the same `web/` and `native/` bytes (only `classes/` differed — 62 files /
-493,078 B). The staging tree that feeds `assemble-release.py` is uncompressed and text-heavy, so it
-runs over the historical 25 MB staging guard while the artifact users download does not; treat
-`packaging/size-report.json`'s `budgetMB` as a rough staging-bloat guard, not an artifact limit.
-The size growth versus v0.3.0 comes from upstream Folia 0.7.22 (19.54 → 20.01 MB of `assets/`) and
-the settings island pulling the whole visualizer registry (1,950 files in `settings/assets`); two
-extra passes compensate ~7.3 MB: **settings-asset dedupe** (29 files / 4.00 MB shared with
-`web/assets/` are replaced by `/assets/…` references, see below) and **image overrides**
-(4.67 MB → 1.39 MB of illustrations/avatars/covers).
-
-The shipped web tree is the **complete** Folia production dist (every lazy chunk included), because
-Folia dynamic-imports per-style renderers on demand (`assets/VisualizerTempera-*.js`, …). An earlier
-subset built from the cold-start offline closure caused a black window on non-default styles
-(`Failed to fetch dynamically imported module`), caught by task-13. `packaging/tools/stage-web.mjs`
-now copies the whole `poc/webview/dist/dist` tree and hard-fails if no per-style lazy chunk is present.
-Excluded only: the PWA/service-worker trio (`registerSW.js`, `sw.js`, `workbox-*`, `manifest.webmanifest`;
-the registration tag is removed from `index.html`) and local `.bak` backups. It also generates
-`preview.html` + `_host/preview-shim.js` (the settings live-preview iframe) and performs the
-settings-asset dedupe described above.
-
-## 2. Rebuild the package
-
-Prerequisites (all already produced by the other tasks; rebuild only when an input changed):
-
-```bash
-cd D:/输出目录/dsh2
-bash poc/webview/host/build.sh          # -> poc/webview/host/build/  (host exe + dlls)
-cd poc/settings-ui && pnpm build && cd ../..   # -> poc/settings-ui/dist/ (settings-ui.js + thumbs)
-```
-
-Then assemble:
-
-```bash
-bash packaging/build-package.sh
-```
-
-The script (idempotent, ~20 s) does: stage-web → image overrides → stage native → stage licenses
-(copies AGPL from `work/folia/folia-major-main/LICENSE`, extracts WebView2 `LICENSE.txt`/`NOTICE.txt`
-from the NuGet package) → `size-report.json` → `SHA256SUMS.txt`. It fails loudly if an input is
-missing; stale image overrides are reported as warnings (they only cover files that still exist).
-
-Staging rule of record: `packaging/tools/stage-web.mjs` copies the **whole**
-`poc/webview/dist/dist` tree (see §1) instead of a cold-start closure, patches `index.html`
-(removes the PWA service-worker `<script>` and `manifest` link), generates `preview.html` +
-`_host/preview-shim.js`, copies the settings island and embedded-script audit copies, and dedupes
-the settings assets whose bytes match `web/assets/` (rewriting those URLs to `/assets/…`; the host
-consequently injects the settings island from the bundle origin so a root-absolute `/assets/` path
-resolves — see `HostForm.cs` `settingsInsideBundle` branch). `apply-image-overrides.mjs` then
-replaces the heavy illustrations/covers with the committed `packaging/image-overrides/` variants.
-If the Folia dist changes, re-run `python packaging/tools/make-image-overrides.py` (needs Pillow)
-and re-stage.
-
-## 3. Assembling the final `.spmod`
-
-The Zig/`spw-folia` plugin project (task-1/task-7, owner hook-poc) produces the SPW metadata and
-the JVM side. This packaging tree supplies only the payload. Mapping:
-
-| packaging | `.spmod` (unpacked plugin dir) |
-| --- | --- |
-| `packaging/native/*` | `lib/` (next to the plugin jar/metadata; `WebView2Loader.dll` must stay beside the exe) |
-| `packaging/web/*` | `web/` |
-| `packaging/licenses/*` | `licenses/` |
-
-So the installed plugin directory looks like:
+安装后的插件目录：
 
 ```
 %APPDATA%\Salt Player for Windows\workshop\plugins\spw-folia\
-  enabled.txt
-  permissions.json
-  <plugin metadata + jar>        # from spw-folia/ project (not staged here)
-  lib\spw-folia-host.exe
-  lib\spw-folia-host.exe.config
-  lib\Microsoft.Web.WebView2.Core.dll
-  lib\Microsoft.Web.WebView2.WinForms.dll
-  lib\WebView2Loader.dll
-  web\index.html
-  web\assets\…
-  web\settings\settings-ui.js
-  licenses\…
+  enabled.txt / permissions.json
+  <插件元数据 + jar>            # 来自 spw-folia/（Gradle 构建，不由 packaging 提供）
+  native\spw-folia-host.exe     # 必须与三个 dll、exe.config 同目录
+  web\…  licenses\…
 ```
 
-Do **not** ship `packaging/tools/`, `packaging/out/`, `packaging/testdata/` or any reports inside the
-`.spmod`; they are build/audit artifacts only.
+**不要**把 `packaging/tools/`、`packaging/out/`、`packaging/testdata/` 或任何报告打进 `.spmod`。
 
-Scripted assembly (Lead-owned, `docs/protocol.md` order-independent):
+当前 **v0.4.17** 的 payload（解压后）：
+
+| 区域 | 文件数 | 字节 |
+| --- | --- | --- |
+| `web/`（完整 Folia 产物 + 设置岛 + 2 份脚本审计副本） | 3,891 | 33,904,033 |
+| `native/`（exe 178,688 B + config + 3 个 dll） | 5 | 1,116,126 |
+| `licenses/` | 7 | 49,757 |
+| `classes/`（Gradle 构建的插件类与元数据） | 104 | 829,445 |
+| **合计** | **4,007** | **35,899,361**（压缩后 15,464,000 B） |
+
+`web/` 必须是**完整**的 Folia 产物：Folia 按样式动态 `import()` 渲染器 chunk
+（`assets/VisualizerTempera-*.js` …），只拷冷启动闭包会让非默认样式黑屏
+（`Failed to fetch dynamically imported module`）。`packaging/tools/stage-web.mjs` 因此整树复制，
+并在缺少按样式 chunk 时硬失败。只排除 PWA 三件套（`registerSW.js`、`sw.js`、`workbox-*`、
+`manifest.webmanifest`，注册标签同时从 `index.html` 移除）与本地 `.bak`。
+
+体积的大头是 `web/nebbia-strokes.json`（4.5 MB，雾笺笔顺）与 Folia 的 ICU 词典/渲染器 chunk。
+两道瘦身：**设置岛资源去重**（与 `web/assets/` 逐字节相同的 29 个文件改写为 `/assets/…` 引用）、
+**图片覆盖**（`packaging/image-overrides/` 把插画/头像/封面换成调色板 PNG / q88 JPEG）。
+
+## 2. 构建前置
+
+按这个顺序，顺序本身就是正确性：
 
 ```bash
-cd spw-folia && ./gradlew.bat plugin        # 1. plugin classes/ (+ lib/ if any runtime deps)
-cd .. && bash packaging/build-package.sh     # 2. re-stage web/native/licenses + checksums
-python packaging/tools/assemble-release.py --spmod spw-folia/build/libs/plugin-dev.spw.folia-<version>.spmod --staging packaging --out dist/release --name spw-folia-<version>.spmod  # 3. merge into dist/release
-node packaging/tools/verify-layout.mjs       # 4. packaged-layout acceptance on a clean unpack
+# 1) 宿主 exe + dll（改过 poc/webview/host/** 才需要）
+bash poc/webview/host/build.sh            # -> poc/webview/host/build/
+
+# 2) 设置岛（改过 poc/settings-ui/** 才需要）
+cd poc/settings-ui && pnpm build && cd ../..
+
+# 3) Folia 产物：poc/webview/dist/dist（上游构建，见 docs/upstream-sync.md）
 ```
 
-`packaging/tools/assemble-release.py` copies the Gradle-built `classes/` verbatim, maps `packaging/native/` → `native/`,
-`packaging/web/` → `web/`, `packaging/licenses/` → `licenses/`, adds top-level `LICENSE`/`README.md`,
-and fails if required files are missing or dev paths leak in. The plugin's `resolveHelper()` accepts the
-helper under `native/` and `lib/` (plus dev-only fallbacks), so either layout spawns from the installed payload.
+- **`packaging/native` 与 `packaging/licenses` 是生成目录**，只改真源：宿主来自 `poc/webview/host/build/`，
+  声明文本来自 `packaging/licenses-src/`。改完 `cmp` 验字节。
+- **先刷新 `packaging/native`，再构建插件**；反了就会把旧宿主装进包（本地安装目录里宿主大小来回跳就是这个循环）。
+- `build.sh` 会改写 tracked 的 `DefaultConfig.json` 的 `updatedAt`，构建后还原，别把脏 diff 提交进去。
+- **`csc.exe` 不是确定性编译器**：同一份源码两次导出的 exe 差 51 字节（PE 时间戳 / MVID / PDB GUID，
+  长度相同、不含源码内容）。装配本身是确定性的。所以"可复现"的口径是
+  **装配 + 插件包 + 暂存树可复现，宿主 exe 不可复现**，release notes 要如实写明。
 
-**Compatibility-only releases** (v0.3.1): when a release touches nothing but `classes/`, do **not**
-re-stage `packaging/` — the checkout's `native/` and `web/settings/settings-ui.js` can be older than
-what shipped, which would silently regress the helper and the settings island. Splice the new classes
-onto the previous *published* artifact instead and assert the payload is byte-identical:
+## 3. 组装
 
 ```bash
-gh release download v0.3.0 -p spw-folia-0.3.0.spmod -O dist/release/spw-folia-0.3.0-ref.spmod
-python packaging/tools/splice-compat-release.py     # -> dist/release/spw-folia-0.3.1.spmod + .json
+bash packaging/build-package.sh          # 1. 暂存 web/native/licenses + 体积报告 + 校验和
+
+cd spw-folia && ./gradlew.bat plugin     # 2. 插件类（含 META-INF 清单）
+
+cd .. && python packaging/tools/assemble-release.py \
+  --spmod spw-folia/build/libs/plugin-dev.spw.folia-0.4.17.spmod \
+  --staging packaging --out dist/release --name spw-folia-0.4.17.spmod
+
+node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（§6）
 ```
 
-The script keeps every non-`classes/` entry as-is and fails if any payload CRC changed.
+`build-package.sh`（幂等，约 20 s）依次做：`stage-web.mjs`（含 `preview.html` 与 shim 生成、
+设置岛去重）→ `apply-image-overrides.mjs` → 拷 native（5 个文件）→ 拷 licenses
+（AGPL 取自 `work/folia/folia-major-main/LICENSE`，WebView2 的两份文本从
+`poc/webview/tools/webview2.nupkg` 里抽）→ `size-report.json` → `SHA256SUMS.txt`。
+任何输入缺失都会硬失败；过期的图片覆盖只告警（它们只覆盖仍然存在的文件）。
 
-Per-version artifact records (byte sizes, payload hashes, changed-entry lists) are no longer kept
-inline; see the release-artifact ledger at the end of this document, and `docs/archive/` for the
-historical release notes and verification reports.
+`assemble-release.py` 把 Gradle 产物解包后与暂存树合并成**确定性** zip：
+`classes/` 原样带入，`packaging/{web,native,licenses}` 分别映射到同名目录，条目时间戳固定，
+并在缺失 `index.html` / `settings/settings-ui.js` / `spw-folia-host.exe` / 五份 license 时拒绝出包。
+它同时写 `dist/release/<name>.json` 旁车（字节数、条目数、sha256、插件版本、权限）并检查体积门限。
 
+改过上游 Folia 产物要重跑 `python packaging/tools/make-image-overrides.py`（需要 Pillow）再暂存。
 
-## 4. Plugin → host spawn contract
+## 4. 体积门限
 
-The JVM plugin starts the helper as a child process (working directory = the plugin directory, so
-**relative paths are used and verified**):
+两个门限各守各的，别混：
 
-```text
-lib\spw-folia-host.exe --bundle web --settings-dir web\settings --settings-entry settings-ui.js [--open-settings]
-```
+| 门限 | 位置 | 数值 | 超限表现 |
+| --- | --- | --- | --- |
+| 暂存目录（未压缩） | `packaging/tools/size-report.mjs` | 32 MB | 只在报告里标 `OVER`，不中断 |
+| 用户下载的 `.spmod` | `packaging/tools/assemble-release.py` | 16 MB | **`exit 1`**，拒绝出包 |
 
-- `--bundle web` — local Folia subset, mapped to `https://spw-folia.local/` inside WebView2. No HTTP
-  server, no port, no network.
-- `--settings-dir web\settings --settings-entry settings-ui.js` — injected after the Shim from
-  `https://spw-folia-settings.local/settings-ui.js`.
-- `--open-settings` — first run only: open the settings overlay once the island reports
-  `bridgeReady` (fallback 2.5 s after navigation). Persisted-settings detection lives in the plugin.
-- `--fullscreen` is the default; add `--window WxH` only for debugging. `--force-dsf 1` is
-  **debug-only** (see §7).
-- stdin/stdout: UTF-8 JSON lines, protocol v1 (`docs/protocol.md`). Plugin sends `hello`, `settings`,
-  then `state` every ~100 ms plus `lyrics` / `track` / `config` on change. Host emits `ready`,
-  `log`, `closed` and `fps` lines.
-- Singleton: one host process per open Folia mode; if the window already exists, forward the action
-  to it instead of spawning a second one. On plugin disable send `quit`, wait for exit, kill after 2 s.
-- A stray `spw-folia-host.exe` holding the exe open makes the next build fail (`CS0016`): kill the
-  process before rebuilding (`Stop-Process -Name spw-folia-host`).
+数字对不上先看 `size-report.json` 的 `biggest`，**别急着调大阈值**——设置岛误引整个渲染器注册表
+一次就能多出约 7 MB。
 
-Measured on this machine (windowed 1600×900, packaged payload): ready at **636–815 ms** after spawn
-(WebView2 runtime version 150.0.4078.83), page interactive immediately, 120 fps median once started.
+## 5. 发布检查表（owner: Lead）
 
-## 5. Interaction contract (protocol §7.5)
+1. 构建输入是新的：宿主、设置岛、Folia 产物都按 §2 重新产出。
+2. `bash packaging/build-package.sh` → 暂存干净、`size-report.json` 未超警戒线、
+   `SHA256SUMS.txt` 已重写。
+3. **跑自检**（自检是发布物的一部分，按发布物验收）：
+   - `cd spw-folia && ./gradlew runDiagnostics` → exit 0，健康机上无 `FAIL` 行
+     （每项打 `VERDICT  label  detail` 与 `evidence:`；`UNKNOWN` 属正常）；
+   - `node packaging/tools/verify-diagnostics.mjs` → exit 0，页面侧无假 FAIL；
+   - 或者一条命令跑完整门禁：`node packaging/tools/verify-all.mjs` → `24/24 gate checks`
+     （`--static` 只跑不需要打包产物的部分）。
+   **健康机上出现 `FAIL` 就是阻断项。**
+4. `node packaging/tools/verify-layout.mjs` → PASS，`packaging/out/verify-report.json` 与截图留作发布证据。
+5. 用 `assemble-release.py` 出包（§3），`licenses/` 必须留在包内。
+6. 在真实 SPW 安装里冒烟组装好的 `.spmod`：菜单 → 全屏、首次运行设置、ESC、切歌、暂停/跳转、
+   「出现问题」能打开日志文件夹。
+7. 记录到 release notes：插件版本、宿主 exe 的 sha256、Folia 版本（0.7.25）、
+   WebView2 SDK/NuGet 版本（1.0.4314.35）与实测 Runtime 版本、设置岛构建。
+8. 三件资产上传（`.spmod` + `.spmod.json` + `SHA256SUMS.txt`），再
+   `gh release download` 回读复算 sha256，与本地逐字节一致才算闭环。
+9. 包内无凭据（`packaging/` 不含任何 token / cookie）。
+10. 文档改过就跑 `python packaging/tools/check-doc-links.py`，必须 exit 0。
 
-- The settings island owns the overlay: it registers `window.__SPW_FOLIA__.ui`
-  (`isSettingsOpen/openSettings/closeSettings`) and consumes ESC itself while open (capture phase +
-  `stopPropagation`).
-- Host commands are forwarded by the Shim into the island: `{"t":"command","command":"open-settings"}`
-  and `"close-settings"` call `__SPW_FOLIA__.ui.openSettings()/closeSettings()`.
-- ESC with the overlay **closed** reaches the host (`{type:"key",key:"Escape"}`) → host closes the
-  window, emits `{"t":"closed","reason":"user"}` and exits 0.
-- `--open-settings` opens the overlay through the same path once (`bridgeReady`, timer fallback).
+> 版本号散落三处，一次升级要改全：`build.gradle.kts` 的 `version`、`PluginVersion`、
+> `FoliaPlugin.PLUGIN_VERSION`。门禁的静态契约会断言三者一致。补丁版一律 `X.Y.(Z+1)`。
 
-Verified end-to-end in `packaging/tools/verify-layout.mjs` (see §6, `packaging/out/verify-report.json`):
-`settingsAutoOpened`, `closeSettingsCommand`, `openSettingsCommand`, `escClosedSettingsOnly`,
-`closedUser`, `exitedZero` all true.
-
-## 6. Packaged-layout acceptance test
+## 6. 打包布局验收
 
 ```bash
-node packaging/tools/verify-layout.mjs          # ~16 s, exits 0 on pass
+node packaging/tools/verify-layout.mjs       # 约 16 s，exit 0 = PASS
 ```
 
-What it does: spawns `packaging/native/spw-folia-host.exe` with `--bundle packaging/web`
-(+ `--settings-dir web/settings`, `--open-settings`, windowed 1600×900, isolated user-data dir),
-streams `hello/settings/lyrics/track` + 100 ms `state` lines, then:
+它用**打包后的** `packaging/native/spw-folia-host.exe` 加载 `packaging/web`（＋
+`--settings-dir web/settings --open-settings`，窗口化 1600×900，独立 user-data 目录），
+喂 `hello/settings/lyrics/track` 与 100 ms `state` 行，然后断言 13 项：
+`bridgePresent`、`settingsInjected`、`settingsAutoOpened`、`closeSettingsCommand`、
+`openSettingsCommand`、`escClosedSettingsOnly`、`closedUser`、`exitedZero`、`visualizerCanvases`、
+`styleThumbsLoaded`、`livePreviewReady`、`previewHasNoSplash`、`noConsoleErrors`，
+并留两张截图（首次运行设置面板、播放画面）。报告写在 `packaging/out/verify-report.json`。
 
-1. probes the page at 4.2 s: bridge + `__SPW_FOLIA__.ui` present, 3 canvases, settings island
-   injected from the virtual host, overlay open;
-2. screenshot `packaging/out/packaged-firstrun-settings.png` (歌词样式 overlay over live sonnet);
-3. sends `close-settings` → probe closed; sends `open-settings` → probe open (host↔page routing);
-4. dispatches ESC → settings island closes the overlay only; window still alive (probe);
-5. screenshot `packaging/out/packaged-visualizer.png` (visualizer, lyrics + translation);
-6. dispatches ESC again → host emits `{"t":"closed","reason":"user"}`, exits 0.
-
-Latest result: **PASS** — all 10 checks true, 0 console errors, 3 canvases, 116 fps median
-(min 91 / max 120), heap ≤ 93.8 MB, `ready.startedAtMs 503` (spawn→ready), screenshots
-755 KB / 968 KB. Re-verified after the task-9 spawn-hardening rebuild (see `docs/host-app.md` §9).
-
-Relative-path spawn test (plugin install layout), run from `packaging/` itself:
+相对路径口径（安装布局）另有一条手工命令，从 `packaging/` 自身运行：
 
 ```bash
 cd packaging && ./native/spw-folia-host.exe --bundle web --settings-dir web/settings \
   --settings-entry settings-ui.js --window 800x450 --duration 6500 --open-settings --demo \
   --screenshot out/relcwd-shot.png --shot-at 5000
-# -> nav-done at 560 ms, open-settings requested auto=true, screenshot 228 KB, exit 0
 ```
 
-## 7. DPI / DSF caveat
+## 7. DPI / DSF
 
-- The production host runs fullscreen at the monitor's device scale factor (DSF). On the reference
-  machine (3200×2000 @ 180 % scaling) the page CSS viewport is ~1778×1111 and both the visualizer and
-  the full-viewport settings overlay lay out correctly (verified; the overlay is responsive).
-- `--force-dsf 1` forces `--force-device-scale-factor=1`, which gives a 1600×1000 window a 1600×1000
-  CSS viewport. Use it **only** for small-window smoke tests where Folia's `lg:` breakpoint matters
-  (the settings window is designed for ≥1240×780 CSS px). Do not default it on: it bypasses the
-  user's Windows scaling and would render small on high-DPI screens.
+- 生产环境全屏跑在显示器的设备缩放（DSF）下：参考机 3200×2000 @180 % → 页面 CSS 视口约
+  1778×1111，可视器与整屏设置覆盖层布局都正确（设置面板按 ≥1240×780 CSS px 设计）。
+- `--force-dsf 1` 会传 `--force-device-scale-factor=1`，只用于**小窗冒烟**，让 Folia 的 `lg:`
+  断点生效。**生产绝不默认开**：它会绕过用户的 Windows 缩放，高分屏上会渲染得很小。
 
-## 8. Offline / no-network guarantee
+## 8. 离线与网络
 
-The packaged page performs no network requests: verified with a blocked-network browser run —
-99 requests, all same-origin/local, 0 external, 0 failed; the aistudiocdn `importmap` in the Folia
-`index.html` is inert for the OBS surface; no fonts are fetched from the network (no font files are
-shipped either); the service worker is removed. The only external dependency is the machine's
-WebView2 Runtime (system component).
+打包后的页面不发起任何网络请求：断网实测 99 个请求全部同源/本地，0 外部、0 失败；
+`index.html` 里的 aistudiocdn `importmap` 对 OBS 入口是惰性的；不下载字体（也不随包带字体）；
+Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（系统组件）。
 
-## 9. Licensing (AGPL-3.0) — required reading for release
+## 9. 许可义务（发版必读）
 
-- Folia's web build is **AGPL-3.0**; our plugin reuses its code/components. Therefore the plugin and
-  everything we distribute (including `web/`, the settings island and this packaging) are released
-  **AGPL-3.0-or-later**. `licenses/AGPL-3.0.txt`, `NOTICE.md`, `SOURCE-OFFER.md` and
-  `THIRD-PARTY.md` are shipped inside the plugin directory and must be kept there.
-- `web/` is the **unmodified** upstream Folia production build except two removed PWA tags in
-  `index.html` (documented in `NOTICE.md`; reproducible via `packaging/tools/stage-web.mjs`).
-- The WASAPI analyzer is MIT (copyright ours); the WebView2 SDK DLLs are redistributed under the
-  Microsoft WebView2 SDK license (texts shipped). No fonts, no model weights, no Folia binary
-  assets are redistributed beyond the web build.
-- Before publishing: confirm the exact upstream Folia source URL/tag to cite in `NOTICE.md`
-  (currently "folia-major 0.7.22 as distributed in the Folia desktop application"; the release owner
-  should add the upstream repository link + commit hash).
+插件与它分发的一切（`web/`、设置岛、宿主 exe、本打包树）都是 **AGPL-3.0-or-later**，
+因为内嵌并复用了 AGPL 的 Folia。`licenses/` 下的 AGPL 正文、`NOTICE.md`、`SOURCE-OFFER.md`、
+`THIRD-PARTY.md` 必须随包发出，不得删改。分发 `web/` 时它是上游 Folia 产物的**未修改**副本，
+仅 `index.html` 去掉了两个 PWA 标签（`NOTICE.md` 有记录，`packaging/tools/stage-web.mjs` 可复现）。
 
-## 10. Release checklist (owner: Lead)
+组件清单、三类归属（真实分发 / 行为参考 / 本项目原创）与源码提供声明见
+[`docs/licensing.md`](licensing.md) 与 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
 
-1. Build inputs fresh: host build, settings UI build, Folia dist + offline dependency report.
-2. `bash packaging/build-package.sh` → staging clean, `size-report.json` within budget,
-   `SHA256SUMS.txt` regenerated.
-3. **Run the self-check on the real machine** (v0.4.11 onward — the 「出现问题」 report is part of the
-   artifact, so it is verified like one):
-   - `cd spw-folia && ./gradlew runDiagnostics` → exit 0 and no `FAIL` row on a healthy machine
-     (each row prints `VERDICT  label  detail` + `evidence:`; `UNKNOWN` is allowed, see
-     `docs/logging-and-diagnostics.md` §3.0);
-   - `node packaging/tools/verify-diagnostics.mjs` → exit 0, no false `FAIL` on the page side;
-   - or just run the whole gate in one shot: `node packaging/tools/verify-all.mjs` → `10/10 gate
-     checks` (static contract + self-check + both switch suites; `--static` skips the browser).
-   Any `FAIL` on a healthy machine blocks the release — that is exactly the v0.4.2–v0.4.6 bug class.
-4. `node packaging/tools/verify-layout.mjs` → PASS (keep `packaging/out/verify-report.json` +
-   screenshots as release evidence).
-5. Copy the three payload areas into the assembled `.spmod` per §3; keep `licenses/` inside.
-6. Smoke-test the assembled `.spmod` in a real SPW install (menu item → fullscreen visualizer,
-   first-run settings, ESC, track change, pause/seek).
-7. Record versions in the release notes: plugin version, host exe sha256, Folia version
-   (`folia-major 0.7.22`), WebView2 SDK/NuGet version and tested WebView2 Runtime version
-   (150.0.4078.83), settings island build.
-8. No secrets in the artifact (`packaging/` contains no credentials).
+> **待补齐**：`packaging/licenses-src/NOTICE.md` 与 `SOURCE-OFFER.md` 目前仍写
+> "Folia 0.7.22 / commit `1f6d0f46…`"，而实际内嵌的是 **0.7.25**。下一次发版前应把上游 tag 与
+> commit 改成 0.7.25，并重新跑 `build-package.sh` 让 `licenses/` 同步。
 
-## Appendix: release-artifact ledger
+## 附录：发布产物台账
 
-Only the current release needs its payload hashes checked. The ledger below is the compact record of
-what each published `.spmod` was, kept so a downloaded artifact can still be verified against the
-repository; per-version change essays and full payload breakdowns live in
-[`docs/archive/`](archive/) (and in the GitHub Releases bodies, which ship `SHA256SUMS.txt` next to
-every `.spmod`).
+只保留**仍可下载**的版本，以及当前版本与已下架版本的行。早期版本（v0.1.0–v0.4.5）的 Release 已下线，
+其字节数与哈希见 Git 历史；`local only` 的版本从未上传，改动并入后续发布。
 
-**The last published release is v0.4.17.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
-v0.4.12 were built and tested locally only — they have **no** GitHub release and **no** tag, so they
-must not be presented as downloadable; their changes ship inside the later published releases.
-v0.4.13 **was** published and was withdrawn the same day (see the row below and
-[`postmortem-v0.4.13.md`](postmortem-v0.4.13.md)) — never re-upload it. (The version numbers
-written inside the code were stale for a while — `build.gradle.kts` / `FoliaPlugin.PLUGIN_VERSION`
-still said `0.4.7` until the 0.4.10 cleanup, which is why some local build artifacts carry a "0.4.7"
-name.)
+**当前发布版本是 v0.4.17。**
 
-| Version | `.spmod` bytes | entries | sha256 | released |
+| 版本 | `.spmod` 字节 | 条目 | sha256 | 发布状态 |
 | --- | --- | --- | --- | --- |
-| v0.1.0 | 12,443,495 | 1,937 | `8c265dc1aca7ee5ee378b65f5b045ccba7e51536e812e399b0d9cf6bd9d46838` | 2026-10-18 |
-| v0.1.1 | 12,450,886 | 1,938 | `9c4d206911eebc43869af2c0aae074efa8f672e081586946e022d7b4c89dac21` | 2026-10-19 |
-| v0.1.2 | 12,450,848 | 1,938 | `2dc2f46b8635bd4918f45b65e9cd36d814c876e8c9f5a7827da4d0621174a0b9` | 2026-10-19 |
-| v0.1.3 | 12,405,289 | 1,937 | `16bdda573be6f9fed29780881e94feb1f5c0a6d542260c024e4f284c8a5d41ea` | 2026-10-19 |
-| v0.1.4 | 12,405,269 | 1,937 | `24ddaf34982a6acb9b92943ead1123d6dfb34ed4c9ae082c94ed2e7d1d82c04e` | 2026-10-19 |
-| v0.1.5 | 12,574,908 | 1,937 | `8e88488ba9d4137602c550a1633c98b2b45d2a4ebf578822f7412940d9655c11` | local only |
-| v0.1.6 | 13,136,350 | 1,941 | `aacd02afb078b13d09a26930f6981740930df5dfe04343b7a9584cfd84bdcad9` | 2026-10-19 |
-| v0.1.7 | 12,970,892 | 1,941 | `5cf8eba69c9d1bb961efd160075c29b9cde52e5b30699598e5ec174106dd5138` | 2026-10-19 |
-| v0.1.8 | 12,976,142 | 1,941 | `0913914b37ba5a1b4b8db7775ebb1b7ab1621d1a069a000c43766c4c62b9ad1f` | local only |
-| v0.1.9 | 12,975,396 | 1,941 | `8ec1ffb3e4dee3c4befbc953f7d36a22ab1864e5e204439c7c16a5233257ce01` | 2026-10-19 |
-| v0.1.10 | 13,145,163 | 1,941 | `4a90d09e95ea37449882f6b7507fcfa3d0ccdf72d86dbc969b26d6426cbcf951` | 2026-10-19 |
-| v0.2.0 | 13,149,053 | 1,941 | `d3bc76163dc1fa5598455b48e5fc4674b5a6f588cca5e84fa9951a72160c2fbb` | 2026-10-20 |
-| v0.2.1 | 13,152,604 | 1,941 | `56c0aa4177a1bea8fe0078a9c27ab2dee264f0c85387af0a667086cd39f0e792` | 2026-10-20 |
-| v0.2.2 | 13,153,013 | 1,941 | `ca74c7fc4b6ce807af582f8dcbae041f4001bbf8b291e86e3be29a30f9fa38ac` | 2026-10-21 |
-| **v0.3.0** | **13,178,430** | **1,943** | `7f79d9dc8184c1119ce42a6dc59e1036fb3ffee6bb883c0c603cfdd977d80744` | 2026-10-21 |
-| v0.4.0-preview.1 | 20,029,633 | 3,925 | `4c3f252deca659697a687681538d96b492054b64b6f1865bd82b4c720d07fcd3` | 2026-10-24 |
-| v0.4.0-preview.2 | 12,193,169 | 3,896 | `1c9816a992cd303a93b1b24e7601657c36d82247dceddf36e2e768c3e2e7e7cb` | 2026-10-24 |
-| v0.4.1-preview.1 | 12,191,035 | 3,896 | `6e07ae30a3f2a1f92c165afa0cb516fa87b75a7484bc909690c8001532a6b7fb` | 2026-10-24 |
-| v0.4.2 | 12,221,858 | 3,894 | `5bfdf80df4a93d96c283a0823788cf8d2a5ffeaa470f4c4c1e89fe5114cbcedb` | 2026-10-26 |
-| v0.4.3 | 12,224,037 | 3,894 | `a2015b34472477b8a06d73527df6db3d4a6f589458c909af6f41442a4efc513f` | 2026-10-26 |
-| v0.4.4 | — | — | — | **无发布记录**：GitHub Releases 与 `git ls-remote --tags` 均无 `v0.4.4`，本地也无产物（`gh release view v0.4.4` → `release not found`，2026-11-02 核实）。按「未发布」处理；若日后发现遗漏，以 Releases 页面为准 |
-| v0.4.5 | 12,227,007 | 3,894 | `3b2a74741cd4fc299e7ad0a0c57a296545fb0025a6bcd81f29381307886e6237` | 2026-10-30 |
-| **v0.4.6** | **12,476,192** | **3,912** | `fc06fd0724a4a6e8785bd912217c88c228aa1c234437d94e750c59a5f0619805` | 2026-10-30 (**最后发布**) |
-| v0.4.6.1 | 10,948,881 | 3,907 | `a3f1b9158c9b29356eb30e608b894450ec62968cc44df49b0fe07ff4b862117c` | local only |
-| v0.4.7 | 12,513,618 | 3,922 | `afced725c3322c19bd2a76557563275f363df26456517d4fdf16212fff21d582` | local only |
-| v0.4.8 | — | — | — | local only（无独立产物，改动并入 v0.4.9/v0.4.10 开发线） |
-| v0.4.9 | — | — | — | local only（同上） |
-| v0.4.10 | — | — | — | local only。只产出过**插件包** `spw-folia/build/libs/plugin-dev.spw.folia-0.4.10.spmod`（334,174 B，92 文件，`Plugin-Version: 0.4.10`），**未**组装完整 `.spmod`（`dist/release/` 里没有 0.4.10 产物），所以没有 bytes/entries/sha256 可记 |
-| **v0.4.11** | **15,406,708** | **3,976** | `e7bd36687e9499c6882bfb2b549610b63e5a3dae85732b69127b1bf0f012fa22` | local only（2026-11-02 本地组装）。配置页重新分组（播放页 / 诊断与日志 / 支持与反馈）、新增 `showProblemButton` 开关（默认关）、自检复检纳入检查表。**未上传** |
-| v0.4.12 | 15,419,925 | 3,977 | `238d36a8c713b8d3c2bf4f9764eaccc557d593456d039c0aada8d67c71bf4342` | local only（2026-11-02 本地组装）。重写配置同步（`FoliaConfigSync`），**引入了「三个开关全部不生效」的回归**，由 v0.4.13 修复。**未上传** |
-| **v0.4.13** | **15,438,647** | **3,982** | `5cb1cdafacdea46559e4b57ad1934522e6b20874d2531aabad2b46cac948f308` | ~~2026-11-03 发布~~ **当日下架（已删除 Release 与 tag）**。修复 v0.4.12 的开关回归，但同版本引入的重试递归在「两个配置文件都不存在」时无限递归，卡死 SPW 界面 9 分钟（`failure.kind=TERMINATED_HANG`）。取证包：`dist/release/taken-down/v0.4.13-handoff/`。**不要重新上架此版本**，用 v0.4.14 |
-| **v0.4.14** | **15,442,237** | **3,983** | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | **2026-11-03 发布**，v0.4.13 的修复版。①重试改为常量上限循环 + 同线程递归深度兜底（绝不再递归）；②`isOs64` 改三态，读不到位数不再假失败；③`runReg` 先起守护线程读管道再带超时等待，3s 硬超时真正生效；④`stringField` 非法转义返回 null（防止坏行被错派发）；⑤`save()` 返回 false 不再被记成已保存；⑥验收门禁补齐：3 个此前从未被调用的回归脚本接入、`fails.length >= 0` 恒真断言修正、`live-settings-payload` 不再依赖开发者本机安装、新增 v0.4.13 卡死守卫与 46 个 JVM 单测。`verify-all.mjs` 18/18。详见 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) 与 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md) |
-| **v0.4.15** | **15,443,035** | **3,983** | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | **2026-11-03 发布**。修 v0.4.14 的两个用户可见缺陷：①**设置面板首次打开几秒后自动退出** —— 根因是设置岛被加载两次（宿主注入带 `?v=`，而 35 个 chunk 反向 `import "../settings-ui.js"` 不带查询串，浏览器按完整 URL 区分模块），第二实例 `createRoot` 了同一个容器并卸载了第一棵树；修复用 `window` 级挂载标记 + 控制器所有者标记 + 容器 root 检测三道防线（模块作用域在两次加载间不共享，只能放 `window`）。②**反馈网址打不开**（GitHub `Whoa there!`）—— 上限按字符数 6000 算，但中文百分号编码后每字 9 字符，实际网址 ~15000 超限；改为按编码后长度截断，并修掉 emoji 输入会抛 `URIError` 的问题。门禁新增 3 条守卫（扫描打包产物 44 处反向引用），拆掉防线即 FAIL（已实测）。`verify-all.mjs` **21/21**、47 个 JVM 单测。详见 [`release-notes-v0.4.15.md`](release-notes-v0.4.15.md) |
-| **v0.4.16** | **15,462,458** | **4,007** | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | **2026-11-03 发布**。①**歌词样式小图缓存到本机**：上游 `pictureImages` 那只 Map 只活在页面生命周期里，重启窗口后 17 格要重画一遍（真机实测 23.0 s，主线程最长单次阻塞 1.77 s）；新增 IndexedDB 二级缓存（库 `spw-folia-preview` / 表 `pictures`，键 = `v1\|` + 上游 `stylePictureKey`，**不传上传图**以避开 WeakMap 序号跨进程漂移），命中时把冻结图贴回上游 Map，`LivePicture` 便不再排队造图 → 重启后 **23.0 s → 0.37 s**、`peakMaking 1→0`、样式渲染器 chunk 增量 `19→0`。canvas 用 WebP q0.85（PNG 下 hanabi/machi/pendolo 会撞 512 KB 单条上限被静默跳过，而它们恰是最慢三格；17 格 1.47 MB → 298 KB）。②**新增 `previewAnimation` 开关（默认开）**：关闭时货架走 `ShelfStatic`，经 `React.lazy` 在**模块加载层面**断链，真机 resource entries 匹配 `Visualizer\|ShelfLiveView` 为 **0**（不是渲染了不显示），热切换双向生效。③顺带修真缺陷：上游 `freezeStage` 只清理冻结那一刻在 `getAnimations()` 里的动画，群唱 `cappella-char-fade`（37 个）漏网、挂回新页面会从头重播；落盘前统一剥掉 `animation`/`transition`，恢复后 `getAnimations` 为 0。验收新增真机套件 `verify-preview-animation-switch.mjs`（37 条断言，含反恒真 A7 与跨进程 C 组），`verify-all.mjs` **22/22**、48 个 JVM 单测。详见 [`release-notes-v0.4.16.md`](release-notes-v0.4.16.md) |
-| **v0.4.17** | **15,464,000** | **4,007** | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | **2026-11-04 发布**。修 issue #18 四项：①**凝彩样式失效** —— 根因不在凝彩本身：Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField`/`depthPan`/`glyphDepth`，而 `applySnapshot` 对每种样式的 tuning 做**整对象替换**，旧设置树缺这三个键 → 上游 `defineVisualizerTuning.apply` 不过 `resolve()` → 渲染器拿 `undefined` 参与 `temperaShotFrame` 的坐标运算 → NaN → 整个构图消失（只剩背景噪点）。改为「**默认值打底 + 持久化值覆盖**」逐样式合并（新增纯函数 `model/mergeTuning.ts`），`buildTuningBundle` 出库前再兜一层默认值；顺带修未知样式不允许透传的隐患。②**「显示播放条」搬到播放页右下角菜单** —— 所有权从插件侧（配置页 `showPlaybackBar` → `withInjectedMembers()` → 只读注入成员）迁移到**页面自己的 settings 树**（`showPlaybackBar`/`setShowPlaybackBar`），开关成为既有 `player-background` 面板里的**一行**（`data-spw-chrome="playback-bar-row"`，无条件常显）；`preference_config.json` 与 `KNOWN_CONFIG_SWITCHES` 同步删除该键；老用户经 `showPlaybackBarLegacy` 顶层成员一次性播种（树里有键则永远以树为准），`onSettingsFromPage` 不再剥除它。**菜单按钮无条件挂载**，关掉播放条后仍可开回来（门禁 E7 专门钉死锁）。③**「出现问题」打开的是文档文件夹** —— `openLogFolder` 把 `/select,` 与路径拼成**一个**参数，`ProcessBuilder` 对含空格参数整体加引号（安装路径默认含 `Salt Player for Windows`），explorer 收到前面带引号的怪参数 → 退回默认起始位置。改为**两个独立参数**，并用真实 explorer + `Shell.Application`（`LocationURL` **与** `Document.SelectedItems()`）验证落点，附两条必须 FAIL 的负面对照（v0.4.16 形状、以及「自己加内层引号」这个会让路径碎成 4 段的假修复）。④**播放画面点击分区** —— 中央 1/3 暂停/播放、左右切歌；热区层级在播放条与所有 chrome 之下（不抢点击），拖动 >10px 不算点击，设置覆盖层/鼠标穿透时不生效，且不依赖播放条开关。门禁新增 `verify-tuning-merge.mjs`（17 条，含反恒真回退变体）与 `verify-log-folder.mjs`（16 条，含真实 explorer 落点与负面对照），`verify-playback-bar-switch.mjs` 改写为驱动新菜单（25 条）；`verify-all.mjs` **24/24**、57 个 JVM 单测、`verify-layout.mjs` 13/13。详见 [`release-notes-v0.4.17.md`](release-notes-v0.4.17.md) |
+| v0.4.6 | 12,476,192 | 3,912 | `fc06fd0724a4a6e8785bd912217c88c228aa1c234437d94e750c59a5f0619805` | 2026-10-30 发布（内嵌 Folia 0.7.22，15 种样式） |
+| **v0.4.13** | **15,438,647** | **3,982** | `5cb1cdafacdea46559e4b57ad1934522e6b20874d2531aabad2b46cac948f308` | ~~2026-11-03 发布~~ **当日下架，Release 与 tag 均已删除；不要重新上架** |
+| v0.4.14 | 15,442,237 | 3,983 | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | 2026-11-03 发布（v0.4.13 的修复版） |
+| v0.4.15 | 15,443,035 | 3,983 | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | 2026-11-03 发布 |
+| v0.4.16 | 15,462,458 | 4,007 | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | 2026-11-03 发布 |
+| **v0.4.17** | **15,464,000** | **4,007** | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | **2026-11-04 发布（当前）** |
 
-`local only` builds were verified on a real install but never uploaded; their changes shipped inside
-the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes
-(see [`archive/verification-v0.1.11.md`](archive/verification-v0.1.11.md)) went out with v0.2.0.
+台账里"缺行"的版本说明，免得读起来像缺页：
 
-Notes on how to read this table:
+- **v0.4.13 已下架。** 它修好了三个开关失效，但同版本引入的重试递归在"两个配置文件都不存在"
+  （全新安装的默认状态）时无限递归，把 SPW 界面卡死 9 分钟（`failure.kind=TERMINATED_HANG`）。
+  Release 与 tag 已删除，取证包留在 `dist/release/taken-down/v0.4.13-handoff/`。
+  复盘与门禁教训见 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md)；**不要再上传这个版本**。
+- **v0.4.6.1 / v0.4.7 / v0.4.11 / v0.4.12 只在本地构建过**，从未上传，也没有 tag；
+  它们的改动含在后续已发布版本里，不要指向这些版本号。
+- **v0.4.4 / v0.4.8 / v0.4.9 / v0.4.10 从来没有独立产物**（v0.4.4 无 Release 也无 tag；
+  v0.4.8–v0.4.10 是开发过程中的中间版本，只产出过插件包，没有组装完整 `.spmod`），所以没有字节/哈希可记。
+- 版本号在代码里曾长期滞后（`build.gradle.kts` / `PLUGIN_VERSION` 停留在 `0.4.7`），
+  `dist/release/` 里那些 `*-0.4.7*.spmod` 是更早的本地构建，不是已发布的 0.4.7。
 
-- `entries` counts **files** inside the zip; the five directory entries (`classes/` and the package
-  folders) are excluded, which is what the pre-v0.4.3 rows already did.
-- The v0.4.5 / v0.4.6 numbers were recomputed on 2026-11-02 from the assets downloaded via
-  `gh release download`, not copied from release notes. v0.4.6.1 / v0.4.7 rows come from the
-  `dist/release/*.spmod.json` sidecars of those local builds (same recomputation, same machine).
-- Version numbers were not bumped in code for a long stretch: `build.gradle.kts` and
-  `FoliaPlugin.PLUGIN_VERSION` still read `0.4.7` after several development cycles. The 0.4.10 work
-  unifies them; the artifacts named `*-0.4.7*.spmod` in `dist/release/` are therefore older local
-  builds, not the published 0.4.7 — and 0.4.7 itself was never published either.
-
-Current release payload (**v0.4.17**): `web/` 3,891 files / 33,904,033 B, `native/` 5 files /
-1,116,126 B (host `spw-folia-host.exe` 178,688 B), `licenses/` 7 files / 49,757 B, `classes/`
-104 files / 829,445 B — 35,899,361 B uncompressed across 4,007 file entries, shipped as
-15,464,000 B with sha256 `9ff9f66e…`.
-
-For reference, the v0.4.6 artifact (the historical baseline) was: `web/` 3,820 files /
-26,112,116 B, `native/` 5 files / 1,097,142 B (host `spw-folia-host.exe` 164,864 B), `licenses/`
-7 files / 49,370 B, `classes/` 80 files / 626,269 B — 27,884,897 B uncompressed, shipped as
-12,476,192 B with sha256 `fc06fd07…`. The v0.4.5 artifact differs only in `classes/`
-(62 files / 493,078 B → 12,227,007 B total, sha256 `3b2a7474…`). Verify a downloaded artifact with:
+校验一个下载到的产物：
 
 ```bash
-sha256sum spw-folia-0.4.17.spmod    # compare with the ledger row and the release's SHA256SUMS.txt
-node packaging/tools/verify-layout.mjs   # packaged-layout acceptance on a clean unpack
+sha256sum spw-folia-0.4.17.spmod        # 对比上表与 Release 附带的 SHA256SUMS.txt
+node packaging/tools/verify-layout.mjs  # 干净解包上的打包布局验收
 ```
+
+各版本的详细更新内容在 GitHub Releases（正文即 [`docs/release-notes-v0.4.17.md`](release-notes-v0.4.17.md)
+这类文件），失败路径的技术细节在 `docs/lessons.md` 与 `docs/postmortem-v0.4.13.md`。

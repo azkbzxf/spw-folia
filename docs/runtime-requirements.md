@@ -1,224 +1,205 @@
-# spw-folia 运行环境依赖清单与闪退排查
+# 运行环境与排障
 
-> **发布状态**：最后**发布**版本是 **v0.4.6**（2026-10-30）。本文提到「v0.4.7 起」的行为
-> （四态自检、按注册表判构建号）都是**未发布**的代码，线上用户拿到的仍是 v0.4.6 的二态自检。
-> v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10 / v0.4.11 均未发布。
+用户的 Folia 打不开、窗口闪一下就没了、画面全黑、卡顿？先按本文对症处理。
+维护者做支持回复时也用这张表。
 
-Status: 依赖矩阵已按 **v0.2.0 发布产物** 逐项核对（代码 + 二进制 + 本机实测 + 微软官方文档）。
-适用对象：遇到「闪退 / 打不开 / 黑窗」的用户，以及维护者做支持回复。
-日期：2026-10-20 · 核对机：Windows 11 x64（build 26300）、WebView2 150.0.4078.83、.NET Framework 4.8.1。
+**一句话原理**：插件自己不带浏览器、也不带 .NET。渲染交给系统里的 **WebView2 Runtime**，
+窗口交给用 **.NET Framework 4.8** 写的辅助进程。这两样系统组件任一缺失，
+表现都是"点了没反应"或"窗口闪一下就消失"。
 
-一句话结论：**插件自己不携带浏览器与 .NET，它把渲染交给系统里的 WebView2 Runtime、把窗口交给
-.NET Framework 4.8 编写的辅助进程。这两样系统组件任一缺失，都会表现为「用户点了没反应 / 窗口闪一下就消失」。**
-另外 v0.1.9 及更早版本有一个必定触发的滚轮崩溃（v0.1.10 已修），v0.1.10 在 WebView2 155+ 上还有一个
-歌词重放时的 stdin 泵跨线程崩溃（v0.1.11 起修复，v0.2.0 包含），仍在旧版本上的用户会继续闪退。
+最省事的第一步：**SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」**。它会逐项检查下面的
+硬依赖、把缺的东西直接指出来，并在环境齐全时打开预填好环境信息的反馈页。
+详见 [`logging-and-diagnostics.md`](logging-and-diagnostics.md)。
 
 ---
 
-## 1. 硬依赖（缺失 = 崩溃 / 完全不可用）
+## 1. 硬依赖（缺了就用不了）
 
-| # | 依赖 | 最低要求 | 参考机（已验证可运行） | 缺失时的表现 |
-| --- | --- | --- | --- | --- |
-| H1 | Windows + 架构 | Windows 10 x64，**1809 (17763) 起**（这是 SPW 自身 MSIX 的 MinVersion）；建议 1903+ | Windows 11 x64 build 26300 | 装不上 SPW / 辅助进程无法运行（x64-only PE） |
-| H2 | .NET Framework | **4.8**（`spw-folia-host.exe.config` 的 `supportedRuntime sku=net48`） | 4.8.1（`Release=534296`） | 系统弹「此应用需要安装 .NET Framework 4.8」类对话框，辅助进程起不来 → 用户视角=闪退 |
-| H3 | WebView2 Runtime | **Evergreen Runtime，≥ 86.0.616.0**（GA API 下限）；建议 120+ | 150.0.4078.83 | 窗口闪一下消失；辅助进程 **exit code 3** |
-| H4 | 随包的 4 个原生文件 | 与 `spw-folia-host.exe` **同目录**：`Microsoft.Web.WebView2.Core.dll`、`Microsoft.Web.WebView2.WinForms.dll`、`WebView2Loader.dll`、`spw-folia-host.exe.config` | 打包在 `.spmod/native/`（5 文件） | 缺托管 dll → `FileNotFoundException` → exit 1；缺/错位 Loader → WebView2 初始化失败 → exit 1 |
-| H5 | WebView2Loader 架构 | 必须 **x64**（发布包里就是 x64，`machine=0x8664`） | x64 | 误用 x86/arm64 Loader → `BadImageFormatException` → exit 1 |
-| H6 | Salt Player for Windows | **严格 1.19.0**（菜单 hook 目标是该版本 R8 混淆名） | 1.19.0 | 不崩：日志 `unsupported SPW version …; hook not installed`，菜单里没有 Folia |
-| H7 | Java 运行时 | **JVM 25**（插件 class 为 Java 25 / major 69） | SPW 自带 JVM 25.0.4.1 | 用户无需另装 Java；低于 25 的 JVM 无法加载插件 |
-| H8 | 插件权限 | `class-transform`（钩子，必需）；`library-read`（封面/歌词，可选）；`key-bindings`（快捷键，v0.4.0 起，可选） | 三项均已授予 | 缺 class-transform：不崩，吐司提示 + 菜单无 Folia；缺 library-read：封面取不到、仅日志报错；缺 key-bindings：快捷键不注册（日志 `KEY_BINDINGS not granted`），其余功能正常 |
-| H9 | 可写路径 | 插件安装目录可写（日志、`spw-folia.log`）；`%LOCALAPPDATA%\spw-folia\webview` 可创建/可写（WebView2 用户数据目录） | 27 MB 安装 + 121 MB 缓存 | 插件目录不可写：`spawn failed: …` → 退回 Swing「Folia (fallback)」黑窗；UDF 不可写 → exit 1 |
-| H10 | 页面资源完整 | `.spmod/web/index.html` 存在（解包不完整/被杀软删文件） | 1898 个文件 | `bundle has no index.html` → exit 2 |
+| # | 依赖 | 要求 | 缺失时用户看到什么 |
+| --- | --- | --- | --- |
+| H1 | Windows + 架构 | Windows 10 x64 **1809 (17763) 起**（SPW 自身 MSIX 的底线）；建议 1903+ | 装不上 SPW，或辅助进程起不来（exe 是 x64-only） |
+| H2 | .NET Framework | **4.8** | 系统弹"此应用需要安装 .NET Framework 4.8"，或进程起不来 = 用户眼里的"闪退" |
+| H3 | WebView2 Runtime | **Evergreen ≥ 86.0.616.0**（GA API 下限），建议 120+ | 窗口闪一下消失；辅助进程 **exit code 3** |
+| H4 | 随包的 4 个原生文件 | 必须与 `spw-folia-host.exe` **同目录**：两个 WebView2 dll、`WebView2Loader.dll`、`spw-folia-host.exe.config` | 缺托管 dll → `FileNotFoundException` → exit 1；Loader 错位 → WebView2 初始化失败 → exit 1 |
+| H5 | WebView2Loader 架构 | **x64**（发布包就是 x64） | 误用 x86/arm64 → `BadImageFormatException` → exit 1 |
+| H6 | Salt Player for Windows | **1.19.0 及以上**（菜单 hook 按版本发现） | 不崩：日志 `unsupported SPW version …`，菜单里没有 Folia |
+| H7 | Java 运行时 | JVM 25（插件 class 是 Java 25） | 用户不需要另装：SPW 自带。低于 25 的 JVM 加载不了插件 |
+| H8 | 插件权限 | `class-transform`（钩子，必需）、`library-read`（封面/歌词，可选）、`key-bindings`（快捷键，可选） | 缺 class-transform：toast 提示 + 菜单无 Folia；缺 library-read：封面取不到；缺 key-bindings：快捷键不注册 |
+| H9 | 可写路径 | 插件安装目录可写（`spw-folia.log`）；`%LOCALAPPDATA%\spw-folia\webview` 可建可写 | 安装目录不可写 → `spawn failed` → 退回黑色 Swing 占位窗；用户数据目录不可写 → exit 1 |
+| H10 | 页面资源完整 | `.spmod/web/index.html` 存在（解包不完整、被杀软删文件） | `bundle has no index.html` → exit 2 |
 
-参考机磁盘现状：插件安装目录 **27 MB**，WebView2 用户数据目录 **121 MB**（首次运行后增长）。
-建议给用户留 **≥ 300 MB** 可用空间，并避免把 `%LOCALAPPDATA%` 放到网络盘/同步盘。
+参考机占用：插件安装目录约 **27 MB**，WebView2 用户数据目录首次运行后约 **121 MB**。
+建议留 ≥ 300 MB 可用空间，且不要把 `%LOCALAPPDATA%` 放在网络盘或同步盘上。
 
----
-
-## 2. 软依赖（缺失 = 降级 / 黑屏，一般不影响进程存活）
+## 2. 软依赖（缺了降级，一般不会崩）
 
 | # | 依赖 | 说明 |
 | --- | --- | --- |
-| S1 | 可用的 GPU / D3D / WebGL | 页面用 WebGL 渲染（bundle 内 18 个 chunk、553 处 `webgl` 引用，含 11 处 `WebGL2`）。辅助进程**没有**传 `--disable-gpu`，也没有软件渲染兜底开关。RDP 会话、虚拟机、很老的显卡驱动下可能黑屏/降级（**未见**因此直接崩溃），建议更新显卡驱动、退出远程桌面后重试。 |
-| S2 | 音频设备 | WASAPI 回环采集失败会被吞掉，自动回落合成信号（`wasapi-loopback-failed`），**只是不再有音频响应**，不崩。 |
-| S3 | 多显示器 | 全屏窗口固定开在**主屏**（`Screen.PrimaryScreen`）。副屏用户会觉得「窗口没出现」，不是崩溃。 |
-| S4 | 网络 | **完全不需要**。页面全部走本地虚拟主机（`https://spw-folia.local/`），发布产物实测 99 个请求全本地、0 外部。 |
-| S5 | 管理员权限 | **不需要**（辅助进程 manifest 无 `requestedExecutionLevel`，asInvoker）。 |
-| S6 | VC++ 运行库 | **不需要单独装**。辅助进程是纯托管（零 native 导入）；WebView2 Runtime 目录自带 `msvcp140/vcruntime140` 等。 |
-| S7 | 代码签名 | 辅助进程 exe **未签名**（WebView2Loader.dll 有微软签名）。极端情况下可能被 AppLocker/SmartScreen/杀软拦（`spawn failed: … error=5`）。 |
-| S8 | 内存 | WebView2 + Folia 渲染吃内存，低内存机可能被系统杀进程（WebView2 `OUT_OF_MEMORY`）。 |
+| S1 | 可用 GPU / D3D / WebGL | 页面用 WebGL 渲染。辅助进程没有传 `--disable-gpu`，也没有软件渲染兜底。远程桌面（RDP）、虚拟机、很老的显卡驱动下可能黑屏或降级。先更新显卡驱动、退出远程桌面再试 |
+| S2 | 音频设备 | WASAPI 回环采集失败会被吞掉并回落合成信号（日志 `wasapi-loopback-failed`），只是画面不再随音频起伏，不崩 |
+| S3 | 多显示器 | 全屏窗口默认开在 spawn 出它的那只 SPW 窗口所在显示器（取不到回落主屏）。副屏用户"找不到窗口"通常不是崩溃 |
+| S4 | 网络 | **完全不需要**。页面全走本地虚拟主机 `https://spw-folia.local/` |
+| S5 | 管理员权限 | **不需要**（辅助进程 manifest 是 asInvoker） |
+| S6 | VC++ 运行库 | **不需要单独装**。辅助进程是纯托管；WebView2 Runtime 自带 `msvcp140` / `vcruntime140` |
+| S7 | 代码签名 | 辅助进程 exe **未签名**（`WebView2Loader.dll` 有微软签名）。AppLocker / SmartScreen / 杀软可能拦（`spawn failed … error=5`） |
+| S8 | 内存 | WebView2 + Folia 渲染吃内存，低内存机可能被系统杀（`OUT_OF_MEMORY`） |
 
----
+## 3. 症状与退出码 → 该做什么
 
-## 3. 判定方法：退出码 + 日志关键字
+按用户最容易描述的几类症状组织（§3.1–§3.8），最后是辅助进程的退出码对照（§3.9）。
+日志怎么拿、怎么读见 §4。
 
-辅助进程退出码（`docs/host-app.md` §2）：
+### 3.1 点菜单里的 Folia 完全没反应 / 菜单里没有 Folia
+
+1. 确认是 **SPW 1.19.0 或更新**（H6）。日志出现 `unsupported SPW version …; hook not installed` 就是这条。
+2. 确认插件已启用、且 **`class-transform` 权限已授予**（H8）。SPW 的插件权限页里补授后**重启 SPW**。
+3. 看 `%APPDATA%\Salt Player for Windows\logs.txt`（宿主侧）有没有插件加载失败 / 权限异常。
+4. 仍没有：把 §4 的日志一并反馈。
+
+### 3.2 窗口闪一下就消失
+
+这是**最常见**的一类，绝大多数是环境缺失：
+
+1. **装 WebView2 Runtime**：<https://developer.microsoft.com/microsoft-edge/webview2/consumer/>
+   （Win11 自带，一般不用装；Win10、精简系统、企业离线机是重灾区）。注意 **Edge 浏览器不能代替
+   WebView2 Runtime**。
+2. **装 .NET Framework 4.8**：<https://dotnet.microsoft.com/download/dotnet-framework/net48>
+   （Win10 1903+ 已内置）。
+3. 看日志里有没有 `host process exited code=3`（→ 第 1 步）或 `-2146232576`（→ §3.3）。
+4. 仍然闪退：收集 §4 的日志反馈。
+
+### 3.3 系统弹「This application could not be started」，手动双击 exe 却正常
+
+只在 **Microsoft Store / MSIX 渠道**的 SPW 上出现。日志特征：
+`host process exited code=-2146232576`、`spw-folia-host.stdout.log` 为 0 字节。
+
+**重装 .NET Framework 无效**——不是缺运行库。原因是 Store 版 SPW 的插件目录是 MSIX 虚拟路径，
+.NET 加载器用原生路径找 `<exe>.config` 找不到（`0x80131700`）。已修复：从 v0.2.1 起插件在
+spawn 前把路径解析成物理路径。**升级插件即可**。
+
+不想升级时的临时绕过（建目录联接让虚拟路径在真实磁盘上可见）：
+
+```powershell
+New-Item -ItemType Junction `
+  -Path "$env:APPDATA\Salt Player for Windows" `
+  -Target "$env:LOCALAPPDATA\Packages\Sakawish.SaltPlayerforWindows_q65q631pyh094\LocalCache\Roaming\Salt Player for Windows"
+```
+
+### 3.4 窗口能开，但画面全黑
+
+1. 先排除 GPU：更新显卡驱动、退出远程桌面 / 虚拟机再试（S1）。
+2. 检查是不是**掉进 Swing 占位窗**：日志出现 `helper unavailable, opening Swing fallback window`
+   说明辅助进程没起来，那是个黑色占位窗，不是真 Folia——回到 §3.2。
+3. 首页都打不开时，日志里找 `bundle has no index.html`（→ 重装插件）或
+   `webview process-failed`（→ 关掉重开一次）。
+
+### 3.5 用着用着窗口自己消失
+
+`webview process-failed kind=… reason=Unexpected` + `closed reason=error` + exit 1：
+WebView2 浏览器进程意外退出。当前没有自动重试，**重新打开一次**即可。
+反复出现请附日志（这属于需要排查的真问题）。
+
+### 3.6 打开设置里的「歌词样式」预览空白 / 设置面板自己关掉
+
+- **预览空白**：旧安装包里的 Service Worker 劫持了 `/preview.html`。当前版本在启动时会按
+  origin 清理旧 SW，升级到 v0.3.0+ 即可。
+- **设置面板打开几秒后自动退出**：v0.4.14 的缺陷（设置岛被加载两次、第二实例卸载了第一棵树），
+  v0.4.15 已修。升级即可。
+
+### 3.7 画面卡顿 / 掉帧
+
+1. 先在「配置 → 播放页 → **歌词样式预览动画**」关掉动画：货架小图改为简约图案，
+   设置窗口明显更顺（播放页不受影响）。
+2. 日志里搜 `page-stall`：`>100 ms` 才算 stall，普通 25 ms 抖动不算。
+3. 弱显卡 / 高分屏 + 大窗口时，Folia 的 WebGL 渲染确实吃力（S1、S8）。
+
+### 3.8 反馈按钮挡住了画面
+
+「配置 → 播放页 → **显示问题反馈按钮**」默认**关**。打开它才会有播放页右上角的救生圈按钮。
+窗口打不开时用配置页那条入口，它不依赖播放窗口。
+
+### 3.9 辅助进程退出码
+
+完整定义见 [`host-app.md`](host-app.md) §2。用户侧只会遇到这四个：
 
 | code | 含义 |
 | --- | --- |
-| 0 | 正常关闭（用户 ESC / 热键 / 插件关窗） |
-| 1 | 其它错误：窗口/WebView2 初始化失败、WebView2 浏览器进程崩溃、未处理异常 |
-| 2 | 参数错误 / bundle 目录不存在 / 没有 `index.html` |
-| 3 | **WebView2 Runtime 未安装**（或无法启动） |
-| **-2146232576** | **CLR 激活失败 `0x80131700` (CLR_E_SHIM_RUNTIMELOAD)**：系统弹「This application could not be started」对话框，托管代码一行都没跑（stdout/stderr 全空）。见 §5 案例 5 —— **不是 .NET 没装**，Store/MSIX 渠道下是辅助进程的 `.config` 路径虚拟化问题 |
+| 0 | 正常关闭（ESC / 热键 / 插件关窗） |
+| 1 | 其它错误：窗口或 WebView2 初始化失败、浏览器进程崩溃、未处理异常 |
+| 2 | 参数错误 / bundle 目录缺失 / 没有 `index.html` |
+| 3 | **WebView2 Runtime 未安装或无法启动** |
+| -2146232576 | CLR 激活失败 `0x80131700`，见 §3.3 |
 
-日志位置（都在插件安装目录 `%APPDATA%\Salt Player for Windows\workshop\plugins\spw-folia-<ver>\`）：
+插件以退出码判断要不要弹提示：1 / 2 / 3 / -2146232576 都有对应的中文原因（实现见
+`FoliaHostBridge.describeExitCode`），其余码只写日志。
 
-* `spw-folia.log` — 插件侧：启动、hook、spawn 命令行、**`host process exited code=N`**、`host closed reason=…`
-* `spw-folia-host.stdout.log` — 辅助进程协议日志：`webview-ready`、`webview2 runtime=…`、`webview process-failed kind=… reason=…`、`fps`
-* `spw-folia-host.stderr.log` — 辅助进程 stderr（正常应为 0 字节）
-* `%APPDATA%\Salt Player for Windows\logs.txt` — SPW 宿主侧（插件加载失败、权限异常）
+## 4. 拿日志（反馈时请附上）
 
-常见关键字对照：
+日志都在插件安装目录，从 SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」点进去会自动打开
+该目录并**选中** `spw-folia.log`。也可以手动到
+`%APPDATA%\Salt Player for Windows\workshop\plugins\spw-folia-<版本>\` 找：
 
-| 日志/现象 | 结论 |
+| 文件 | 内容 |
 | --- | --- |
-| `WebView2 Runtime not found:`（stdout）+ `exited code=3` | 装 WebView2 Runtime |
-| 系统弹 .NET Framework 安装提示 / 辅助进程完全没日志 | 装 .NET Framework 4.8 |
-| `exited code=-2146232576` + 弹「This application could not be started」+ stdout 空 | MSIX 虚拟路径导致 CLR 找不到 `.config`（案例 5），**重装 .NET 无效** |
-| `spawn failed: java.io.IOException: CreateProcess error=…` | 杀软拦截 / 文件缺失 / 目录不可写 |
-| `host helper not found` 或 `web bundle not found` | 安装不完整（native/ 或 web/ 缺文件） |
-| `bundle has no index.html` + `exited code=2` | web 目录损坏，重装插件 |
-| `unsupported SPW version …; hook not installed` | SPW 不是 1.19.0 |
-| `CLASS_TRANSFORM not granted; hook not installed` | 未授予 class-transform 权限 |
-| `webview process-failed kind=… reason=Unexpected` + `exited code=1` | WebView2 浏览器进程意外退出（已知偶发，见 §5） |
+| `spw-folia.log` | 插件侧：启动、hook、spawn 命令行、**`host process exited code=N`**、`host closed reason=…`、开关变化 |
+| `spw-folia-host.stdout.log` | 辅助进程协议日志：`webview-ready`、`webview2 runtime=…`、`webview process-failed`、`fps` |
+| `spw-folia-host.stderr.log` | 辅助进程 stderr，正常应为 0 字节 |
+| `%APPDATA%\Salt Player for Windows\logs.txt` | SPW 宿主侧：插件加载失败、权限异常 |
+
+需要更多细节时，先在「配置 → **诊断与日志** → 详细日志」打开开关，下次打开 Folia 会多出导航与
+`verbose` 级别的行。开关状态在 `diagnostics.json` 里。
+
+### 4.1 日志关键字对照
+
+| 日志 / 现象 | 结论与操作 |
+| --- | --- |
+| `WebView2 Runtime not found:` + `exited code=3` | 装 WebView2 Runtime |
+| 系统弹 .NET 安装提示 / 辅助进程完全没有日志 | 装 .NET Framework 4.8 |
+| `exited code=-2146232576` + 弹「This application could not be started」+ stdout 空 | MSIX 虚拟路径（§3.3），重装 .NET 无效 |
+| `spawn failed: … CreateProcess error=…` | 杀软拦截 / 文件缺失 / 目录不可写 |
+| `host helper not found` / `web bundle not found` | 安装不完整（`native/` 或 `web/` 缺文件），重装 |
+| `bundle has no index.html` + `exited code=2` | `web/` 损坏，重装插件 |
+| `unsupported SPW version …; hook not installed` | SPW 版本过低（H6） |
+| `CLASS_TRANSFORM not granted; hook not installed` | 未授予 class-transform 权限（H8） |
+| `webview process-failed kind=…` + `exited code=1` | WebView2 浏览器进程意外退出（§3.5） |
 | `helper unavailable, opening Swing fallback window` | 打开的是黑色占位窗，不是真 Folia |
-| `cover load failed: … PluginPermissionDeniedException: … 'library-read'` | 缺 library-read 权限（非致命） |
-| `KEY_BINDINGS not granted; transparency shortcuts not registered`（v0.4.0） | 缺 key-bindings 权限：快捷键不注册，其余功能正常（在插件权限页补授后重启 SPW） |
+| `cover load failed: … PluginPermissionDeniedException … 'library-read'` | 缺 library-read 权限（非致命） |
+| `KEY_BINDINGS not granted; transparency shortcuts not registered` | 缺 key-bindings 权限：快捷键不注册，其余正常 |
 
-> 注意：当前版本的插件**只把退出码写进日志**，没有把 exit 3 翻译成「请安装 WebView2 Runtime」的
-> 提示（`docs/host-app.md` §2 原本要求这样做）。所以用户侧最直观的反馈是「窗口闪一下」，支持时需要
-> 让用户把上述三个日志发来。
+插件会把退出码翻译成中文原因写进日志，所以先搜 `host process exited` 通常就够定位了；
+完整对照见 §3.9。
 
----
+## 5. 手工自检（插件打不开时用）
 
-## 4. 环境自检（让用户跑一条 PowerShell）
-
-> **v0.4.7 起插件会自己跑完这一节**（v0.4.7 **未发布**，所以线上 v0.4.6 用户仍需手工跑下面的命令）。
-> SPW「模组管理 → 配置 → 支持与反馈 → 出现问题」逐项检查并把依据写进日志与反馈 issue；本节的
-> PowerShell 只在插件打不开、需要人工复核时使用。
-> 自检判定规则见 [`logging-and-diagnostics.md` §3](logging-and-diagnostics.md)。
+「出现问题」按钮需要插件能加载。如果连它都用不了，用一段 PowerShell 自己查：
 
 ```powershell
-# 1) WebView2 Runtime（三个位置任一 pv 非空/非 0.0.0.0 即可）
-Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue |
-  Select-Object @{n='WebView2';e={$_.pv}}
-Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue |
-  Select-Object @{n='WebView2';e={$_.pv}}
+# 1) WebView2 Runtime（下面三个位置的 pv 任一非空/非 0.0.0.0 即可）
+Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue
+Get-ItemProperty 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -EA SilentlyContinue
 
-# 2) .NET Framework 4.x Release（>=528040 即 4.8；533320/533325/533509 为 4.8.1）
+# 2) .NET Framework（>= 528040 即 4.8；533320/533325/533509 是 4.8.1）
 (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full').Release
 
-# 3) 架构与系统
-[Environment]::Is64BitOperatingSystem; [Environment]::OSVersion.Version
+# 3) 架构、构建号、UBR
+[Environment]::Is64BitOperatingSystem
+(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber
+(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR
 ```
 
-**判定 H1（Windows build）请用注册表，不要用 JVM 属性。** `System.getProperty("os.version")` 在
-Windows 上恒为 `10.0`（HotSpot 不提供构建号），拿它判 1809+ 必然误判——v0.4.6 及更早版本正是
-栽在这里，见下一节。正确来源是：
-
-```powershell
-(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber   # 26300
-(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR                   # 9711
-```
-
-用户侧三步修复：
-
-1. **装 WebView2 Runtime**：<https://developer.microsoft.com/microsoft-edge/webview2/consumer/>
-   （Win11 自带，一般不用装；Win10/精简版系统/企业离线机是重灾区）。
-2. **装 .NET Framework 4.8**：<https://dotnet.microsoft.com/download/dotnet-framework/net48>（Win10 1903+ 已内置）。
-3. **升级到 v0.2.0**：v0.1.9 及更早在「透明背景 + 鼠标穿透」下滚轮向下**必定**崩溃；v0.1.10 在
-   WebView2 155+ 上打开 Folia 会因 stdin 泵跨线程访问在 2–3 秒内闪退（见 §5）。
-4. 仍然闪退：收集 §3 的三个日志 + `logs.txt`。
-
----
-
-## 5. 已知真实崩溃案例
-
-1. **v0.1.9 滚轮向下必崩（已修）** — 透明页 + 鼠标穿透时把滚轮消息转给页面，`IntPtr.ToInt32()`
-   在 x64 上对 `0xFF880000`（滚轮向下 delta=-120）抛 `OverflowException: 算术运算导致溢出`，
-   异常从 `WndProc` 逃出 → WinForms 弹「Microsoft .NET Framework」未处理异常对话框 → 辅助进程退出。
-   v0.1.10 改为 `unchecked((int)…ToInt64())` 并注册 `Application.ThreadException` /
-   `AppDomain.UnhandledException` 输出协议错误行。**仍在 0.1.9 及更早的用户是最可能的「有些用户会闪退」来源。**
-   详见 `docs/archive/verification-v0.1.10.md`、`docs/archive/release-notes-v0.1.10.md`。
-2. **v0.1.10 在 WebView2 155+ 的 stdin 泵崩溃（已修）** — 打开 Folia 后歌词重放时，插件 stdin 线程
-   直接读 `webView.CoreWebView2` 抛 `InvalidOperationException: CoreWebView2 can only be accessed from
-   the UI thread.`，读取线程终止 → 2 秒后窗口自关；同一故障还会让插件管道写阻塞、拖死 SPW UI 线程
-   （「未响应」）。旧版 WebView2（如参考机 150.0.4078.83）对跨线程属性读取更宽容，所以只在 155+
-   用户机器上必现。v0.1.11 改为线程封送 + 专职写线程，v0.2.0 一并发布；详见
-   `docs/archive/verification-v0.1.11.md`、`docs/archive/release-notes-v0.2.0.md`。
-3. **WebView2 浏览器进程偶发退出（未修）** — `BrowserProcessExited reason=Unexpected`，
-   症状为窗口用着用着消失、日志出现 `webview process-failed` + `closed reason=error` + exit 1。
-   发布产物上出现过 1 次、开发期另 1 次，15 分钟压测未复现；当前没有自动重试（属后续任务），
-   用户侧处理是重新打开一次。
-4. **环境缺失类**（不是代码 bug）：缺 WebView2 Runtime → exit 3；缺 .NET Framework 4.8 →
-   .NET 安装提示后退出；这两个占「打不开/闪退」报告的绝大多数。
-5. **MSIX 虚拟路径导致 CLR 激活失败（已修，v0.2.1 起）** — **只在 Microsoft Store / MSIX 渠道出现**。   症状：点 Folia 后系统弹「`spw-folia-host.exe` - This application could not be started」，
-   插件日志 `host process exited code=-2146232576`，`spw-folia-host.stdout.log` 为 0 字节；
-   但**手动双击同一个 exe 却完全正常**，于是很容易被误判成「.NET Framework 坏了」而反复重装/修复 .NET（无效）。
-
-   根因（CLR 激活日志 `COMPLUS_CLRLoadLogDir` 实测）：
-
-   ```
-   Parsing config file: C:\Users\<u>\AppData\Roaming\Salt Player for Windows\...\native\spw-folia-host.exe.config
-   Config File (Open). Result:80070003        ← ERROR_PATH_NOT_FOUND
-   ERROR: Unable to find a version of the runtime to use.
-   ```
-
-   Store 版 SPW 是 MSIX 打包应用，插件数据真实存放在
-   `%LOCALAPPDATA%\Packages\Sakawish.SaltPlayerforWindows_<hash>\LocalCache\Roaming\...`，
-   而传给子进程的是**虚拟路径** `C:\Users\<u>\AppData\Roaming\Salt Player for Windows\...`（只对带包身份的
-   进程存在，真实磁盘上不存在）。.NET 加载器（mscoree）是用原生 NT 路径打开 `<exe>.config` 的，
-   **不走 MSIX 文件系统重定向** → 找不到目录 → 判定没有可用运行时 → `0x80131700`。
-
-   修复：插件在 spawn 前把 exe / web / settings / cwd 全部解析成物理路径
-   （`FoliaHostBridge.physicalFile()`：`toRealPath()` + `Packages\*\LocalCache\Roaming` 兜底映射）。
-
-   用户侧临时绕过（不想升级插件时）：建一个目录联接让虚拟路径在真实磁盘上可见——
-
-   ```powershell
-   New-Item -ItemType Junction `
-     -Path "$env:APPDATA\Salt Player for Windows" `
-     -Target "$env:LOCALAPPDATA\Packages\Sakawish.SaltPlayerforWindows_q65q631pyh094\LocalCache\Roaming\Salt Player for Windows"
-   ```
-
-6. **「出现问题」自检在健康机器上误报缺 Windows（已修，v0.4.7 起——注意 v0.4.7 未发布，v0.4.6 及更早仍会误报）** — 症状：点 SPW「模组管理 →
-   配置 → 支持与反馈 → 出现问题」，在完全正常的 Windows 11 上弹红条
-   「缺少运行环境：Windows 10 x64（1809+）（Windows 11 10.0 amd64）→ 需要 64 位 Windows 10 1809
-   (17763) 或更新版本」。
-
-   根因：自检从 `System.getProperty("os.version")` 取构建号，而 **HotSpot 在 Windows 上把它报成
-   `"10.0"`**——两段、没有构建号（构建号在注册表 `CurrentVersion\CurrentBuildNumber`）。旧代码用
-   `Regex("(\\d+)\\.(\\d+)\\.(\\d+)")` 解析，永远不命中 → `build = null` →
-   `is64 && build != null && build >= 17763` 恒为 false。**这个检查在任何机器上都不可能通过**，
-   而且「读不到」被当成了「版本太低」。
-
-   同类的错误还有三处：`.NET Release` 无条件按十六进制重新解析（把十进制 `528040` 变成 `0x528040`）；
-   `reg.exe` 失败与「值不存在」不可区分（都返回 null）；`isPermissionGranted` 是接口默认方法恒返回
-   `false`，于是「宿主不支持查询」被报成「缺少权限」。
-
-   修复：判定改成四态（`PASS` / `FAIL` / `UNKNOWN` / `ADVISORY`），**只有证据能产生 FAIL，读不到只
-   产生 UNKNOWN**；Windows build 改从注册表读；每一项都带 `evidence`（值 + 来源 + 原始输出 + 失败
-   原因）写进日志与反馈 issue。回归测试见 `spw-folia/src/test/kotlin/dev/spw/folia/FoliaDiagnosticsTest.kt`
-   （含 `os.version = "10.0"` 这条真实样本），真机复跑命令 `gradlew runDiagnostics`。
-
----
+> **Windows 构建号只能读注册表。** JVM 的 `System.getProperty("os.version")` 在 Windows 上恒为
+> `"10.0"`（没有构建号），拿它判 1809+ 必然误判——v0.4.6 及更早的自检就栽在这里，见
+> [`logging-and-diagnostics.md`](logging-and-diagnostics.md) §3。
 
 ## 6. 明确不需要的东西
 
-.NET SDK / JDK / Node / pnpm / Python（仅源码构建需要，见 README「从源码构建」）· VC++ 运行库 ·
-管理员权限 · 网络连接 · 单独安装的浏览器（Edge Stable **不能**代替 WebView2 Runtime，微软明确禁止生产应用依赖浏览器）·
-Android 模拟器 · Folia 桌面版（bundle 已内置 Folia 0.7.22 网页产物）。
+.NET SDK / JDK / Node / pnpm / Python（只有源码构建才要）、VC++ 运行库、管理员权限、网络连接、
+单独安装的浏览器（Edge Stable **不能**代替 WebView2 Runtime）、Android 模拟器、Folia 桌面版
+（网页产物已内置）。
 
----
+## 7. 相关文档
 
-## 7. 证据与相关文档
-
-* 宿主程序与退出码：`docs/host-app.md` §2，`poc/webview/host/Program.cs:444/452/489`、`poc/webview/host/HostForm.cs:798/824/887/939`
-* WebView2 调用起点与失败分支：`poc/webview/host/HostForm.cs:790-890`、`OnLoad` 在 `:732-752`
-* 插件侧 spawn / 退出码消费：`spw-folia/src/main/kotlin/dev/spw/folia/FoliaHostBridge.kt:107-152`、`:266-278`
-* 版本与权限 gate：`spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt:100-111`、`:348`
-* 打包内容与体积：`docs/release.md`、`packaging/size-report.json`
-* 许可与不随包分发的组件：`packaging/licenses/THIRD-PARTY.md`
-* 微软官方：WebView2 分发（Runtime 检测/安装、不能依赖 Edge Stable）、WebView2 版本（实例化最低 86.0.616.0）、
-  .NET Framework 部署指南（4.8 内置于 Win10 1903+）、`supportedRuntime` 元素（sku 高于已装版本时提示安装）
+- 自检四态判定、日志字段、门禁怎么跑：[`logging-and-diagnostics.md`](logging-and-diagnostics.md)
+- 宿主的命令行参数、退出码与窗口行为：[`host-app.md`](host-app.md)
+- 打包内容与体积：[`release.md`](release.md)
+- 许可与不随包分发的组件：[`licensing.md`](licensing.md)、[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)

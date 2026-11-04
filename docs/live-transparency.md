@@ -1,258 +1,175 @@
-# 播放页透明背景 — 宿主窗口透明机制（v0.1.7 契约）
+# 播放页透明窗口（色键机制）
 
-> **发布状态**：最后**发布**版本是 **v0.4.6**（2026-10-30）。本文里「v0.4.9 起」的键色改动
-> （纯洋红 → 近黑，见 §4.9）在 v0.4.6 上**尚未生效**；v0.4.6.1 / v0.4.7 / v0.4.8 / v0.4.9 / v0.4.10
-> / v0.4.11 均未发布。
+> 插件 v0.4.17。本文说明「播放页透明背景」在宿主窗口里**怎么实现、怎么用、会失效在哪**。
+> 页面侧控件与设置链路见 [`docs/settings-ui-impl.md`](settings-ui-impl.md)；宿主整体见
+> [`docs/host-app.md`](host-app.md)。
 
-日期：2026-10-19
-范围：`poc/settings-ui/src/chrome/PlayerBackgroundControl.tsx`（新控件）、`poc/settings-ui/src/model/settings.ts`、
-`poc/settings-ui/src/publisher/config.ts`、`poc/settings-ui/src/App.tsx`、`poc/settings-ui/src/app.css`、
-`poc/webview/host/HostForm.cs`、`poc/webview/host/Program.cs`。跨仓依据：Folia 的
-`transparentPlayerBackground`（`work/folia/folia-major-main/src/stores/usePlayerChromeSettingsStore`）与
-`ObsBrowserSourceApp.tsx` / `VisualizerBackgroundRenderer.tsx`。
-
-结论先说：**透明由两层组成——页面侧 `config.background.transparent=true`（Folia 渲染器自己不再画背景、文档底色本来就是透明），
-宿主侧把 WinForms 窗口做成色键透明（`BackColor` = 键色 + `TransparencyKey` + `WebView2.DefaultBackgroundColor = Color.Transparent`）。**
-色键透明是 Windows 上 windowed WebView2 唯一不需要改写为 composition hosting 的真实桌面透出方案（`repro/transparency-probe.cs` 已证）。
+透明由**两层**组成：页面侧 `config.background.transparent=true`（Folia 渲染器不再画背景，文档底色本来就是
+透明），宿主侧把 WinForms 窗口做成**色键透明**（`BackColor` = 键色 + `LWA_COLORKEY` +
+`WebView2.DefaultBackgroundColor = Color.Transparent`）。色键是 Windows 上 windowed WebView2 唯一不需要改写为
+composition hosting 的真实桌面透出方案。
 
 ---
 
-## 1. 需求与位置
+## 1. 开启方式
 
-用户参考图（m00228 / m00229）：图 1 是 SPW 播放页「控制」面板里的「播放页透明背景」行 + 开关；
-图 2 红框在 Folia 全屏页**右下角**，框住那个圆形金色描边的「调音台」按钮。因此本版把开关放进那个圆钮弹出的面板里：
+| 入口 | 位置 | 说明 |
+|---|---|---|
+| 页面开关 | 播放页右下角圆钮 → 面板「播放页透明背景」 | 同面板还有「鼠标穿透（操作桌面）」与「显示播放条」；透明关闭时穿透行不出现 |
+| SPW 快捷键 | 「快捷键管理」两条动作：`播放页透明背景：开 / 关`（默认 **Ctrl+Alt+G**）、`播放页透明背景 + 鼠标穿透：开 / 关`（默认 **Ctrl+Alt+Shift+G**） | 只在改设置树 + 推 `{"t":"settings"}`，真正套色键的是宿主；要在 Folia 窗口聚焦时也生效，需在 SPW 里打开该动作的「全局」开关 |
+| 宿主全局热键 | **Ctrl+Alt+B**（备选 Ctrl+Alt+Y → Ctrl+Alt+P → Ctrl+Alt+Shift+B） | **双向切换**透明，是色键窗口吞掉鼠标后的键盘逃生口 |
 
-| 元素 | 位置（CSS px，视口 1776×1110 时） | 说明 |
-| --- | --- | --- |
-| 圆形按钮 `.spw-chrome-btn--player` | `right:32px; bottom:56px`，40×40 | 图标 lucide `SlidersHorizontal`，深色底 + 暖金色描边/光圈；`bottom:56px` 是为避开全屏时自动隐藏的任务栏触发条 |
-| 面板 `.spw-player-bg-panel` | `right:32px; bottom:108px`，宽 300 | 深色圆角卡；一行标题「播放页透明背景」+ Folia 现成 hint（`options.transparentPlayerBackgroundDesc`）+ 开关；透明开启时多一行热键提示 |
-| 开关 `.spw-switch` | 40×24，knob 18px | off 灰轨 / on 金色 `#d8b072` |
+- 圆钮 `.spw-chrome-btn--player` 在 `right:32px; bottom:56px`（40×40，避开全屏时自动隐藏的任务栏触发条）；
+  面板 `.spw-player-bg-panel` 在 `right:32px; bottom:108px`（宽 300）。透明时两个 chrome（圆钮 + 右上角齿轮）
+  **常驻**，不参与 2.5 s 闲置淡出。
+- 设置链路：开关 → `setTransparentPlayerBackground()` → `SettingsSnapshot.transparentPlayerBackground` →
+  `ConfigPublisher` 推给宿主 → 宿主立刻套色键（**不必等插件回环**），同时转发插件持久化；页面从同一份设置
+  树重建 `background.transparent`。宿主在构造函数（`--dev-settings` 之后）、stdin `settings`、页面
+  `{"type":"settings"}` 三处调 `ApplyTransparencyFromSettings()`，所以上次开着透明的话窗口**第一帧就是透明的**。
+- 退出：两条通道最终都走 `ExitTransparentMode(source)` → `SetTransparency(false)` →
+  `ExecuteScriptAsync("window.__spwFoliaSetTransparent(false)")`，把页面开关与持久化一起拉回 `false`，并把
+  `mousePassthrough` 复位为 `false`（避免下次进透明还停在穿透态）。
 
-齿轮（`.spw-chrome-btn`）保持 v0.1.1 位置（右上角 24/24）。透明开启时两个 chrome 都常驻（见 §4）。
+---
 
-## 2. 设置链路（无需改插件）
-
-1. 开关 → `useSettingsStore.setTransparentPlayerBackground(bool)`；
-2. `snapshotFromState()` 把它写进 `SettingsSnapshot.transparentPlayerBackground`，由 `ConfigPublisher` 推送 → 宿主 `settings` 消息 → 插件 `FoliaSettingsStore` 整树持久化（插件不解释 JSON，新字段零改动，`applySnapshot` 的 `clean()` 保证旧树缺键时回落 false）；
-3. `buildBackgroundConfig()` 输出 `background.transparent`，页面里 `VisualizerBackgroundRenderer` 见到 `transparent` 直接 `return null`，`ObsBrowserSourceApp` 的根 div 底色也变成 `transparent`；
-4. 宿主同时**自己**从 settings JSON 里读 `transparentPlayerBackground`（`JsonUtil.ExtractRawValue`），这样开关一动窗口立刻变透明，不必等插件回环。
-
-启动顺序：插件启动宿主时把持久化的 settings 树写在 stdin 的 `settings` 消息里；宿主解析参数后立即应用 → 上次开着透明的话，窗口从第一帧就是透明的（验证见 `docs/archive/verification-v0.1.7.md`）。
-
-## 3. 宿主实现（`HostForm.cs`）
+## 2. 宿主实现（`poc/webview/host/HostForm.cs`）
 
 ```csharp
-// v0.4.9: near-black, not pure magenta — see §4.9 for why the key colour is what tints alpha pixels.
-static readonly Color TransparencyKeyColor = Color.FromArgb(1, 0, 1);
+static readonly Color TransparencyKeyColor = Color.FromArgb(1, 0, 1);   // 近黑，不是纯黑也不是洋红
+
 // on
-TransparencyKey = Color.Empty;          // 先清再设，避免黑底残帧
-BackColor       = TransparencyKeyColor;
-TransparencyKey = TransparencyKeyColor;
+SetWindowLongPtr(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED);
+SetLayeredWindowAttributes(hwnd, ColorTranslator.ToWin32(TransparencyKeyColor), 255, LWA_COLORKEY);
+BackColor = TransparencyKeyColor;
 webView.DefaultBackgroundColor = Color.Transparent;
 // off
 BackColor = Color.Black;
-TransparencyKey = Color.Empty;
+SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 webView.DefaultBackgroundColor = Color.Black;
 ```
 
-- `ApplyTransparencyFromSettings()` — 在构造函数（`--dev-settings` 之后）、stdin `settings`、页面 `{"type":"settings"}` 三处调用；`--no-transparency` 强制关闭（诊断/回归用）；
-  `--no-colour-key` 只关色键、保留「不透明窗口」形态（调试截图用，见 §4.9）。
-- 日志：`transparency mode=on|off`；键被调试开关关掉时追加 `colour-key=off reason=debug-flag`。
-- 窗口仍是原来的 borderless topmost 全屏 Form，几何/DPI/鼠标 idle 逻辑不变。
+- 键色**直接走分层窗口 API**（不是 WinForms 的 `TransparencyKey` 属性）：后者切一次会 `UpdateStyles()`、可能重建
+  窗口句柄，新句柄在第一帧会先把 `BackColor` 画出来——那就是用户见过的「开窗粉色一闪」。开的时候先装键再
+  设 `BackColor`，关的时候先刷黑再撤键，任何一帧都不会把键色当不透明表面呈现。
+- 键色选 `rgb(1,0,1)`：`LWA_COLORKEY` 只抠**精确等于**键色的像素，而 `0 < alpha < 1` 的页面像素会被合成到
+  `BackColor` 上、不再是精确匹配，于是留在屏幕上并被键色染色。键色唯一的要求是「页面永不绘制它」，所以换成
+  近黑之后同样这些半透明像素只是被压暗成中性灰，而不是粉雾（早期洋红 `rgb(255,0,255)` 会把 50% 白字形边缘
+  变成 `rgb(255,128,255)`）。不选纯黑是因为 `Color.Black` 同时是不透明会话的 `BackColor` 与页面基色；
+  `rgb(1,0,1)` 绿通道为 0、明度极低，Folia 调色板混不出来。
+- 状态机：`transparencyActive`（窗口实际状态）与 `transparencyTarget`（页面开关的意图）**必须分开**且都由
+  `SetTransparency()` 收尾时对齐；`ApplyTransparencyFromSettings()` 只在 `on != transparencyActive` 时才真正切
+  窗口。用 `on == transparencyTarget` 提前 return 会导致「热键退出后页面开关还亮着，再点开关无效」。
+- 窗口仍是 borderless topmost 全屏 Form，几何/DPI/鼠标 idle 逻辑不变；ESC 仍可关窗。
 
-## 4. 色键合成的三个副作用与对策
+### 2.1 鼠标：`TransparencyInputCatcher` + 窗口区域
 
-1. **鼠标完全穿透**（真实 host 与最小探针都验证过：点击会落到下面的窗口，连金色圆钮的不透明像素也一样——色键窗口里 WebView2 的内容走独立合成面，宿主窗口自身整块是键色，所以整窗都不可点）。
-   → v0.1.8 用「不可见输入捕获窗口」把鼠标补回来：`TransparencyInputCatcher : Form`，`WS_EX_LAYERED + WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW`，`SetLayeredWindowAttributes(alpha = 1/255)`（肉眼不可见但仍参与命中测试），几何跟随主窗口（`ApplyInputCatcherBounds()` + 每 tick `SyncInputCatcherBounds()`，实测 3200×2000 全屏对齐）。
-   `WndProc` 捕获 `WM_MOUSEMOVE / WM_LBUTTONDOWN / WM_LBUTTONUP / WM_RBUTTONDOWN / WM_RBUTTONUP / WM_MOUSEWHEEL`，
-   把捕获窗口客户坐标换成屏幕坐标后再 `ScreenToClient(WebView2 输入子窗口)`，`SendMessage` 投递给
-   `Chrome_WidgetWin_1`（退路 `Chrome_RenderWidgetHostHWND`），并吞掉原消息。→ 透明模式下页面内的
-   圆钮、面板、开关、齿轮全部可点（真机验证：透明中点击开关 → `transparency mode=off` + catcher 隐藏）。
-   探针先验证过这条链路可行（`poc/webview/host/repro/click-post-probe.cs`：向 `Chrome_WidgetWin_1` 投递
-   合成消息能让页内 mousedown 计数 0→1→2；而 `WH_MOUSE_LL` 钩子在本机根本不触发，所以没有走钩子路线）。
-   捕获窗口会吃掉鼠标，因此 v0.1.8 里透明窗口无法直接操作桌面。
-   **v0.1.9 的改法**：页面把自己的「热区」报给宿主（见 §4.4），捕获窗口只在热区里转发鼠标，
-   热区之外的点击（且「鼠标穿透」开关打开时）会先隐藏自己、用 `mouse_event` 合成一次真实左键，
-   220 ms 后重新显示 —— 于是同一个透明窗口既能点 Folia 的控件，又能点桌面/下层窗口。
-2. **`backdrop-filter` 图层在色键合成下不绘制**（chrome 和面板的 `backdrop-filter: blur()` 会让它们整块消失，但 `CapturePreviewAsync` 抓页面表面时它们又都在——这组"表面有、屏幕无"的对照把原因锁定在合成层）。
-   → 透明时给两个 chrome 加 `data-flat='true'`，CSS 里 `backdrop-filter: none`（`.spw-chrome-btn[data-flat='true']`、`.spw-player-bg[data-flat='true'] …`）。视觉上少一层模糊，可读性不受影响。
-3. **逃生通道：热键 + 页面开关本身**（v0.1.9 起不再有左下角 chip）
-   - **全局热键（双向切换）**：`RegisterHotKey` 链 **Ctrl+Alt+B** → Ctrl+Alt+Y → Ctrl+Alt+P → Ctrl+Alt+Shift+B
-     （本机 Ctrl+Alt+T 已被别的程序占用，所以 B 优先）；启动时注册一次、不再注销，按一下在
-     「透明 ↔ 不透明」之间切换（`EnterTransparentMode` / `ExitTransparentMode`）；日志
-     `transparency hotkey=registered mods=0x3 vk=0x42` / `transparency enter source=hotkey` /
-     `transparency exit source=hotkey` / `hotkey=failed`。
-   - **SPW 快捷键管理（v0.4.0）**：插件向 `keyBindingManager` 注册两条动作 ——
-     `播放页透明背景：开 / 关`（默认 Ctrl+Alt+G）与 `播放页透明背景 + 鼠标穿透：开 / 关`
-     （默认 Ctrl+Alt+Shift+G）。按下后插件只改设置树并推一条 `{"t":"settings"}` 给宿主，宿主走
-     同一条 `ApplyTransparencyFromSettings()` 套色键、再把设置回发页面；样式不支持透明（`monet`、
-     浅色主题的 `lumiere`）时由页面拒绝并回退，插件随后提示「当前歌词样式不支持播放页透明背景」。
-     默认键位避开了上面的宿主热键链与本机已被占用的 Ctrl+Alt+T；要在 Folia 窗口聚焦时也生效，
-     需在 SPW 里打开该动作的「全局」开关。
-   - **页面里的两个开关**：右下角圆钮 → 面板里的「播放页透明背景」开关；有了热区转发，透明状态下它们
-     永远可点，所以不需要额外的浮标窗口（v0.1.7/v0.1.8 的 `TransparencyBadge` chip 已在 v0.1.9 删除）。
-   - 两条通道都走 `ExitTransparentMode(source)`：log → `SetTransparency(false)` →
-     `ExecuteScriptAsync("window.__spwFoliaSetTransparent(false)")`；页面开关随 settings 回环持久化成 `false`。
-     退出透明时宿主与页面都会把 `mousePassthrough` 复位为 `false`（`ApplyTransparencyFromSettings()` 里
-     `if (!on) passthrough = false;`，页面 `App.tsx` 里同样有 effect），避免下次进透明还在穿透态。
-   - **状态机要点**：`transparencyActive`（窗口实际状态）与 `transparencyTarget`（页面开关的意图）必须
-     分开且都由 `SetTransparency()` 收尾时对齐；`ApplyTransparencyFromSettings()` 只在
-     `on != transparencyActive` 时才真正切窗口。早期版本用 `on == transparencyTarget` 提前 return，
-     导致「热键退出后页面开关还亮着，再点开关无效」——v0.1.7 发布前已修。
+色键窗口**整块不可点**——WebView2 内容走独立合成面，宿主窗口自身整片是键色，点击会落到下面的窗口（连金色
+圆钮的不透明像素也一样）。补回来的办法是一个不可见的输入捕获窗口：
 
-## 4.4 v0.1.9：鼠标穿透开关与热区（hitbox）
+- `TransparencyInputCatcher : Form`，`WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，
+  `SetLayeredWindowAttributes(alpha = 1/255)`（肉眼不可见但仍参与命中测试）。几何跟随主窗口
+  （`ApplyInputCatcherBounds()` + 每个 tick `SyncInputCatcherBounds()`）。
+- **命中测试就是窗口区域**：页面把自己的交互矩形报给宿主（`{"type":"hitbox", vw, vh, rects:[{x,y,w,h}]}`，
+  CSS 像素），宿主按 `ClientSize / hitViewport` 换算成窗口像素、四周放大 ±4 CSS px 容差，`CreateRectRgn` +
+  `CombineRgn(RGN_OR)` 后 `SetWindowRgn`。区域之外的输入在 OS 命中测试层**直接穿给下层窗口**——点击、右键、
+  滚轮、悬停、拖拽全部真实穿透，没有合成输入（提权窗口/反作弊场景同样可用）。
+- 区域内到达的消息由 `WndProc` 无条件转发：把客户坐标换屏幕坐标后 `ScreenToClient(WebView2 输入子窗口)`，
+  `SendMessage` 投给 `Chrome_WidgetWin_1`（退路 `Chrome_RenderWidgetHostHWND`）。滚轮例外：
+  `WM_MOUSEWHEEL` 的 `lParam` 已是屏幕坐标、delta 在 `WPARAM` 里，原样投递。
+- **fail-open**：`mousePassthrough` 关闭、页面未上报矩形或 viewport 非法时区域置空（整窗可点）——
+  宁可多点到页面，也不吞掉用户的点击。
+- **拖拽连续性**：热区内按下任一鼠标键即把区域临时扩展为整窗（`catcherDragActive`），全部按键抬起后恢复；
+  若 button-up 被 WebView2 吃掉，下一次移动用 `GetAsyncKeyState` 自愈，区域不会永久保持整窗。
+- 区域重建时机：hitbox 更新、bounds 变化、穿透开关、句柄重建（`OnHandleCreated`）。
+- **参数窄化陷阱**：x64 .NET Framework 上 `IntPtr.ToInt32()` 是**带溢出检查**的窄化转换，而 Win32 把消息参数
+  零扩展投递——`WM_MOUSEWHEEL` 滚轮向下时低 dword 的 bit31 为 1，`ToInt32()` 会抛 `OverflowException` 直接弹
+  「应用程序中发生了未经处理的异常」。参数一律走 `unchecked((int)m.WParam.ToInt64())` /
+  `unchecked((int)m.LParam.ToInt64())`，`MakeLParam` 两个半字都 `& 0xFFFF`。
 
-- 设置树新增 `mousePassthrough`（默认 `false`，与 `transparentPlayerBackground` 一起持久化）。
-  它只出现在透明开启后的面板里（第二行「鼠标穿透（操作桌面）」），关掉透明时会自动复位。
-- **页面 → 宿主**：`poc/settings-ui/src/bridge.ts` 的 `reportHitRegions()` 发送
-  `{"type":"hitbox","vw":innerWidth,"vh":innerHeight,"rects":[{x,y,w,h},…]}`；`App.tsx` 收集
-  `[data-spw-chrome="settings"]`（齿轮）、`[data-spw-chrome="player-background"]`（金色圆钮）、
-  `[data-spw-chrome="player-background-panel"][data-open="true"]`（面板）、
-  `[data-spw-settings-overlay="true"]`（设置整页），立即发一次 + 120 ms 后再发一次 + `resize` 监听，
-  chrome/面板/设置页状态变化时重发。
-- **宿主 → 判定**：`HostForm.UpdateHitRegions()` 存下 `vw/vh` 与 CSS 矩形；`IsInteractiveAt(screen)` 把屏幕点
-  换算成客户端点、再按 `ClientSize.Width / hitViewportWidth`（实测 3200/1776 = 1.802）换算成 CSS 坐标，
-  与每个矩形做 ±4 CSS px 容差命中（页面与宿主之间的亚像素/缩放误差都在容差内）。
-- **穿透过桌面**：`TransparencyInputCatcher.FallThrough` → `FallThroughToDesktop()`：隐藏捕获窗口 →
-  `mouse_event(LEFTDOWN|LEFTUP)`（真实输入，不是 `SendMessage`）→ `catcherRestoreAt = now + 220 ms` →
-  `OnTick` 到点再 `ShowInputCatcher()`；日志 `transparency passthrough=click at=x,y`，
-  开关状态日志 `transparency passthrough=on|off rects=N`。
-- **默认行为不变**：`mousePassthrough = false` 时 `IsInteractiveAt()` 直接返回 `true`，捕获窗口照旧整窗转发
-  （v0.1.8 的行为），只有打开穿透后热区之外才会落向桌面。
+### 2.2 chrome 在透明时仍可用的原因
 
-透明时 chrome 常驻（`chromeAlwaysOn = transparentPlayerBackground === true`），并且 ESC 仍可关窗。
+两条独立的补救叠在一起，缺一不可：
 
-## 4.5 v0.1.10：消息参数窄化崩溃修复
+1. **输入**：捕获窗口的窗口区域把热区内的鼠标重新送回 WebView2（§2.1）。
+2. **绘制**：`backdrop-filter` 图层在色键合成下**不绘制**（页面表面有、屏幕上没有）。透明时给 chrome 与面板加
+   `data-flat='true'`，CSS 里 `backdrop-filter: none`（`.spw-chrome-btn[data-flat='true']`、
+   `.spw-player-bg[data-flat='true'] …`、播放条同类规则）。视觉上少一层模糊，可读性不受影响。
 
-- **症状**：v0.1.9 在透明模式下（捕获窗口存在时）**滚轮向下**会弹出
-  「Microsoft .NET Framework — 应用程序中发生了未经处理的异常 … 算术运算导致溢出。」然后辅助进程退出，
-  而 `spw-folia.log` / 宿主 stdout 里没有任何 error 行。
-- **根因**：`TransparencyInputCatcher.Forward()` 用 `m.WParam.ToInt32()` / `m.LParam.ToInt32()` 读参数。
-  x64 .NET Framework 上 `IntPtr.ToInt32()` 是**带溢出检查**的窄化转换，而 Win32 把消息参数零扩展投递：
-  `WM_MOUSEWHEEL` 的 `WPARAM` 低字是 delta，滚轮向下为 `-120`（`0xFF88`），低 dword 即 `0xFF88xxxx`
-  （bit31 = 1），于是 `ToInt32()` 抛 `OverflowException`。滚轮向上 `+120` 不触发。
-- **修复**：参数统一走 `unchecked((int)m.WParam.ToInt64())` / `unchecked((int)m.LParam.ToInt64())`
-  （`HostForm.cs:Forward`，热键 `WM_HOTKEY` 判断同样处理）。同时修正滚轮分支的字段混淆——光标坐标取自
-  `LPARAM`（已是屏幕坐标，无需 `PointToScreen`），delta/keyState 在 `WPARAM` 里，转发时 `WPARAM`/`LPARAM`
-  原样投递；`MakeLParam()` 两个半字都做 `& 0xFFFF`。
-- **可观测性**：`Program.Main` 里注册 `Application.SetUnhandledExceptionMode(CatchException)` +
-  `Application.ThreadException` + `AppDomain.CurrentDomain.UnhandledException`，异常改为
-  `<level=error>` 协议行（`ui-thread` / `unhandled` stage），随后进程照常结束由插件重启。
-- **验证**：反射级 15/15；真机级旧二进制必现 `Microsoft .NET Framework` 弹窗、新二进制 0 弹窗；
-  详见 `docs/archive/verification-v0.1.10.md`。
+页面侧上报的热区（`App.tsx` 的 `reportHitRegions()`）覆盖：齿轮 `[data-spw-chrome="settings"]`、金色圆钮
+`[data-spw-chrome="player-background"]`、打开的面板 `[data-spw-chrome="player-background-panel"][data-open="true"]`、
+「出现问题」按钮及其面板、以及整页设置覆盖层 `[data-spw-settings-overlay="true"]`。上报时机是立即一次 +
+120 ms 后一次 + `resize` 监听 + 状态变化时重发。
 
-## 4.6 v0.2.0：透明窗口的样式兼容层
+---
 
-色键透明的物理限制是：页面画出的每个 alpha < 1 的像素都会被混上键色显示。v0.2.0 起键色是近黑
-`rgb(1,0,1)`（v0.4.9 前是纯洋红，混出来的粉雾见 §4.9），所以现在这类像素只是一层暗压而不是粉雾。Folia 的
-14 种歌词/可视化样式里，有的在去掉背景层后只剩不透明字形/线稿（可直接用），有的会自带大面积半透明底板
-（必须临时精简）。v0.2.0 在 settings island 里做了一层分类与渲染期覆盖（`transparencyCompat.ts`）：
+## 3. 样式兼容层（`poc/settings-ui/src/model/transparencyCompat.ts`）
 
-| 分类 | 样式 | 处理 |
-| --- | --- | --- |
-| `native`（11） | sonnet、classic、cadenza、partita、fume、tilt、claddagh、cappella、diorama | 原样可用（探针 alpha 覆盖 < 24%） |
-| `tuned`（4） | tempera、lumiere（暗色）、pendolo、still | 透明期间给发布的 `visualizerTunings` 合并覆盖：tempera `{showBlocks:false, postProcessGrain:0, postProcessVignette:0}`、lumiere `{darkField:0, textOnly:true}`、pendolo `{showCenterGradient:false}`；still 用作用域 CSS 隐藏其 radial-gradient 底板（文字保留） |
-| `unsupported`（2） | monet（人像底板是样式本体）、lumiere（**浅色主题**，暗场有 94% alpha 下限） | 选中时自动关闭透明背景并回写设置、面板提示；透明下热键也拒绝开启 |
+色键的物理限制是：页面画出的每个 alpha < 1 的像素都会被混上键色。Folia 的 17 种样式里，有的去掉背景层后只剩
+不透明字形/线稿（可直接用），有的自带大面积半透明底板（必须临时精简）。分类与处置：
+
+| 分类 | 样式 | 处置 |
+|---|---|---|
+| `native` | sonnet、classic、cadenza、partita、fume、tilt、claddagh、cappella、diorama | 原样可用 |
+| `tuned` | tempera、lumiere（暗色）、pendolo、still、hanabi | 透明期间给**发布的** `visualizerTunings` 合并覆盖，见下表 |
+| `unsupported` | monet（人像底板就是样式本体）、lumiere（**浅色主题**，暗场有 94% alpha 下限）、machi、nebbia（整屏 three.js / WebGL 场景，无 tuning 可拆） | 选中即自动关闭透明背景并回写设置、面板提示；透明状态下热键也拒绝开启 |
+
+| 样式 | 透明期间的 tuning 覆盖 |
+|---|---|
+| `tempera` | `showBlocks:false`、`showDecor:false`、`showCornerMarks:false`、`enableTransitions:false`、`postProcessGrain:0`、`postProcessVignette:0`、`postProcessLensDistortion:0`、`layerImageFrequency:0`；**且不发布** `song/songArtist/songAlbum`（`suppressesClosingPoster`：片尾海报由歌曲元数据构建，元数据不发布海报就不建） |
+| `lumiere`（暗色） | `{ darkField: 0, textOnly: true }` |
+| `pendolo` | `{ showCenterGradient: false }` |
+| `hanabi` | `{ sky: 0, collage: 0 }`（两个全幅图层各自的 tuning 开关；不设 `textOnly`，因为那会连烟花与氛围尘一起关掉） |
+| `still` | 无 tuning 开关，用作用域 CSS 隐藏其 radial-gradient 底板：`html[data-spw-transparent='true'] .visualizer-still div[class*='bg-[radial-gradient']`（页面在透明时给根节点写 `data-spw-transparent`） |
 
 覆盖只写进发布的配置（`buildTuningBundle(settings, { transparent })`），**从不写回设置存储**，所以关掉透明后
-用户原来的 tuning 立刻回来。evidence：真实宿主 + 真实 WebView2 的 6 样式探针（3200x2000，色键后洋红像素
-0.0%）与 16 项布尔构建产物回归断言（另加 3 组 tuning 覆盖参数比对）见 `docs/archive/verification-v0.2.0.md` §1；回归脚本
-`poc/webview/server/compat-regression.mjs`。
+用户原来的 tuning 立刻回来。`tempera` 的覆盖由 `temperaSceneFrame.ts` 的 `requiresSceneRebuild` 当成真正的
+场景参数变化处理，切换透明时立刻重建、关掉后立刻还原。
 
-## 4.6b v0.4.2：凝彩（tempera）补全透明覆盖（issue #11）
+---
 
-v0.2.0 的 tempera 覆盖只关了 `showBlocks`（35% 纸雾 + 网点 + `blocks` 构图容器）、`postProcessGrain` 与
-`postProcessVignette`，alpha 探针当时也确实只量到「文字/线框」（`tempera-c` cov8 3.8%）。但真实播放页还有
-**几个不读 `showBlocks` 的图层**，它们在色键窗口下就是 issue #11 截图里那块遮住全屏的灰褐色板：
+## 4. 调试与验证
 
-| 图层 | 门控 | 透明期间的处置 |
-| --- | --- | --- |
-| 片尾海报 `buildTemperaCreditsPoster` | 只读歌曲元数据（`hasTemperaCreditsMetadata`） | `buildConfig` 在透明 + tempera 时**不发布** `song`/`songArtist`/`songAlbum`（`suppressesClosingPoster`），海报根本不建 |
-| 段落转场擦除块 `TemperaOverlay.drawWipe` | `enableTransitions` | 覆盖 `enableTransitions:false` |
-| 装饰（motif、字影、水印、残影）与角标 | `showDecor` / `showCornerMarks` | 覆盖 `showDecor:false`、`showCornerMarks:false` |
-| 镜头畸变后处理（整帧重采样，截图里那道大弧线） | `postProcessLensDistortion` | 覆盖 `0` |
-| 用户图片层（整幅不透明贴图） | `layerImageFrequency` | 覆盖 `0` |
+宿主开关（都是诊断/回归用）：
 
-`showBlocks:false` 仍然保留：它是纸雾/网点/构图层唯一的开关，且 `temperaSceneFrame.ts` 的
-`requiresSceneRebuild` 会把覆盖当成真正的场景参数变化处理，所以切换透明时立刻重建、关掉后立刻还原。
-验收（真实宿主 + 真实 WebView2，`--window 1280x720`）：透明 + tempera 时发布的
-`visualizerTunings.tempera = {showBlocks:false, showDecor:false, showCornerMarks:false, enableTransitions:false,
-postProcessGrain:0, postProcessVignette:0, postProcessLensDistortion:0, layerImageFrequency:0}` 且
-`song/songArtist/songAlbum = null`；把透明关掉后同一份配置回到默认值并恢复元数据。
+- `--no-transparency`：强制不透明，忽略设置里的透明位（连同 `mousePassthrough` 一起关）。
+- `--no-colour-key`（`--no-color-key` 亦可，环境变量 `SPW_FOLIA_COLOUR_KEY=0`）：窗口保持普通不透明黑色表面，
+  不装键、不设 `BackColor`、不切 `DefaultBackgroundColor`，**并把页面侧透明也降级为不透明**（否则页面会在纯黑
+  上开洞）。热键与 `EnterTransparentMode` 在该模式下直接跳过。**任何截图/缩略图/布局校验都必须带它**：色键
+  活着时每个半透明页面像素都被键色染色，抓出来的图不是页面真正画的东西。
+- 日志：`transparency mode=on|off`（键被调试开关关掉时追加 `colour-key=off reason=debug-flag`）、
+  `transparency hotkey=registered|failed`、`transparency enter|exit source=…`、
+  `transparency passthrough=on|off rects=N`、`transparency mouse=catcher shown|raised bounds=…`、
+  `window-drag start bounds=…`。
 
-## 4.9 v0.4.9：键色从纯洋红改为近黑，调试路径不再上键
+验证脚本：
 
-> **发布状态**：这一节描述的是**未发布**的 v0.4.9 改动。最后发布版本 **v0.4.6** 用的仍是纯洋红
-> `rgb(255,0,255)`，所以线上用户看到的就是下面描述的粉雾；升级到含本修复的版本（v0.4.9 起的开发版，
-> 最近一个是 v0.4.11）后才会变成中性灰。
+```bash
+node poc/settings-ui/scripts/verify-colour-key.mjs   # 真实宿主 + GDI 全屏截图，三段
+node packaging/tools/verify-transparent-hud.mjs      # 打包产物：透明窗口下的播放条 hover/淡出
+node packaging/tools/verify-mouse-back.mjs           # 打包产物：透明窗口下的鼠标侧键返回
+```
 
-**用户报障**：「调试时，不要用粉色的背景」「粉色的背景很影响观感」。
+`verify-colour-key.mjs` 三个 run：**run 1** 键生效（透明会话里 50%-alpha 像素应是 ~128 中性灰、整帧 magenta 族
+占比 0、窗口底色是近黑键值）；**run 2** `--no-colour-key`（日志报 `colour-key=off`、窗口底色纯黑、无粉色）；
+**run 3** 页面本身永不绘制键色（六种真实样式 3200×2000 全屏，用 `CapturePreviewAsync` 取页面表面，避开窗口
+底色干扰）。**截图不能用 `CapturePreviewAsync` 查窗口底色**——它只抓 WebView2 表面，这正是早期截图检查漏掉
+键色染色 bug 的原因，必须用 GDI 全屏截图。
 
-**根因**（两层，都不是「色键坏了」）：
-1. `LWA_COLORKEY` 只抠「精确等于键色」的像素。WebView2 把页面合成到窗口 `BackColor`（= 键色）上，所以
-   页面 alpha = 0 的像素变成键色 → 被抠掉 → 透出桌面；而 **0 < alpha < 1 的像素变成
-   `alpha*页面 + (1-alpha)*键色`，不再是精确匹配，就留在屏幕上、被键色染色**。键色是纯洋红
-   `rgb(255,0,255)` 时，一条 50% 白的字形边缘会变成 `rgb(255,128,255)` —— 这就是用户看到的粉雾。
-   实测（真实宿主 + 真实 WebView2 + GDI 全屏截图）：半透明标记 `(255,128,255)`，整帧 magenta 族
-   **99.96%**。
-2. 调试脚本没有关透明：`make-thumbs.mjs` 只传了 `--no-curtain`，路径里**从来没有**显式关过透明。于是
-   只要上一次会话持久化了 `transparentPlayerBackground: true`，截图/缩略图就都是在色键窗口下拍的。
-
-**改动**：
-- `HostForm.TransparencyKeyColor`：`rgb(255,0,255)` → **`rgb(1,0,1)`**。键色唯一的要求是「页面永不绘制
-  它」，具体是哪个色不影响抠像；换成近黑后同样这些半透明像素只是被压暗成中性灰（实测
-  `rgb(128,128,128)`），不再是粉色。不选纯黑是因为 `Color.Black` 同时是不透明会话的 `BackColor` 与页面
-  基色；`rgb(1,0,1)` 的绿通道为 0 且明度极低，Folia 任何调色板都混不出来。**6 种真实样式 3200×2000 全屏
-  实测精确命中 0 像素**。
-- 新增 `--no-colour-key`（`--no-color-key` 亦可，环境变量 `SPW_FOLIA_COLOUR_KEY=0`）：调试用。窗口保持
-  普通不透明黑色表面，不装键、不设 `BackColor`、不切 `DefaultBackgroundColor`，并顺带把页面侧透明也
-  降级为不透明（否则页面会在纯黑上开洞）。热键与 `EnterTransparentMode` 在该模式下直接跳过，避免调试
-  运行中途又把自己变成键色窗口。
-- 调试脚本统一带 `--no-colour-key`：`make-thumbs.mjs`（**并补上 `--no-transparency`**，它此前从未关过
-  透明）、`verify-splash.mjs` 的截图 run、`diag-real-preview.mjs`、`verify-layout.mjs`、`driver.mjs`。
-  `verify-splash.mjs` 的 run 3 仍是**带键**的透明回归（它验的是透明时序，不是像素观感）。
-
-**验收**：`node poc/settings-ui/scripts/verify-colour-key.mjs`（真实宿主 + GDI 全屏截图，因为
-`CapturePreviewAsync` 只抓 WebView2 表面、永远看不到窗口底色 —— 这正是既有截图检查抓不到本 bug 的原因）。
-改前 → 改后：magenta 族占比 **99.96% → 0%**；50%-alpha 像素 `(255,128,255)` → `(128,128,128)`；窗口底色
-`(255,0,255)` → `(1,0,1)`；`--no-colour-key` 时 `(0,0,0)`。
-
-## 4.7 v0.2.2：穿透重构为系统级 shaped region（借鉴 SPW-island）
-
-v0.1.9 的「合成点击回放」只回放左键，右键/滚轮/悬停被整吞、拖拽必断，合成输入还会被提权窗口与反作弊拦截。
-v0.2.2 借鉴 SPW-island 的 shaped input peer 思路（`WindowsGpuInput.kt`：非激活 1/255 alpha 小窗 +
-`window.shape` 反选区域），把穿透改成 **捕获窗口的窗口区域（window region）就是命中测试**：
-
-- `TransparencyInputCatcher.ApplyHitRegion(List<Rectangle> rects)`：把页面 hitbox 矩形换算成窗口像素
-  （CSS → client 按 `ClientSize/hitViewport` 缩放，四周放大 ±4 CSS px 容差），`CreateRectRgn` +
-  `CombineRgn(RGN_OR)` 合成后 `SetWindowRgn`。区域之外的输入在 OS 命中测试层直接穿给下层窗口——
-  点击、右键、滚轮、悬停、拖拽全部真实穿透，零合成输入（提权窗口/反作弊场景同样可用）。
-- fail-open：`mousePassthrough` 关闭、页面未上报矩形或 viewport 非法时区域置空（整窗可点）。
-  「宁可多点到页面，也不吞掉用户的点击」。
-- 拖拽连续性：热区内按下任一鼠标键即把区域临时扩展为整窗（`catcherDragActive`），全部按键抬起后恢复；
-  若 button-up 被 WebView2 捕获吃掉，下一次移动用 `GetAsyncKeyState` 自愈，区域不会永久保持整窗。
-- 区域重建时机：页面 hitbox 更新（`UpdateHitRegions`）、bounds 变化（`SyncInputCatcherBounds` /
-  `ApplyInputCatcherBounds`）、穿透开关（`ApplyTransparencyFromSettings`）、句柄重建（`OnHandleCreated`）。
-- 删除 v0.1.9 的 `mouse_event` 回放、`catcherRestoreAt` 220ms 恢复时序、`IsInteractiveAt` 逐点命中与
-  `FallThroughToDesktop`；`Forward` 改为无条件转发到达的消息（能到达 = 在区域内）。v0.1.10 的
-  `unchecked((int)ToInt64())` 参数窄化修复与 `MakeLParam` 双半字掩码原样保留。
-- 对照 SPW-island：其「`SetWindowLong(GWL_EXSTYLE, WS_EX_TRANSPARENT|WS_EX_LAYERED)` 整窗穿透 +
-  shaped 小窗反选区域」双窗方案，被折叠成单一「区域化捕获窗」——等价的 OS 命中测试语义，窗口数减半。
+---
 
 ## 5. 已知限制
 
-- 键色是近黑 `rgb(1,0,1)`（v0.4.9 之前是纯洋红 `rgb(255,0,255)`，见 §4.9）：页面若恰好绘制该像素会被挖空。
-  6 种真实样式（sonnet/tempera/lumiere/classic/monet/claddagh，3200×2000 全屏）实测**精确命中 0 像素**，
-  属于可接受风险；新增样式若要复核，跑 `node poc/settings-ui/scripts/verify-colour-key.mjs` 的 run 3。
-- 透明就是「透到桌面/其它窗口」，不是 OBS 浏览器的 alpha 源——OBS 场景请直接用 Folia 的浏览器源，或用窗口捕获。
-- 仅主屏全屏（与 v0.1.0 起一致）；多屏选择未实现。
-- 透明模式默认会捕获鼠标（v0.1.8 的输入捕获窗口）；要操作下层窗口请打开面板里的「鼠标穿透（操作桌面）」，
-  或按 Ctrl+Alt+B / ESC 退出透明。打开穿透后仅热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，
-  其余位置的点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口（v0.2.2，见 §4.7）。
-- 穿透热区来自页面上报的 hitbox 矩形（±4 CSS px 容差）；上报缺失或解析失败时退化为整窗可点（fail-open）。
-  按住拖拽期间热区临时扩展为整窗，松开按键即恢复。
-- 透明模式下 `backdrop-filter` 视觉退化（见 §4.2），但控件可点（见 §4.1）。
-- 透明窗口下 `monet` 与浅色主题的 `lumiere` 不可用（样式本体含无法去除的大面积半透明层，见 §4.6）：
-  选中该样式会自动关闭透明背景；`tempera`/`lumiere`(暗色)/`pendolo`/`still` 在透明期间会自动精简，
-  视觉与不透明时略有差异。`tempera` 的透明精简在 v0.4.2 扩到关装饰/角标/转场/镜头畸变并隐藏片尾海报
-  （见 §4.6b），因此透明时凝彩只剩逐字歌词与线框，不再有整屏纸面。
+- **键色是近黑 `rgb(1,0,1)`**：页面若恰好绘制该像素会被挖空。六种真实样式（sonnet/tempera/lumiere/classic/
+  monet/claddagh，3200×2000 全屏）实测精确命中 0 像素，属可接受风险；新增样式要复核就跑
+  `verify-colour-key.mjs` 的 run 3。
+- **不是 OBS 的 alpha 源**：透明就是「透到桌面/其它窗口」；OBS 场景请直接用 Folia 的浏览器源，或用窗口捕获。
+- **全屏**：窗口跟随承载 SPW 的显示器（不是系统主屏），Alt+左键可拖到别的显示器并在松开时重新全屏。
+- **默认会吞鼠标**：透明模式靠捕获窗口转发鼠标；要操作下层窗口需打开面板里的「鼠标穿透（操作桌面）」，或按
+  Ctrl+Alt+B / ESC 退出透明。打开穿透后只有热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，其余位置的
+  点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口。
+- **热区来自页面上报**：上报缺失或解析失败时退化为整窗可点（fail-open）；按住拖拽期间热区临时扩展为整窗，
+  松开即恢复。
+- **`backdrop-filter` 退化**：透明时 chrome/面板/播放条改用平面底色（§2.2），控件仍可点。
+- **样式限制**：`monet`、浅色主题的 `lumiere`、`machi`、`nebbia` 不可用（§3）；`tempera`/`lumiere`(暗色)/
+  `pendolo`/`still`/`hanabi` 在透明期间会自动精简，画面与不透明时略有差异——`tempera` 只剩逐字歌词与线框，
+  不再有整屏纸面与片尾海报。

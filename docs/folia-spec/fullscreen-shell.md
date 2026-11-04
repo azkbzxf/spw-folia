@@ -1,220 +1,126 @@
-# Folia 0.7.21 全屏歌词外壳规格（fullscreen shell）
+# 全屏播放页：图层、chrome 与交互
 
-用途：Lead 决策「设置页 + 全屏模式外壳跑在 WebView2 里的 Vue/React harness」后，这份文档给出 **1:1 复刻播放页全屏歌词** 所需的层、控件、行为、默认值。事实来源：源仓库 `work/folia/folia-major-main`（下文路径均相对它）+ 解包产物 `C:\tmp\asar`。配套：`runtime-contracts.md`（渲染输入）、`settings-ui.md`（设置页）、`assets.md`（截图/素材）。
+Folia 模式的窗口里只有**一屏歌词**：Folia 的 OBS 浏览器源页面铺满无边框窗口，插件在它上面注入自己的
+chrome（齿轮、返回、播放条、右下菜单、诊断面板）和设置窗口。本文说明这些东西各自在哪一层、谁画、怎么交互。
 
----
+- 宿主窗口：`poc/webview/host/HostForm.cs`（WinForms + WebView2）
+- 页面：Folia 的 `index.html?obs=1`（`ObsBrowserSourceApp` 挂 `VisualizerRenderer`），由 `Shim.js` 驱动
+- 插件 chrome 与设置窗口：`poc/settings-ui/src/App.tsx` + `app.css`
+- 渲染层内部结构：[`runtime-contracts.md`](runtime-contracts.md) §6；协议：[`protocol.md`](../protocol.md)
 
-## 0. 一句话结论
+## 1. 为什么不是「Folia 播放页」
 
-**「全屏歌词」不是独立窗口、也不是独立路由：它就是播放页 `currentView === 'player'`。** `VisualizerRenderer` 挂在一个 `absolute inset-0 z-0` 的 `div[data-testid="player-visual-surface"]` 里铺满窗口（`src/App.tsx:2790-2801`），标题栏、底部浮动控制胶囊、右侧面板、`app.overlay` 都是它的**兄弟节点**浮在上面。
+上游 Folia 的全屏歌词是 `currentView === 'player'` 的播放页：`App.tsx` 里一个 `absolute inset-0 z-0` 的
+`div[data-testid="player-visual-surface"]`，外面还有标题栏、底部浮动控制胶囊、右侧 360px 面板、首页墙。
 
-所以插件要做的是：一个全屏 surface 承载 `<VisualizerRenderer>` + 少量浮层（字幕/和声在 renderer 内部；底部胶囊/返回键/面板由宿主画），**不需要复刻 Folia 的整个 App**。
+插件**不复刻那个 App**。它加载的是 Folia 的 **OBS 浏览器源页面**（`?obs=1` → `ObsBrowserSourceApp`）：
+同一套 `VisualizerRenderer`、同样的 17 种样式与背景，但页面本身没有任何播放器外壳。因此：
 
----
+- 样式、背景、字幕、转场**全部是 Folia 原始代码**，不是仿制；
+- 播放器外壳（齿轮、播放条、菜单）由插件自己画，写法和位置按 SPW 的使用习惯定，不追求与桌面 Folia 逐像素一致。
 
-## 1. 整窗层级（z-index 表）
+顺带得到的一个实际差异：OBS 页面按 **1920×1080 基准**排版，再用 `max(1, realWidth / 1920)` 放大并覆写
+`devicePixelRatio` / `innerWidth` / `innerHeight`（`ObsBrowserSourceApp.tsx`）。所以窗越大字越大是等比放大，
+不存在「横竖两套布局」。
 
-| 层 | z | 位置/尺寸 | 源码 |
-|---|---|---|---|
-| 标题栏条（自定义窗口 chrome） | `z-[9999]` | 顶部 32px，`pointer-events-none`（只有自绘 chrome 才画按钮） | `src/components/app/AppShell.tsx:166`；`:144-155` |
-| 首页墙 / Lattice | `z-10` | 播放页时 `visibility:hidden` + `pointer-events:none` | `src/App.tsx:2689-2699`、`:2726` |
-| **视觉层 `player-visual-surface`** | **`z-0`** | `absolute inset-0`，整窗 | `src/App.tsx:2790-2801` |
-| 和声 overlay（renderer 内） | `z-30` | top 76px 起 | `src/components/visualizer/VisualizerHarmonyOverlay.tsx:39,227` |
-| 逐字歌词本体 | 样式内部（通常 z-10 上） | 由样式自己布局 | 各样式 |
-| 翻译字幕 overlay（renderer 内） | `z-20` | 底部 | `src/components/visualizer/VisualizerSubtitleOverlay.tsx:146` |
-| 底部浮动控制胶囊 | `z-60` | 水平居中，默认 bottom 32px | `src/components/FloatingPlayerControls.tsx:334` |
-| 右侧面板 | `z-[60]` | 右贴边 360px 玻璃卡 | `src/components/panelTab/shell/PanelShell.tsx:100,155` |
-| 弹窗 / 命令面板等 overlays | 高 z | | `AppOverlays`（App.tsx:2803+） |
-| `app.overlay` stage 层 | `z-[1000]` | 全屏但 `pointer-events-none` | `src/App.tsx`（`FoliumStageLayerSlot`） |
+## 2. 层叠顺序
 
-- `AppShell` 根：`fixed inset-0 w-full h-full flex flex-col overflow-hidden font-sans transition-colors duration-500`（`AppShell.tsx:158`）。
-- 视觉层容器本身**就是点击目标**（`onClick={handleContainerClick}`），点画面空白处通常用于收 chrome/开关面板。
+页面（DOM）从下到上：
 
----
+| 层 | z-index | 说明 |
+|---|---|---|
+| 点击分区 `.spw-click-zones` | 2147482990 | 全屏三列热区：左=上一首、中=播放/暂停、右=下一首 |
+| 播放条 `.spw-playback` / 队列面板 | 2147483000 | 底部居中的播放 HUD（可关） |
+| 注入根容器 `#spw-settings-ui-root` | 2147483000 | `position: fixed; inset: 0; pointer-events: none` |
+| chrome 按钮（齿轮 / 返回 / 救生圈 / 右下圆钮） | 2147483001 | 每个按钮自己 `pointer-events: auto` |
+| 诊断面板 `.spw-problem-report` | 2147483002 | 「出现问题」卡片 |
+| 设置窗口（`StudioWindow`） | 遮罩 `z-[140]` | 全屏遮罩 + 1240×780 窗口，见 [`settings-ui.md`](settings-ui.md) |
 
-## 2. 视觉层内部结构（renderer → backdrop → shell）
+规则：**点击分区永远在最下**，所以它盖不住任何真实控件；控件覆盖处永远是控件拿到点击。设置窗口或鼠标穿透
+打开时，点击分区整体 `pointer-events: none`。
 
-### 2.1 `VisualizerRenderer`（`src/components/visualizer/VisualizerRenderer.tsx:84-102`）
+宿主窗口侧：`FormBorderStyle.None` + 全屏、可选置顶；透明模式下用色键（`SetLayeredWindowAttributes` +
+近黑键色）把背景挖空，机制见 [`live-transparency.md`](../live-transparency.md)。
 
-```
-<Suspense fallback={null}>
-  <VisualizerBackdrop …>
-    <VisualizerStyleTransition … />   ← 当前样式 / 切换中的旧+新样式
-  </VisualizerBackdrop>
-</Suspense>
-<VisualizerHarmonyOverlay … />          ← 永远在 Suspense 外面，切样式不闪
-```
+## 3. chrome 与自动隐藏
 
-- 样式模块 `React.lazy` 加载，fallback 故意为 `null`（闪占位比空白更突兀）。
-- 和声与翻译字幕的 DOM 在 **renderer 层**，不在样式内部；所以样式切换时它们不卸载。
+- **齿轮**（右上 24/24，`data-spw-chrome="settings"`）：打开设置窗口。
+- **返回**（左上 24/24，`data-spw-chrome="exit"`）：请求关闭窗口。**只在播放页不透明时渲染** —— 透明模式下
+  chrome 常驻，退出走自己的入口。
+- **救生圈**（右 76/24，`data-spw-chrome="problem-report"`）：打开「出现问题」自检；由配置页开关决定是否渲染
+  （默认关）。
+- **右下圆钮**（`right: 32px; bottom: 56px`，`data-spw-chrome="player-background"`）：打开播放页菜单（透明背景、
+  鼠标穿透、显示播放条）。
+- **淡出**：指针/按键静止 2.5s 后 chrome 按 `data-visible` 淡出（`pointermove` / `pointerdown` / `keydown` 都会重置
+  计时），窗口级游标隐藏由宿主在 2.5s 空闲后做（`HostForm.CursorIdleMs`）。播放页透明时 chrome **常驻**
+  （`chromeAlwaysOn = transparentPlayerBackground`）；右下菜单展开期间它自己的按钮常显，其余 chrome 照常淡出；
+  设置窗口打开时 chrome 全部隐藏（`!open`）。
+- **键盘与鼠标**（`Shim.js`）：
+  - `ESC`：有设置窗口/菜单时先关它（页面在 capture 阶段吞掉），否则交给宿主关窗口；
+  - 鼠标侧键「后退」：同上「先关弹层，再关窗口」；
+  - `Alt` + 左键拖拽：把无边框窗口拖到别的显示器并重新全屏（宿主走原生 move 循环）；
+  - `F1`：开/关设置窗口；
+  - `Ctrl+Alt+F`：在窗口内也能关闭（SPW 的快捷键只在 SPW 有焦点时生效，窗口聚焦后按键落到这里）。
 
-### 2.2 `VisualizerBackdrop`（`src/components/visualizer/VisualizerBackdrop.tsx:124`）
+## 4. 点击分区与播放条
 
-根：`relative w-full h-full overflow-hidden`，`opacity = visualizerOpacity ?? 1`。内部顺序（`:125-140`）：
+- **点击分区**（`chrome/PlaybackClickZones.tsx`）：左/中/右三列，分别发 `previous` / `toggle` / `next`。
+  位移超过 `DRAG_SLOP_PX = 10` 视为拖拽不发命令；`Alt` 按下（窗口拖动）不发命令；手势后浏览器补发的
+  `click` 用 `CLICK_AFTER_GESTURE_MS = 800` 抑制，保证一次手势只动作一次。分区**不因「显示播放条」关闭而失效**
+  —— 暂停画面是画面级功能。
+- **播放条**（`chrome/playback/PlaybackBar.tsx`）：收起态是时间 / 细进度 / 总时长；指针停留 `EXPAND_DELAY_MS = 150`
+  展开成完整控制条（播放/暂停、上一首、标题、下一首、进度、随机、队列）。可用底栏 `「显示播放条」`整条关闭，
+  关掉后组件**不挂载**（不是 `display:none`），连点击热区一起消失。
+- 进度条同时支持 `pointerdown → pointerup` 拖动与普通 `click`（含合成事件）；队列面板从播放条上方弹出。
+- 所有传输控制都走协议 `control` 通道（页面只发请求，插件执行并回 `state` / `queue`），见
+  [`playback-controls.md`](../playback-controls.md)。
+- 鼠标穿透开启时播放条整体卸载、点击分区禁用 —— 点击必须落到桌面。
 
-1. **背景 + 视频**（`VisualizerBackdropLayers`）：`VisualizerBackgroundTransition` → `VideoLayer`
-2. `FoliumStageLayerSlot slot="player.stage.back"`（mod 舞台层，样式之下）
-3. **样式本体**（`VisualizerStyleTransition`）
-4. `FoliumStageLayerSlot slot="player.stage.front"`：`absolute inset-0 z-20 pointer-events-none`
+## 5. 鼠标穿透的热区上报
 
-- 背景 cover 尺寸固定 **1024**：`getSizedCoverUrl(coverUrl, 1024)`（`VisualizerBackdrop.tsx:78`）。
-- `VideoLayer`（`src/components/visualizer/videoLayer/VideoLayer.tsx:97-110`）：`<video muted loop playsInline preload="auto" className="absolute inset-0 h-full w-full pointer-events-none" style={{opacity, objectFit}}/>`，位置 = 歌曲时间对视频时长取模；修正常量 `DRIFT_CHECK_MS=2000`、`DRIFT_TOLERANCE_SEC=0.35`、`CLOCK_JUMP_SEC=1`。**层级：背景之上、歌词之下**；仅主界面播放页画（`!isPreviewMode && !staticMode && isMainAppSurface`）。
-- 背景模式自己再套 `absolute inset-0 z-0`（如 `backgrounds/common/entry.tsx:52`、`backgrounds/sora/entry.tsx:33`）。
+透明 + 穿透时，宿主只能让**页面报告的矩形**接收点击（其余转发到桌面）。页面在 `App.tsx` 里收集这些元素的
+`getBoundingClientRect()`，通过 `{type:'hitbox', vw, vh, rects}` 发给宿主：
 
-### 2.3 `VisualizerShell`（`src/components/visualizer/VisualizerShell.tsx`）
+- 齿轮、返回、右下圆钮、右下菜单（展开时）、救生圈及其面板（展开时）、设置窗口（打开时）。
 
-样式外壳（每个样式 render 都包一层或等价实现）：
+宿主把 CSS px 换算成窗口像素（`±4 CSS px` 容差）后用 `SetWindowRgn` 做成输入捕捉窗口的区域 —— 区域外的一切
+输入在 OS 层交给下面的窗口。**新增浮动控件必须同时加进这份上报列表**，否则穿透模式下它点不到。
 
-- 根：`w-full h-full flex flex-col items-center justify-center overflow-hidden relative` + 主题字体类 + `transition-colors duration-1000`；`backgroundColor: 'transparent'`；`fontFamily: resolveThemeFontStack(theme)`；`opacity = visualizerOpacity`（在 backdrop 内不设）；backdrop 内 `pointerEvents: none`。
-- **返回键**（`:224-242`）：`motion.button`，`absolute top-6 left-6 z-30 h-10 w-10 rounded-full flex items-center justify-center backdrop-blur-md bg-black/20 hover:bg-white/10 text-white/60`，`<ChevronLeft size={20}/>`，进/出 `opacity/scale(.92)/x(-6)` 0.2s easeOut。
-- **两个热点区（关键行为）**：`PLAYER_CHROME_HOTSPOT_SIZE = 120`（`:50`）
-  - 左上 120×120（`backRevealArea`）：鼠标进入才显示返回键；离开立即隐藏。
-  - 右下 120×120（`panelRevealArea`）：鼠标进入 → 面板引导线；**触摸** pointerdown 落在热点 → 显示引导 `TOUCH_GUIDE_DISPLAY_MS = 1400` 后自动收起（`:51,126-168`）。
-  - `alwaysShowBackButton = alwaysShowPlayerBackButton || isPanelOpen`（`useVisualizerRendererModel.ts:176`）：设置「总是显示返回按钮」或面板打开时常显。
-- 视觉层指针隐藏：`cursor-auto-hidden` class 只加在 `player-visual-surface` 上（App.tsx:2791），弹窗/标题栏不受影响。
+## 6. 设置窗口（在同一页面里）
 
----
+设置窗口是注入到**同一个 document** 的 React 岛，不是第二个窗口或 iframe：
 
-## 3. 播放页 chrome（浮层控件）
+- 遮罩 `fixed inset-0 z-[140]`；窗口 1240×780、右栏 420px，布局与控件见 [`settings-ui.md`](settings-ui.md)。
+- 打开时：指针分区禁用、播放条卸载（`PlaybackBar` 见到 `settingsOpen` 直接返回 null）、右下菜单收起，
+  `Shim` 报告的命中区加上整个遮罩。
+- `ESC` 在 capture 阶段被吃掉并关闭窗口，不会冒到宿主那里把整窗关掉；关闭时 `ESC` 交还宿主。
+- 窗口里的「大预览」是播放页的逐帧镜像（同源 iframe + 真实 clock/audio/config），不是另造一份模拟数据，
+  见 [`live-preview-iframe.md`](../live-preview-iframe.md)。
 
-### 3.1 底部浮动控制胶囊
+## 7. 开屏与透明
 
-- 定位层 `src/components/FloatingPlayerControls.tsx:334`：`absolute left-1/2 -translate-x-1/2 z-60 w-full flex justify-center pointer-events-none`；胶囊 `:381` `backdrop-blur-xl shadow-2xl overflow-hidden rounded-full`；bottom 由共享 MotionValue 驱动，默认 **32px**。
-- 进度条：`<ProgressBar>`（`:577` 展开态 / `:613` 收起态），可被设置 `hidePlayerProgressBar` 隐藏。
-- 播放/暂停、上一首/下一首、模式、音量、打开面板等按钮都在胶囊里；面板打开时胶囊布局让位（`PlayerBottomBarLayoutContext`）。
-- 隐藏生效：`src/components/app/overlays/buildAppOverlaysModel.ts:293-294`，`isHidden = currentView==='player' && isPlayerChromeHidden`。
+- **开屏**：宿主在 URL 上加 `splash=1`，`Shim.js` 在页面解析期装一份与上游 `#app-splash` 等价的遮罩
+  （深色底 + `F o l i a` 辉光词标 + 声波），宿主等首帧 + 最短 0.8s 后淡出（`SplashFallbackMs = 3400` 兜底，
+  `--splash-duration` 限 300–2000ms）。元素 id 用 `spw-folia-splash` 而非 `app-splash`，因为上游
+  `AppSplashGate` 挂载时会自己摘掉同名元素。`--no-curtain` / 配置页开关关掉它。
+- **透明**：页面侧 `config.background.transparent = true` 让 Folia 的背景渲染器直接返回 null；
+  宿主侧用色键挖空窗口。两层都在才真的透出桌面，见 [`live-transparency.md`](../live-transparency.md)。
 
-### 3.2 右侧面板
+## 8. 与「1:1 复刻 Folia 播放页」的取舍
 
-- `PanelShell.tsx:100`：`w-[360px] max-w-[calc(100vw-2rem)] rounded-[20px] bg-[var(--pn-glass)] backdrop-blur-[40px]`；容器 `absolute right-0 z-[60]`（`:155`）。
-- 右下 `PanelHandle`（`src/components/panelTab/shell/PanelHandle.tsx`）：圆形把手，拖动可开命令面板；与 shell 右下热点共享状态（`isGuideLineVisible` `:53`、`TOUCH_GUIDE_DISPLAY_MS=1400` `:15`）。
+插件**不打算**复刻桌面 Folia 播放页的外壳，下面这些上游能力因此不在范围里：
 
-### 3.3 chrome 自动隐藏（`src/hooks/usePlayerChromeAutoHide.ts`）
-
-三档 `PlayerChromeVisibilityMode = 'always-hidden' | 'always-visible' | 'auto-hide'`，持久键 `player_chrome_visibility_mode`（`:7`）。
-
-auto-hide 行为（`:98-197`）：
-
-| 事件 | 行为 |
+| 上游能力 | 状态 |
 |---|---|
-| 显示后 | `scheduleAutoHide(3000)`，3s 后隐藏 |
-| `mousemove` | rAF 节流，显示并重置 3s |
-| `mouseout` 离开窗口边界 | 300ms 后隐藏 |
-| `pointerdown` | 保持显示、不排隐藏；`pointerup/cancel` 重置 3s |
-| `wheel` | 重置 3s |
-| 窗口 `blur` | 300ms 后隐藏 |
-| 点击穿透（桌面宠物） | 强制隐藏且完全不监听 |
+| 底部浮动控制胶囊（`FloatingPlayerControls`）、右侧 360px 面板（`PanelShell`）、`PanelHandle` | 不复刻；用插件自己的播放条与右下菜单 |
+| chrome 三档可见性（`player_chrome_visibility_mode`）、`KeyH` 循环 | 不复刻；固定「2.5s 淡出 + 菜单/设置时常驻」 |
+| 样式壳的左上 120×120 返回热区、右下 120×120 面板引导热区 | 上游代码在，但插件不传 `onBack`/`alwaysShowBackButton`，所以不出现 |
+| 视频层（`VideoLayer`）、`FoliumStageLayerSlot` 舞台层 | 只在主界面生效（`isMainAppSurface`），OBS surface 下不画 |
+| 首页墙/Lattice、窗口原生模糊、播放页透明以外的 Electron 窗口行为 | 不在范围 |
+| automix 歌曲交接（`songHandoff`） | 不实现，切歌直接换，见 [`runtime-contracts.md`](runtime-contracts.md) §9.3 |
 
-- 档位循环：`cyclePlayerChromeVisibilityMode`（`:69-71`）`always-hidden → always-visible → auto-hide`；与设置 `autoHidePlayerChrome` 双向同步。
-- 快捷键：`KeyH` 循环三档（仅播放页、面板未开、无阻塞弹窗），`KeyP` 开合面板（`usePlaybackInteractionBridge.ts:345-359`）。
-- 光标：`shouldHidePlayerCursor`（跟随 chrome，`App.tsx:1607-1611`）或独立 `useIdleCursorHide`（`CURSOR_IDLE_HIDE_MS = 3000`，`src/hooks/useIdleCursorHide.ts:14`）；任一命中 → 视觉层加 `cursor-auto-hidden`。
-- 播放页外观设置（`src/stores/usePlayerChromeSettingsStore.ts:40-76`）：`hidePlayerProgressBar`、`playerBottomBarOffset`、`playerControlSlotPrimary/Secondary`、`hidePlayerRightPanelButton`、`alwaysShowPlayerBackButton`、`alwaysShowTrackSwitchButtons`、`alwaysShowMainWindowTitlebar`、`hideFullscreenButton`、`useNativeMacFullscreenButton`、`transparentPlayerBackground`、`enablePlayerPageNativeBlur`、`autoHidePlayerChrome`、`autoHideCursorWithPlayerChrome`、`hideCursorWhenIdle`、`showOpenPanelCloseButton`。
+保留并确实生效的：17 种样式与背景、逐字动画与词级辉光、翻译字幕（底部 z-20）、`visualizerOpacity`、静止模式、
+`isDaylight`、封面取色主题。
 
-### 3.4 背景透明 / 原生模糊 / 首页墙后模糊
-
-- `isPlayerPageTransparent = transparentPlayerBackground || enablePlayerPageNativeBlur`（`App.tsx:1525`）→ 写进 `background.transparent`（`useVisualizerRendererModel.ts:124-133`）；`VisualizerBackgroundRenderer` 见 `transparent` 直接 `return null`（`backgrounds/VisualizerBackgroundRenderer.tsx:9-11`）。
-- Electron 侧把文档背景设透明：`src/hooks/useElectronWindowChrome.ts:21-46`（WebView harness 里对应「窗口透明 + 宿主画自己的背景」）。
-- 首页墙后透出的模糊：`LIBRARY_BACKDROP_BLUR_PX = 24`，`filter: blur(24px)`、`transition: 300ms ease`（`src/components/app/presentation/playerVisualizerBackdrop.ts:16,43-47`），作用于 `player-visual-surface`。
-- 是否画歌词：`resolveVisualizerShowText = (player && !settingsModalOpen) || (home && !isPanelOpen && backdropLyrics)`（同文件 `:19-32`）。
-
----
-
-## 4. 字幕 / 和声显示规则（renderer 内部两个 overlay）
-
-### 4.1 翻译字幕 `VisualizerSubtitleOverlay.tsx`
-
-- 根 `absolute left-0 right-0 text-center space-y-2 px-4 z-20 pointer-events-none`（`:146`）；发光底 `absolute -inset-x-10 -inset-y-6 z-0 blur-2xl`（`:153`）；正文 `relative z-10 max-w-4xl`（`:162`）；文本阴影 `0 1px 2px ${colorWithAlpha(theme.backgroundColor,0.24)}`。
-- 内容解析优先级（与设置项联动）：
-  - `subtitleContentMode`: `translation`（默认）| `romanization` | `both` | `none`；
-  - `hideTranslationSubtitle` 完全隐藏；`showSubtitleTranslation=false` 时不显示译文；
-  - `hideTranslationSubtitle` / `showSubtitleTranslation` 在播放页由设置与内容模式共同决定。
-- 上/下两条（主字幕 + 下一句预览）字号：主 `clamp(1.125rem, 2.6vw, 1.25rem)`、次 `clamp(0.875rem, 2vw, 1rem)`，再乘 `subtitleFontScale`（次行额外 ×0.88）；见 `subtitleFontSizes.ts`、`runtime-contracts.md §8`。
-- 底距：`bottom` 直接绑 MotionValue（不能改 transform，否则会和动画冲突）。
-- 相关设置默认（`settings-ui.md §6`）：`subtitleOverlayOpacity=0.6`、`subtitleOverlayBackground=true`、`subtitleUpcomingLyricsBlur=true`、`subtitleContentMode='translation'`、`subtitleFontScale=1`。
-
-### 4.2 和声字幕 `VisualizerHarmonyOverlay.tsx`
-
-- `HARMONY_TOP_PX = 76`（`:39`），可用 `HarmonyTopContext` 覆盖（小图裁切用）。
-- 根 `pointer-events-none absolute left-0 right-0 z-30 flex flex-col items-center gap-1.5 px-5 text-center`，`top: 76px`（`:227-228`）。
-- 字号 `clamp(0.95rem, 1.8vw, 1.3rem) × subtitleFontScale`（`:149`）；发光底同字幕。
-- 开关：`showHarmonySubtitle`（默认 true）、`harmonySubtitleBackground`（默认 true）；数据来自 `Line.backgroundVocal/backgroundVocals`（TTML 和声）。
-
-> 两者都在 visualizer 层内（z-20/z-30），返回键（z-30，shell 内）与面板（z-60，层外）互不遮挡。
-
----
-
-## 5. 进入 / 退出全屏歌词（以及「大预览」）
-
-- 进入：`navigateToPlayer`（`src/hooks/useAppNavigation.ts:348`）把 `currentView` 切到 `'player'`；OS 全屏是另一码事（`hideFullscreenButton` / `useNativeMacFullscreenButton`，`src/components/modal/settings/pages/DesktopPage.tsx:87-94`）。
-- 退出视觉页：shell 返回键 → `onBack`（回首页/上一视图）。
-- 挂载条件：`shouldMountPlayerVisualizer`（`src/components/app/presentation/playerVisualizerMount.ts:25-36`）——首页墙遮住播放页且遮挡结算、或 Lattice 未退场时不挂。harness 里=「页面切到全屏歌词才 mount，退出即 unmount（或保留 currentTime 停表）」。
-- 竖屏/横屏：**主播放页没有单独规则**，全部按窗口实际尺寸布局；只有 OBS 源按 `isPortrait` 选 1080/1920 基准（`ObsBrowserSourceApp.tsx:76-77`）。
-
-### 5.1 设置页的「大预览」（Lead 需求 (b) 的另一半）
-
-设置窗口（1240×780）左侧是**样品舞台**，不是播放页：
-
-- `VisPlayground.tsx:457` 同样挂 `<VisualizerRenderer>`，但 props 来自样品时钟（`usePreviewClock`）、`isPreviewMode`、样本歌词；舞台按窗口尺寸画再 `SAMPLE_ZOOM` 缩放（默认 **1.15**；monet 1.3）。
-- 右上角 **播放/暂停按钮**：32px 圆形、`bg-black/45` 半透明白图标（`VisPlayground.tsx` 内 sample stage 控件），点击切换样片时钟；`pause` 时停表但保留当前帧。
-- 无返回键、无字幕/和声（`subtitleContentMode:'none'`、`showSubtitleTranslation:false`、`showHarmonySubtitle:false`）。
-- 样式切换：点样式网格立即换样片样式，走 soft-focus 过渡（`animateStyleSwitch`）。
-- 具体布局与尺寸见 `settings-ui.md §2`。
-
----
-
-## 6. 截图 / 视觉参考
-
-- 官方 README 截图已抽取到 `research/assets/screenshots/`（见 `assets.md §1.1`）：`visualizer.png` 是宽幅拼贴，`preview-*.png` 是各样式单帧；**没有** sonnet/tempera/lumiere/monet/claddagh/still 的官方图。
-- 需要新增参照时：直接跑安装版 `C:\Program Files\Folia\Folia.exe` → 进播放页 → `Win+Shift+S`/系统截图；建议每样式截 1 张全屏 + 1 张设置页（用来对齐我们的复刻）。注意 Folia 默认开启 chrome 自动隐藏（3s），截图前动一下鼠标。
-
----
-
-## 7. Vue harness 复刻清单
-
-### 7.1 必须复刻（否则不像全屏歌词）
-
-| # | 元素 | 复用/自写 | 备注 |
-|---|---|---|---|
-| 1 | 全屏 visualizer surface（`absolute inset-0`，无背景色） | 复用 React island | 见 `runtime-contracts.md §11` |
-| 2 | 样式本体 + 背景 + 视频层 | **直接复用** `VisualizerRenderer` | 插件无需重画 |
-| 3 | 翻译字幕 + 和声 | **直接复用**（renderer 内） | 默认值见 §4 |
-| 4 | 返回键（左上 120px 热点） | 自写（简单）或复用 `VisualizerShell` | 触屏：点左上也该出 |
-| 5 | 暂停/播放控制 | 自写底部胶囊（见 `settings-ui.md §7` 的按钮样式） | 也可先只做点击画面播放/暂停 |
-| 6 | 光标/ chrome 自动隐藏 | 自写（3s auto-hide） | 提升「沉浸感」的关键 |
-| 7 | 背景透明/窗口模糊 | 宿主设置（WebView2 透明背景） | 插件按需 |
-
-### 7.2 可后置
-
-- 右侧 360px 面板、`PanelHandle`、app.overlay 舞台层、首页墙/Lattice 衔接、自动隐藏三档设置、进度条展开态。
-- 视频层（需要用户视频文件句柄，WebView 里可以不做）。
-- 原生模糊（Electron 专属；WebView 里用 CSS backdrop-filter 或直接纯色背景代替）。
-
-### 7.3 外壳需要向 renderer 传的 props（最小集）
-
-`mode`、`currentTime`、`currentLineIndex`、`lines`、`theme`、`audioPower`、`audioBands`、`showText`、`coverUrl`、`seed`、`paused`、`onBack`、`subtitleContentMode`、`subtitleOverlayOpacity`、`subtitleOverlayBackground`、`subtitleUpcomingLyricsBlur`、`showHarmonySubtitle`、`harmonySubtitleBackground`、`lyricsFontScale`、`subtitleFontScale`、`background={{mode:'latent'}}`、`isPlayerChromeHidden`（可选，影响样式内文字避让）。完整表见 `runtime-contracts.md §2`。
-
-### 7.4 验收（肉眼可判）
-
-1. 全屏只有歌词+背景，无播放器外框；鼠标 3s 不动后光标与控件消失。
-2. 鼠标移到左上角出现半透明圆形返回键；移开消失。
-3. 拖到左下/中间：底部出现胶囊（播放/暂停、进度）。
-4. 字幕在底部居中，带发光底与半透明遮罩；下一句模糊。
-5. 切样式时旧样式淡出、新样式入（soft focus），字幕不闪。
-6. 窗口拉成竖屏/超宽，歌词仍居中排版（无横竖两套逻辑）。
-
----
-
-## 8. 证据索引
-
-| 事实 | 证据 |
-|---|---|
-| 播放页 = 全屏歌词，视觉层 z-0 | `src/App.tsx:2790-2801` |
-| 视觉层内部顺序（背景→视频→stage.back→样式→stage.front） | `src/components/visualizer/VisualizerBackdrop.tsx:124-140` |
-| 返回键样式与 120px 热点 | `src/components/visualizer/VisualizerShell.tsx:50-101,126-168,224-242` |
-| chrome 三档/自动隐藏/光标 | `src/hooks/usePlayerChromeAutoHide.ts:7,69-197`；`src/hooks/useIdleCursorHide.ts:14`；`src/App.tsx:1607-1613` |
-| 底部胶囊 / 右面板 | `src/components/FloatingPlayerControls.tsx:334,381,577`；`src/components/panelTab/shell/PanelShell.tsx:100,155` |
-| 字幕/和声 overlay | `src/components/visualizer/VisualizerSubtitleOverlay.tsx:146-162`；`VisualizerHarmonyOverlay.tsx:39,149,227-261` |
-| 视频层 | `src/components/visualizer/videoLayer/VideoLayer.tsx:97-110` |
-| 透明背景 / 原生模糊 | `src/App.tsx:1525`；`backgrounds/VisualizerBackgroundRenderer.tsx:9-11`；`src/hooks/useElectronWindowChrome.ts:21-46` |
-| 设置页大预览 | `src/components/visualizer/window/VisPlayground.tsx:119,457,517`；`settings-ui.md §2` |
-| 背景系统（6 模式/默认值） | `notes-shell.md §B`；`runtime-contracts.md §10`；`settings-ui.md §4` |
+**和声层（顶部 76px 起，z-30）不显示**：插件只提供逐字歌词与翻译，没有 TTML 和声数据，`config` 里
+`showHarmonySubtitle` 与 `harmonySubtitleBackground` 恒为 `false`。

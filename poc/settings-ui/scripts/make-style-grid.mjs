@@ -1,9 +1,9 @@
 // Capture docs/images/style-grid.png — the "all lyric styles at a glance" grid used by both
-// READMEs — from the real settings UI, so it always shows the current shelf (15 styles + 随机).
+// READMEs — from the real settings UI, so it always shows the current shelf (17 styles + 随机).
 //
-// The previous file was a v0.3.x screenshot with 14 tiles: it predates Folia 0.7.22's 花火
-// (hanabi), so the README showed a grid that could not match the product. Re-shooting from the
-// running settings island is the only way to keep the tile order, labels and thumbnails honest.
+// Re-shooting from the running settings island is the only way to keep the tile order, labels and
+// thumbnails honest: a stale grid file is how the README ended up showing 14 tiles long after the
+// shelf had grown.
 //
 //   node scripts/make-style-grid.mjs [--keep]
 //

@@ -1,4 +1,4 @@
-// Sweep all 14 Folia visualizerMode values through the production OBS browser surface.
+// Sweep the Folia visualizerMode values through the production OBS browser surface.
 // For each mode: load ?obs=1&token=...&mode=X in headless Edge (Playwright), wait, measure FPS,
 // screenshot to out/styles/<mode>.png, analyze pixels (blank/flat detection), collect console
 // errors + non-local network requests. Writes out/styles/report.json + prints a table.
@@ -14,7 +14,12 @@ const PORT = 18081;
 const TOKEN = 'spike-token';
 const OUT = path.join(__dirname, 'out', 'styles');
 fs.mkdirSync(OUT, { recursive: true });
-const MODES = ['sonnet', 'tempera', 'lumiere', 'diorama', 'pendolo', 'monet', 'fume', 'cappella', 'partita', 'claddagh', 'cadenza', 'tilt', 'still', 'window', 'classic'];
+// The 17 registered styles (Folia 0.7.25), plus `window`: the upstream shelf glyph tile, kept in the
+// sweep because it also goes through the registry and is a cheap renderer-health check.
+const MODES = [
+    'sonnet', 'tempera', 'lumiere', 'hanabi', 'machi', 'nebbia', 'classic', 'cadenza', 'partita',
+    'fume', 'tilt', 'claddagh', 'monet', 'pendolo', 'cappella', 'diorama', 'still', 'window',
+];
 const ONLY = process.argv.slice(2);
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

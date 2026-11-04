@@ -11,7 +11,7 @@ v0.2.0 包含三组改动：
    `StdinLoop` 逐行 `try/catch`、`OnFormClosing` 幂等（`closing` 标志 + 全量 try/catch）、
    `ScheduleExitOnUiThread`、以及 **stdout 非阻塞有界队列**（`JsonStdout`：泵线程 + 8192 行队列，
    队列满丢最旧并在 `host-exit` 行输出 `dropped=`）。这些改动同时包含 v0.1.11 的两项修复，
-   v0.1.11 的崩溃现场复现与修复前后对比见 [verification-v0.1.11.md](verification-v0.1.11.md)。
+   v0.1.11 的崩溃现场复现与修复前后对比见 v0.1.11 的发布说明。
 3. **桥写线程生命周期** — PR #3 引入的专职 stdin 写线程在「关窗后再次打开 Folia」时会把旧 writer
    留在 `take()` 上；旧线程一旦写失败会在 `finally` 里置 `stdinBroken = true` 并清空共享队列，
    使第二次打开 Folia 后 `state`/`lyrics` 被静默丢弃。v0.2.0 改为每会话队列 + `stopStdinWriter()`
@@ -100,7 +100,7 @@ fpsCount=10 lastFpsAtMs=10812` → `quit-sent` → `closed` → `host-exit` → 
 `PostToPage` 现在按需 `SafeBeginInvoke(PostCore)`，`PostCore` 内部才读 `webView.CoreWebView2`；
 `StdinLoop` 每行单独 `try/catch`（`log.Error("stdin-line")`），单条坏行不再杀死整个泵。真机
 （Windows 11 x64 + SPW 1.19.0 + WebView2 **155.0.4283.62**）修复前后对比、日志时序与事件查看器证据见
-[verification-v0.1.11.md](verification-v0.1.11.md)：旧二进制 `lyrics` 后 30 ms 报
+v0.1.11 的发布说明：旧二进制 `lyrics` 后 30 ms 报
 `InvalidOperationException: CoreWebView2 can only be accessed from the UI thread.`，`statesReceived` 停在 32、
 窗口 2 秒后自关；新二进制 0 条 error、`statesReceived=96`、`quit` 送达、exit 0。
 

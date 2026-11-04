@@ -1,294 +1,228 @@
-# Folia 各歌词样式 tuning 键与默认值
+# 样式与背景的 tuning：存储键、默认值
 
-> 自动抽取自 `src/types.ts` 的 `DEFAULT_<MODE>_TUNING`（v0.7.21）与各 `src/components/visualizer/<mode>/tuning.ts` 的声明。所有值持久化在 localStorage；「默认」按钮（歌词动画 tab）写回 defaults 并弹 `notifications.<mode>Reset` toast。
-> 配套文档：`docs/folia-spec/settings-ui.md`（设置窗口/控件/默认值）、`docs/folia-spec/style-map.md`（14 样式映射）。
+每个歌词样式和 4 个背景各有一组可调的数值（`tuning`）。设置页的样式面板把字段渲染成 kit 控件，改动先落在草稿上、
+松手才落盘；「默认」按钮写回 `DEFAULT_*_TUNING` 并弹 `notifications.<mode>Reset` 提示。
 
-## 1. 样式 tuning 一览（13 个样式有 tuning；still 没有）
+- 默认值：13 个早期样式的 `DEFAULT_<MODE>_TUNING` 在 `work/folia/folia-major-main/src/types.ts`；花火、町景、雾笺的
+  默认值跟样式自己放在 `<mode>/types.ts`（`DEFAULT_HANABI_TUNING` / `DEFAULT_MACHI_TUNING` / `DEFAULT_NEBBIA_TUNING`）。
+- 插件侧镜像：`poc/settings-ui/src/model/settings.ts` 的 `STYLE_TUNING_DEFAULTS` / `STYLE_TUNING_KEYS` /
+  `BACKGROUND_TUNING_DEFAULTS` 直接从上游 import，不另抄一份。
+- 上游契约：[`runtime-contracts.md`](runtime-contracts.md) §2.1 的 `applyVisualizerTuning`；样式清单见
+  [`style-map.md`](style-map.md) §1。
 
-| 样式 dir | 中文名 | tuning mode | settingsKey | setter | resetter | localStorage key | 设置面板 | 动感效果 |
-|---|---|---|---|---|---|---|---|---|
-| sonnet | 商籁 | `sonnet` | `sonnetTuning` | `handleSetSonnetTuning` | `handleResetSonnetTuning` | `sonnet_tuning` | SonnetSettingsPanel (sonnet/SonnetSettingsPanel.tsx) | sonnet.lensTear 推镜裂光 |
-| tempera | 凝彩 | `tempera` | `temperaTuning` | `handleSetTemperaTuning` | `handleResetTemperaTuning` | `tempera_tuning` | TemperaSettingsPanel (tempera/) | — |
-| lumiere | 绘光 | `lumiere` | `lumiereTuning` | `handleSetLumiereTuning` | `handleResetLumiereTuning` | `lumiere_tuning` | LumiereSettingsPanel (lumiere/) | — |
-| classic | 流光 | `classic` | `classicTuning` | `handleSetClassicTuning` | `handleResetClassicTuning` | `classic_tuning` | ClassicSettingsPanel (settingsPanels.tsx:31) | — |
-| cadenza | 心象 | `cadenza` | `cadenzaTuning` | `handleSetCadenzaTuning` | `handleResetCadenzaTuning` | `cadenza_tuning` | 无面板（歌词动画 tab 显示「这个样式没有参数」） | — |
-| partita | 云阶 | `partita` | `partitaTuning` | `handleSetPartitaTuning` | `handleResetPartitaTuning` | `partita_tuning` | PartitaSettingsPanel (settingsPanels.tsx:93) | — |
-| fume | 浮名 | `fume` | `fumeTuning` | `handleSetFumeTuning` | `handleResetFumeTuning` | `fume_tuning` | FumeSettingsPanel (settingsPanels.tsx:171) | — |
-| tilt | 倾诉 | `tilt` | `tiltTuning` | `handleSetTiltTuning` | `handleResetTiltTuning` | `tilt_tuning` | TiltSettingsPanel (settingsPanels.tsx:514) | — |
-| claddagh | 回环 | `claddagh` | `claddaghTuning` | `handleSetCladdaghTuning` | `handleResetCladdaghTuning` | `claddagh_tuning` | CladdaghSettingsPanel (settingsPanels.tsx:762) | — |
-| monet | 莫奈 | `monet` | `monetTuning` | `handleSetMonetTuning` | `handleResetMonetTuning` | `monet_tuning` | MonetSettingsPanel (monet/) | — |
-| pendolo | 时计 | `pendolo` | `pendoloTuning` | `handleSetPendoloTuning` | `handleResetPendoloTuning` | `pendolo_tuning` | PendoloSettingsPanel (pendolo/) | pendolo.drumhead 仿真鼓面（drums） |
-| cappella | 群唱 | `cappella` | `cappellaTuning` | `handleSetCappellaTuning` | `handleResetCappellaTuning` | `cappella_tuning` | CappellaSettingsPanel (settingsPanels.tsx:309) | — |
-| diorama | 镜台 | `diorama` | `dioramaTuning` | `handleSetDioramaTuning` | `handleResetDioramaTuning` | `diorama_tuning` | DioramaSettingsPanel (settingsPanels.tsx:591) | diorama.ripple 水镜涟漪 |
-| still | 静止 | —（无 tuning.ts） | — | — | — | — | 无 | — |
+## 1. 样式 tuning 一览
 
-- tuning.ts 位置：`src/components/visualizer/<mode>/tuning.ts`（`sonnet/tuning.ts`、`tempera/tuning.ts`、`lumiere/tuning.ts`、`classic/tuning.ts`、`cadenza/tuning.ts`、`partita/tuning.ts`、`fume/tuning.ts`、`tilt/tuning.ts`、`claddagh/tuning.ts`、`monet/tuning.ts`、`pendolo/tuning.ts`、`cappella/tuning.ts`、`diorama/tuning.ts`）。
-- 唯一带 `olderKeys` 的是 cadenza（旧键 `cadenze_tuning`，`cadenza/tuning.ts:21`）。
-- `applyVisualizerTuning(mode, props, bundle)` 把 tuning 以命名 prop（如 `sonnetTuning`）传给样式 renderer，同时 `props.visualizerTunings` 带整包 bundle（`tuningRegistry.ts`）。
-- 每个 `tuning.ts` 可声明 `preview(draft, saved)`（拖动滑块时预览画什么）、`apply(props, tuning)`、`storage: {key, olderKeys, read, merge, onChange, resetNotice, actions}`（`tuningDefinition.ts`）。
-- 默认 `preview` 行为：预览画 draft；`apply` 一律 `{...props, <mode>Tuning: tuning}`（monet 额外设 `onMonetTuningChange`）。
+16 个样式有 `tuning.ts`（静止没有），**全部**遵循 `defineVisualizerTuning`，声明 `settingsKey`、
+`settingsSetterKey`、`settingsResetterKey`、`storage.key` 与 `defaults`：
 
-## 2. 各样式默认值（`DEFAULT_<MODE>_TUNING` 原文）
+| 样式 | settingsKey | 设置面板 | 动感效果 |
+|------|-------------|----------|----------|
+| sonnet 商籁 | `sonnetTuning` | `sonnet/SonnetSettingsPanel.tsx` | `sonnet.lensTear` 推镜裂光 |
+| tempera 凝彩 | `temperaTuning` | `tempera/TemperaSettingsPanel.tsx` | `tempera.inkFlash` 墨染奥行 |
+| lumiere 绘光 | `lumiereTuning` | `lumiere/LumiereSettingsPanel.tsx` | — |
+| hanabi 花火 | `hanabiTuning` | `hanabi/HanabiSettingsPanel.tsx` | `hanabi.beatBursts`、`hanabi.beatPulse` |
+| machi 町景 | `machiTuning` | `machi/MachiSettingsPanel.tsx` | `machi.neonPulse`、`machi.drumRipple`、`machi.screenFlash` |
+| nebbia 雾笺 | `nebbiaTuning` | `nebbia/NebbiaSettingsPanel.tsx` | `nebbia.drizzleRide`（两段强度） |
+| classic 流光 | `classicTuning` | `settingsPanels.tsx` 的 `ClassicSettingsPanel` | — |
+| cadenza 心象 | `cadenzaTuning` | **无面板**（显示「这个样式没有参数」） | — |
+| partita 云阶 | `partitaTuning` | `settingsPanels.tsx` 的 `PartitaSettingsPanel` | — |
+| fume 浮名 | `fumeTuning` | `settingsPanels.tsx` 的 `FumeSettingsPanel` | — |
+| tilt 倾诉 | `tiltTuning` | `settingsPanels.tsx` 的 `TiltSettingsPanel` | — |
+| claddagh 回环 | `claddaghTuning` | `settingsPanels.tsx` 的 `CladdaghSettingsPanel` | — |
+| monet 莫奈 | `monetTuning` | `monet/MonetSettingsPanel.tsx` | — |
+| pendolo 时计 | `pendoloTuning` | `pendolo/PendoloSettingsPanel.tsx` | `pendolo.drumhead` 仿真鼓面（`pendolo.gearBeats` 已停用） |
+| cappella 群唱 | `cappellaTuning` | `settingsPanels.tsx` 的 `CappellaSettingsPanel` | — |
+| diorama 镜台 | `dioramaTuning` | `settingsPanels.tsx` 的 `DioramaSettingsPanel` | `diorama.ripple` 水镜涟漪 |
+| still 静止 | —（无 `tuning.ts`） | 无 | — |
 
-### Classic —— ClassicTuning
+- `storage.key` 一律 `<mode>_tuning`（`sonnet_tuning` … `diorama_tuning`，花火/町景/雾笺同样命名）。
+  唯一带 `olderKeys` 的是心象：旧键 `cadenze_tuning`。
+- `applyVisualizerTuning(mode, props, bundle)` 把 tuning 以命名 prop（`sonnetTuning` 等）交给渲染器，同时把整包
+  bundle 放在 `props.visualizerTunings`。花火/町景/雾笺没有命名 prop，渲染器自己用 `read(props.visualizerTunings)`
+  从 bundle 取。
+- `tuning.ts` 还能声明 `preview(draft, saved)`（拖动滑块时预览画什么）与 `storage`
+  的 `read` / `merge` / `onChange` / `resetNotice` / `actions`；不声明 `preview` 时预览画草稿。
+- **默认值必须打底**：`defineVisualizerTuning(...).apply` 把交给它的 bag 原样存下，从不跑样式自己的 `resolve()`。
+  bag 里少一个键不是报错，而是渲染器乘出 `NaN`，`position` / `alpha` / `scale` 变 `NaN` 后整个构图静默消失
+  （凝彩在 0.7.25 新增三个景深键时就那样丢过字形）。插件因此在持久化层（`model/mergeTuning.ts` 的
+  defaults-first 合并）和发布层（`publisher/config.ts` 的 `buildTuningBundle`）各打一次底。
+
+## 2. 各样式默认值
+
+### Classic —— `ClassicTuning`
 ```ts
-enableWordRotation: true,
-breathingFloatMultiplier: 1,
-useLegacyLayout: false,
-wordSpacing: 0.7,
+enableWordRotation: true, breathingFloatMultiplier: 1, useLegacyLayout: false, wordSpacing: 0.7,
 ```
 
-### Cadenza —— CadenzaTuning
+### Cadenza —— `CadenzaTuning`
 ```ts
-fontScale: 1.12,
-widthRatio: 0.72,
-motionAmount: 1,
-glowIntensity: 1,
-beamIntensity: 0,
+fontScale: 1.12, widthRatio: 0.72, motionAmount: 1, glowIntensity: 1, beamIntensity: 0,
 ```
 
-### Partita —— PartitaTuning
+### Partita —— `PartitaTuning`
 ```ts
-showGuideLines: true,
-useSemanticLayout: true,
-staggerMin: 20,
-staggerMax: 100,
+showGuideLines: true, useSemanticLayout: true, staggerMin: 20, staggerMax: 100,
 ```
 
-### Fume —— FumeTuning
+### Fume —— `FumeTuning`
 ```ts
-hidePrintSymbols: false,
-disableGeometricBackground: true,
-backgroundObjectOpacity: 0.5,
-textHoldRatio: 1,
-cameraTrackingMode: 'smooth',
-cameraSpeed: 1,
-glowIntensity: 1,
-heroScale: 1,
+hidePrintSymbols: false, disableGeometricBackground: true, backgroundObjectOpacity: 0.5, textHoldRatio: 1,
+cameraTrackingMode: 'smooth', cameraSpeed: 1, glowIntensity: 1, heroScale: 1,
 ```
 
-### Claddagh —— CladdaghTuning
+### Tilt —— `TiltTuning`
 ```ts
-focusScaleRatio: 0.65,
-radiusScale: 1.0,
-ellipseTiltDeg: 45,
-showAxisLine: true,
-letterSpacingOffset: 0,
+splitProbability: 0.75, tiltStyleProbability: 0.35, colorScheme: 'default',
 ```
 
-### Cappella —— CappellaTuning
+### Claddagh —— `CladdaghTuning`
 ```ts
-showEmoMessages: true,
-emojiPackSource: 'builtin',
-avatarSource: 'cover',
+focusScaleRatio: 0.65, radiusScale: 1.0, ellipseTiltDeg: 45, showAxisLine: true, letterSpacingOffset: 0,
 ```
 
-### Tilt —— TiltTuning
+### Cappella —— `CappellaTuning`
 ```ts
-splitProbability: 0.75,
-tiltStyleProbability: 0.35,
-colorScheme: 'default',
+showEmoMessages: true, emojiPackSource: 'builtin', avatarSource: 'cover',
 ```
 
-### Pendolo —— PendoloTuning
+### Monet —— `MonetTuning`
 ```ts
-arcRadius: 0.42,
-arcAngleDeg: 100,
-wheelCenterX: 0.0,
-wheelCenterY: 0.50,
-tickSnappiness: 2.0,
-activeScale: 1.25,
-showGearDecor: 'subtle',
-showCenterGradient: true,
-showCoverOnWatchFace: false,
-enableLineGlow: false,
-```
-
-### Sonnet —— SonnetTuning
-```ts
-cameraIntensity: 1,
-typographyMotion: 1,
-mgDensity: 1,
-showOnlyText: false,
-showGuide: true,
-showBackgroundMg: true,
-showFixedGeo: true,
-showGiantDecorativeText: true,
-showBackgroundDecor: true,
-enableTransitions: true,
-outerFrameMode: 'full',
-textureResolution: 1.5,
-postProcessEnabled: false,
-postProcessGrain: 0.2,
-postProcessContrast: 0,
-postProcessRgbShift: 0,
-postProcessHalftone: 0,
-postProcessVignette: 0.85,
-postProcessLensDistortion: 0.3,
-postProcessLensDispersion: 0.6,
-```
-
-### Tempera —— TemperaTuning
-```ts
-cameraIntensity: 1,
-glyphMotion: 1,
-wholeLineLyrics: false,
-glyphSettleStretch: 0.5,
-colorMode: 'duo',
-showBlocks: true,
-showDecor: true,
-showCornerMarks: true,
-textInversion: true,
-layerImages: [],
-layerImageDepth: 'back',
-layerImageFrequency: 0.6,
-enableTransitions: true,
-textureResolution: 1.5,
-postProcessEnabled: true,
-postProcessTextureCompression: false,
-postProcessGrain: 0.2,
-postProcessContrast: 0,
-postProcessRgbShift: 0,
-postProcessVignette: 0.85,
-postProcessLensDistortion: 0.3,
-```
-
-### Lumiere —— LumiereTuning
-```ts
-lightIntensity: 1,
-audioResponse: 1,
-fogDensity: 1,
-darkField: 0.75,
-moteAmount: 1,
-bloom: 1,
-textBloom: 1,
-unlitOpacity: 0.22,
-windowNeighbors: 2,
-decay: 1,
-echo: 1,
-fogOctaves: 5,
-lineArt: true,
-frontBokeh: true,
-trails: true,
-hideTrails: false,
-seamlessTransitions: true,
-overlayFrame: true,
-textOnly: false,
-keywordColors: true,
-themeIcons: true,
-themeColorMix: 0.3,
-renderQuality: 'full',
-```
-
-### Diorama —— DioramaTuning
-```ts
-cameraSpeed: 1,
-motionAmount: 1,
-audioReactivity: 1,
-geometryVisibility: DEFAULT_DIORAMA_GEOMETRY_VISIBILITY,
-particleDensity: 576,
-particleScale: 1,
-particleGlowEnabled: true,
-particleGlowIntensity: 0.65,
-showParticles: true,
-backgroundParticleCircumference: 28,
-backgroundParticleRadial: 2,
-glowEnabled: true,
-glowIntensity: 1,
-soulEnabled: true,
-soulIntensity: 1,
-soulActiveEnabled: false,
-gradientEnabled: false,
-gradientIntensity: 1,
-keywordColoringEnabled: true,
-```
-
-### Monet —— MonetTuning
-```ts
-keywordColoringEnabled: true,
-showDescription: true,
-showAudioVisualization: true,
-audioStyle: 'bar',
-fontScale: 1.2,
-portraitSource: 'cover',
-portraitOffsetX: 0,
-portraitStyle: 'square',
+keywordColoringEnabled: true, showDescription: true, showAudioVisualization: true, audioStyle: 'bar',
+fontScale: 1.2, portraitSource: 'cover', portraitOffsetX: 0, portraitStyle: 'square',
 showPortraitDragHanger: true,
 ```
 
-## 3. 背景 tuning 默认值（`backgrounds/<mode>/tuning.ts` 用）
-
-背景 mode：`common`、`latent`（默认）、`monet`、`nomand`、`sora`、`url`；下述为有 tuning 对象的背景。
-
-### Monet_background —— MonetBackgroundTuning
+### Pendolo —— `PendoloTuning`
 ```ts
-backgroundSource: 'cover-derived',
-backgroundLayout: 'full-overlay',
-backgroundBlurPx: 6,
-backgroundOverlayOpacity: 0.74,
-backgroundGrayscale: 0,
-backgroundSaturation: 1.05,
-backgroundWash: 0.34,
-backgroundHalfPaneOffsetX: 0,
-backgroundWashColorMode: 'theme',
-backgroundWashCustomColor: '#8fb7ff',
-backgroundDriftEnabled: true,
-backgroundDriftStrength: 0.5,
-backgroundStreaksEnabled: true,
+arcRadius: 0.42, arcAngleDeg: 100, wheelCenterX: 0.0, wheelCenterY: 0.50, tickSnappiness: 2.0,
+activeScale: 1.25, showGearDecor: 'subtle', showCenterGradient: true, showCoverOnWatchFace: false,
+enableLineGlow: false,
 ```
 
-### Nomand_background —— NomandBackgroundTuning
+### Diorama —— `DioramaTuning`
 ```ts
-imageSource: 'cover-derived',
-effect: 'dithering',
-ditheringType: '8x8',
-size: 3,
-colorSteps: 4,
-originalColors: false,
-inverted: false,
-flutedGlassSize: 0.5,
-flutedGlassDistortion: 0.5,
-flutedGlassBlur: 0.08,
-paperTextureContrast: 0.32,
-paperTextureRoughness: 0.42,
-paperTextureFiber: 0.3,
-halftoneDotsSize: 0.5,
-halftoneDotsRadius: 1.25,
-halftoneDotsContrast: 0.4,
-halftoneDotsOriginalColors: false,
-halftoneDotsInverted: false,
-lensDistortionSpread: 0.45,
-lensDistortionBulge: 0.3,
-lensDistortionDispersion: 0.65,
-overlayEnabled: true,
-overlayOpacity: 0.35,
+cameraSpeed: 1, motionAmount: 1, audioReactivity: 1,
+geometryVisibility: { enabled: true, mode: 'clouds', strands: true, blobs: true, ribbons: true, rings: true },
+particleDensity: 576, particleScale: 1, particleGlowEnabled: true, particleGlowIntensity: 0.65,
+showParticles: true, backgroundParticleCircumference: 28, backgroundParticleRadial: 2,
+glowEnabled: true, glowIntensity: 1, soulEnabled: true, soulIntensity: 1, soulActiveEnabled: false,
+gradientEnabled: false, gradientIntensity: 1, keywordColoringEnabled: true,
 ```
 
-### Latent_background —— LatentBackgroundTuning
+`geometryVisibility` 的默认值是 `DEFAULT_DIORAMA_GEOMETRY_VISIBILITY`（上文已展开）
+
+### Sonnet —— `SonnetTuning`
 ```ts
-displayMode: 'both',
-colorSource: 'cover-theme',
-dynamicOnlyInPlayer: true,
-enhancedBeatResponse: true,
-ditheringSpeed: 0.1,
-ditheringAudioSpeed: 1.2,
-ditheringSize: 2.5,
-ditheringOpacity: 0.55,
-meshSpeed: 0.3,
-meshAudioSpeed: 2,
-meshDistortion: 0.8,
-meshSwirl: 0.1,
-overlayEnabled: true,
-overlayOpacity: 0.35,
+cameraIntensity: 1, typographyMotion: 1, mgDensity: 1,
+showOnlyText: false, showGuide: true, showBackgroundMg: true, showFixedGeo: true,
+showGiantDecorativeText: true, showBackgroundDecor: true, enableTransitions: true,
+outerFrameMode: 'full', textureResolution: 1.5,
+postProcessEnabled: false, postProcessGrain: 0.2, postProcessContrast: 0, postProcessRgbShift: 0,
+postProcessHalftone: 0, postProcessVignette: 0.85, postProcessLensDistortion: 0.3,
+postProcessLensDispersion: 0.6,
 ```
 
-### Sora_background —— SoraBackgroundTuning
+### Tempera —— `TemperaTuning`
+```ts
+cameraIntensity: 1, glyphMotion: 1, wholeLineLyrics: false, glyphSettleStretch: 0.5,
+depthOfField: 1, depthPan: 1, glyphDepth: 1,
+colorMode: 'duo', showBlocks: true, showDecor: true, showCornerMarks: true, textInversion: true,
+layerImages: [], layerImageDepth: 'back', layerImageFrequency: 0.6,
+enableTransitions: true, textureResolution: 1.5,
+postProcessEnabled: true, postProcessTextureCompression: false, postProcessGrain: 0.2,
+postProcessContrast: 0, postProcessRgbShift: 0, postProcessVignette: 0.85, postProcessLensDistortion: 0.3,
+```
+
+`depthOfField` / `depthPan` / `glyphDepth` 是 0.7.25 新增的三个景深键，与 `tempera.inkFlash` 同一版引入
+
+### Lumiere —— `LumiereTuning`
+```ts
+lightIntensity: 1, audioResponse: 1, fogDensity: 1, darkField: 0.75, moteAmount: 1,
+bloom: 1, textBloom: 1, unlitOpacity: 0.22, windowNeighbors: 2, decay: 1, echo: 1, fogOctaves: 5,
+lineArt: true, frontBokeh: true, trails: true, hideTrails: false, seamlessTransitions: true,
+overlayFrame: true, textOnly: false, keywordColors: true, themeIcons: true, themeColorMix: 0.3,
+renderQuality: 'full',
+```
+
+### Hanabi —— `HanabiTuning`（`hanabi/types.ts`）
+```ts
+colorMode: 'mixed', sparkAmount: 1, ornamentAmount: 1, textMotion: 1, blockOpacity: 1,
+riseSpeed: 1, spin: 1, ambient: 1, glow: 1, bloom: 0.8, chorusBloom: 1.3,
+launches: true, overlayFrame: true, textOnly: false, sky: 0.85, collage: 1, renderQuality: 'full',
+```
+
+### Machi —— `MachiTuning`（`machi/types.ts`）
+```ts
+scene: 'auto', timeOfDay: 'auto', weather: 'auto', camera: 'default',
+views: { konbini: DEFAULT_MACHI_VIEW, station: DEFAULT_MACHI_VIEW, kowloon: DEFAULT_MACHI_VIEW },
+motion: false, motionSpeed: 1, aperture: 8, dof: 1, dofRange: 1, tiltShift: 0.3,
+focus: 'center', focusOffset: 0,
+quality: { renderScale: 1, antialias: 'smaa', shadows: 'high', reflections: 'high', glow: true, adaptive: true },
+```
+
+`views` 的每项默认是 `DEFAULT_MACHI_VIEW = { azimuth: 0, elevation: 0, zoom: 1, panX: 0, panZ: 0 }`；
+`quality` 的默认是 `{ ...MACHI_QUALITY_PRESETS.high, adaptive: true }`
+
+### Nebbia —— `NebbiaTuning`（`nebbia/types.ts`）
+```ts
+appear: ['write', 'fade'], fade: ['fog'], layouts: [...NEBBIA_LAYOUTS], credits: true,
+jitter: 0.6, warp: 0.6, mist: 0.75, hold: 1.2, refog: 4, strokeWidth: 0.09, writeSpeed: 1,
+doodle: 0.3, busSpeed: 1, neon: 1, spot: 0.5, spotX: 0.8, rainHit: 1, rainBig: 1, bump: 1,
+resolution: 1,
+```
+
+### Still —— 无 tuning
+`still` 没有 `tuning.ts`（上游目录里只有 `entry.tsx` 和 `VisualizerStill.tsx`），设置页显示「这个样式没有参数」。
+插件侧的 `STYLE_TUNING_DEFAULTS.still` / `STYLE_TUNING_KEYS.still` 仍给出 `{}` 与 `'stillTuning'`，因为它们是
+`Record<StyleMode, …>`；这对渲染没有影响 —— 上游没有对应的 tuning 注册项，`applyVisualizerTuning` 找不到
+`apply` 时原样把共享 props 交下去。
+
+## 3. 背景 tuning 默认值
+
+4 个背景有自己的 tuning（`backgrounds/<mode>/tuning.ts`）；`common` 的字段是 `CommonBackgroundSettings`
+（`{opacity, useCoverColorBg, disableVignette, disableGeometricBackground}`），`url` 没有 tuning。
+
+### Monet 背景 —— `MonetBackgroundTuning`
+```ts
+backgroundSource: 'cover-derived', backgroundLayout: 'full-overlay', backgroundBlurPx: 6,
+backgroundOverlayOpacity: 0.74, backgroundGrayscale: 0, backgroundSaturation: 1.05, backgroundWash: 0.34,
+backgroundHalfPaneOffsetX: 0, backgroundWashColorMode: 'theme', backgroundWashCustomColor: '#8fb7ff',
+backgroundDriftEnabled: true, backgroundDriftStrength: 0.5, backgroundStreaksEnabled: true,
+```
+
+### Nomand 背景 —— `NomandBackgroundTuning`
+```ts
+imageSource: 'cover-derived', effect: 'dithering', ditheringType: '8x8', size: 3, colorSteps: 4,
+originalColors: false, inverted: false,
+flutedGlassSize: 0.5, flutedGlassDistortion: 0.5, flutedGlassBlur: 0.08,
+paperTextureContrast: 0.32, paperTextureRoughness: 0.42, paperTextureFiber: 0.3,
+halftoneDotsSize: 0.5, halftoneDotsRadius: 1.25, halftoneDotsContrast: 0.4,
+halftoneDotsOriginalColors: false, halftoneDotsInverted: false,
+lensDistortionSpread: 0.45, lensDistortionBulge: 0.3, lensDistortionDispersion: 0.65,
+overlayEnabled: true, overlayOpacity: 0.35,
+```
+
+### Latent 背景 —— `LatentBackgroundTuning`
+```ts
+displayMode: 'both', colorSource: 'cover-theme', dynamicOnlyInPlayer: true, enhancedBeatResponse: true,
+ditheringSpeed: 0.1, ditheringAudioSpeed: 1.2, ditheringSize: 2.5, ditheringOpacity: 0.55,
+meshSpeed: 0.3, meshAudioSpeed: 2, meshDistortion: 0.8, meshSwirl: 0.1,
+overlayEnabled: true, overlayOpacity: 0.35,
+```
+
+### Sora 背景 —— `SoraBackgroundTuning`
 ```ts
 blank: false,
 ```
 
-## 4. 与设置 UI 的关系
+## 4. 改默认值 / 做迁移时的注意点
 
-- 每个样式的设置面板把 tuning 字段渲染成 kit 控件；字段的 label 文案在各样式面板文件里（如 sonnet 见 `docs/folia-spec/settings-ui.md` §3.4）。
-- 所有数值区间不在 types 里，而在面板组件里（SliderRow 的 min/max/step）。WebView 复刻时以面板源文件为准。
-- 13 个 tuning 的默认值随 Folia 版本变化；迁移桌面 Folia 配置时按 `DEFAULT_*_TUNING` 做 merge（`readStoredTuning` 会把缺字段补默认）。
+- 数值区间不在 `types.ts` 里，而在各样式面板组件（`SliderRow` 的 `min` / `max` / `step`）。改区间得改面板；
+  改默认值改 `DEFAULT_<MODE>_TUNING`。
+- 上游加字段时（例如 0.7.25 给凝彩加三个景深键），**老用户的设置树里没有这些键**。插件的 `applySnapshot`
+  与 `buildTuningBundle` 都是 defaults-first 合并，缺键自动补默认；这条不能退化成整对象替换。
+- 迁移桌面 Folia 配置时同样按 `DEFAULT_*_TUNING` 合并后再用，`readStoredTuning` 也走 `storage.read` 把缺字段补成
+  完整 tuning。
+- 智能动感效果的开关与强度不在这套 tuning 里：它们是 `SmartBeatSettings.effects[<effectId>]`
+  （`{on, strength}`，强度 0–2，默认 `{on: true, strength: 1}`），而该模式在当前插件里不暴露（见
+  [`style-map.md`](style-map.md) §3）。`tuning.ts` 的 `resetNotice` 只负责样式自己的重置提示。

@@ -49,8 +49,7 @@ v0.2.0 把两件事合在一起发布：**透明窗口现在能按样式正确�
   （不出现粉雾）；`monet` 在透明下选中自动 `off`，其余 `on` 且歌词文字保留。
 - **打包布局验收**（`packaging/tools/verify-layout.mjs`）：PASS（真实启动包内宿主，settings/桥/ESC 均正常，
   `consoleErrors=0`）。
-- 完整记录见 [verification-v0.2.0.md](verification-v0.2.0.md)（v0.1.11 两项修复的现场证据与修复前后对比见
-  [verification-v0.1.11.md](verification-v0.1.11.md)）。
+- 完整记录见 [verification-v0.2.0.md](verification-v0.2.0.md)。
 
 ## 产物
 

@@ -1,187 +1,191 @@
-# 播放条控制通道（v0.3.0 增补）实现契约
+# 播放控制通道
 
-> 用户请求（2026-10-21）：把 v0.3.0 底部播放条中原本无法点击的按钮全部变为可点击、有实际作用，
-> 包括最右侧的随机播放与播放列表。保持 0.3.0 版本号；先本地验收，不自动上架 GitHub。
->
-> 线协议以 `docs/protocol.md` 为准（§1 `queue`、§2 `control`、§3.1 `control`、§3.2 `queue`、§3.4）。
-> 本文档记录 **宿主内部反射映射**、各层实现契约、文件所有权与验收标准。所有层并行开发，
-> 由 Lead 负责协议文档、集成构建与端到端验收。
+播放条与画面点击分区驱动真实播放器的完整链路。**线协议以 [`docs/protocol.md`](protocol.md)
+为准**（§1 `queue`、§2 `control`、§3.1 页面 `control`、§3.2 `queue`、§3.4 action 语义）；
+本文记录**宿主内部反射映射**与各层实现契约。
 
 ## 1. 数据流
 
 ```
-[设置 UI PlaybackBar/QueuePanel] --emit('control')--> Shim --> §3.1 {"type":"control",...}
-   --> HostForm.OnWebMessageReceived --> §2 {"t":"control",...} --> 插件 FoliaHostBridge stdout 读取
+[设置岛 PlaybackBar / PlaybackQueuePanel / PlaybackClickZones]
+   --emit('control')--> Shim --§3.1 {"type":"control",...}--> HostForm.OnWebMessageReceived
+   --§2 {"t":"control",...}--> 插件 FoliaHostBridge stdout 读取
    --> FoliaPlaybackControls（反射）--> PlaybackController / PlaybackQueue
-[队列状态]PlaybackController.getPlaybackQueueState() --> FoliaPlaybackControls.snapshotJson()
-   --> §1 {"t":"queue",...} --> HostForm.HandleStdinLine --> §3.2 {"type":"queue",...} --> Shim emit('queue')
-   --> PlaybackBar（随机激活态）+ PlaybackQueuePanel（列表/当前项/点击切歌）
+
+[队列状态] PlaybackController.getPlaybackQueueState()
+   --> FoliaPlaybackControls.snapshotJson() --§1 {"t":"queue",...}--> HostForm.HandleStdinLine
+   --§3.2 {"type":"queue",...}--> Shim emit('queue')
+   --> PlaybackBar（随机激活态）+ PlaybackQueuePanel（列表 / 当前项 / 点击切歌）
 ```
 
-宿主只做搬运（`t` ⇄ `type` 改名、字段白名单校验），**不得自行处理播放语义**；插件是控制落点。
+**宿主只做搬运**（`t` ⇄ `type` 改名、字段白名单校验），不得自行处理播放语义；插件是控制落点。
 
-## 2. 宿主内部反射映射（SPW 1.19.0，已在宿主自身代码中验证）
+## 2. 宿主内部反射映射
 
-插件已用 `spwVersion == "1.19.0"` 版本守卫；以下名称固定于该版本。全部用 `java.lang.reflect`，
-**不要**把宿主类加入编译期依赖。
+宿主播放器不在 Workshop API 里，`FoliaPlaybackControls`（`spw-folia/src/main/kotlin/dev/spw/folia/`）
+用 `java.lang.reflect` 打宿主自己的 classloader。**不要**把宿主类加入编译期依赖。
 
-```
-Class PlaybackController = "com.xuncorp.voxzen.service.PlaybackController"
-  static field INSTANCE
-  getPlaybackQueueState() : kotlinx.coroutines.flow.StateFlow
-  play() / pause() / playOrPause() / previous() / next()
-  seekTo(long)
-  changePlaybackMode(PlaybackQueue$Mode)
-  playMusicAt(int index, boolean isRandomQueue)   // = 跳到对应队列的 index 并播放
-Class StateFlow = "kotlinx.coroutines.flow.StateFlow"
-  getValue() : Object          // 可读名字，未被混淆
-Class PlaybackQueueState = "com.xuncorp.spc.core.queue.PlaybackQueueState"
-  mode        \u037F() -> PlaybackQueue$Mode
-  normalQueue \u0528() -> java.util.List      // 元素 com.xuncorp.spc.core.queue.Ϳ（U+037F 顶层单字符类）
-  normalIndex \u0529() -> int
-  randomQueue \u052A() -> java.util.List
-  randomIndex \u052B() -> int
-  readyToSave \u052C() -> boolean
-Class PlaybackQueue$Mode = "com.xuncorp.spc.core.queue.PlaybackQueue$Mode"
-  values() -> [Circle, CircleEnd, RepeatOne, Random]（ordinal 0..3；枚举名可读，valueOf 可用）
-Class QueueItem = "com.xuncorp.spc.core.queue.Ϳ"   // U+037F，*不是* PlaybackQueueItem（1.19.0 实测）
-  \u037F() -> int              // 队列项 id（内部用，页面不用）
-  \u0528() -> Object           // data = PiscesMediaItem
-Class PiscesMediaItem = "com.xuncorp.pisces.PiscesMediaItem"
-  \u037F() -> String  id
-  \u0528() -> String  title
-  \u0529() -> String  artist
-  \u052A() -> String  album
-  \u052B() -> String  albumArtist
-  \u052C() -> String  path
-```
+**关键前提：混淆名不可写死。** SPW 是 R8 混淆的，每个 build 都会重新生成混淆名，同一版本的
+Windows / Linux 构建也不相同。`HostMemberResolver` 用两条与名字无关的策略定位成员：
 
-注意事项（重要）：
+1. **Kotlin `@Metadata` 的原始属性名 + 声明顺序**（R8 默认保留 metadata，字段表顺序与 metadata
+   顺序一致）—— 例如 `PlaybackQueueState` 的 metadata 仍含
+   `mode / normalQueue / normalIndex / randomQueue / randomIndex`；
+2. metadata 被剥掉时退回**返回类型 / 元数形状**匹配（state 对象恰好声明一个 mode getter、
+   一组 normal 的 list/int、一组 random 的 list/int）。
 
-1. **加载器**：插件与宿主同 JVM。首选 `Class.forName(name, false, WorkshopApi::class.java.classLoader)`
-   （`com.xuncorp.spw.workshop.api.WorkshopApi` 由宿主运行时提供，其 classloader 必能看见宿主类）；
-   失败再依次退回 `Thread.currentThread().contextClassLoader`、插件自身 classloader。首次解析时记录实际生效的
+改这里之前先读 `HostMemberResolver.kt` 的类注释 —— 那里有完整的推导过程与实测证据。
+
+### 2.1 反射目标（结构角色）
+
+| 角色 | 说明 |
+|---|---|
+| `PlaybackController` | 宿主播放器门面；static `INSTANCE`；`getPlaybackQueueState()`、`playOrPause()`、`previous()`、`next()`、`seekTo(long)`、`changePlaybackMode(Mode)`、`playMusicAt(int, boolean)` |
+| `StateFlow` | `getPlaybackQueueState()` 的返回类型；`getValue()` 名字**未**被混淆，可直接用 |
+| `PlaybackQueueState` | 队列状态对象：`mode` + `normalQueue/normalIndex` + `randomQueue/randomIndex` |
+| `PlaybackQueue$Mode` | 枚举，`values()` 顺序 = `[Circle, CircleEnd, RepeatOne, Random]`（ordinal 0..3）；**枚举名可读，`valueOf` 可用** |
+| QueueItem | `com.xuncorp.spc.core.queue` 下的单字符顶层类（原始名 `PlaybackQueueItem`，在 `@Metadata` 里）；取 id 与 `data` |
+| `PiscesMediaItem` | `id` / `title` / `artist` / `album` / `albumArtist` / `path` |
+
+源码里残留的 `\u037F`（getter）、`\u0528…\u052B`（四个队列访问器）**只是最后兜底**，写在常量池
+注释里作为「元数据与形状都失败时」的退路。
+
+### 2.2 注意事项（改这里前必读）
+
+1. **加载器**：首选 `Class.forName(name, false, WorkshopApi::class.java.classLoader)`；失败再依次
+   退回 `Thread.currentThread().contextClassLoader`、插件自身 classloader。首次解析记录实际生效的
    loader 与失败原因到插件日志。
-2. **不要独立 JVM 探测**：`PlaybackController.<clinit>` 会构造 `PlaybackService` 并初始化 BASS 原生库
-   （独立 JVM 中表现为 `IllegalArgumentException: Invalid library name ""`）。只能在 SPW 进程内调用。
-3. 反射失败必须吞掉并记日志（首次含异常类型/消息，之后限流），绝不能让宿主桥线程或插件加载失败。
-4. `Method`/`Field` 句柄一次性解析并缓存（`@Volatile` + 双检）；`getValue()` 每次实时读，不回放缓存。
-5. 队列元素是 `com.xuncorp.spc.core.queue.Ϳ`（U+037F）包装：先取 `\u037F()` 的 int 与 `\u0528()` 的 data，再把 data 当
-   `PiscesMediaItem` 取字段。
+2. **不要独立 JVM 探测**：`PlaybackController.<clinit>` 会构造 `PlaybackService` 并初始化 BASS
+   原生库（独立 JVM 里表现为 `IllegalArgumentException: Invalid library name ""`）。
+3. 反射失败必须**吞掉并记日志**（首次含异常类型/消息，之后限流），绝不能让宿主桥线程或插件加载
+   失败。
+4. `Method`/`Field` 句柄一次性解析并缓存（`@Volatile` + 双检）；`getValue()` **每次实时读**，
+   不回放缓存。
+5. 队列元素是包装类：先取 id 与 `data`，再把 `data` 当 `PiscesMediaItem` 取字段。
+6. 反射枚举一律走 `Enum.name` / `values()`，绝不按字段名取值。
+
+> 历史提醒（只作为「为什么现在这样做」的背景）：早期版本把五个原始混淆标识符写死，正是 Steam
+> workshop「插件开发建议」帖警告的失效模式；`HostMemberResolver` 就是为消除它而引入的。
 
 ## 3. 各层契约
 
 ### 3.1 插件（Kotlin）
 
-新文件 `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlaybackControls.kt`（`internal object`）：
+`FoliaPlaybackControls.kt`（`internal object`）：
 
-- `fun handleControl(line: String)`：入参为宿主 stdout 的整行 `{"t":"control",...}`。用现有 `Json` 工具读字段；
-  `action` 分派：
+- `handleControl(line: String)`：入参是宿主 stdout 的整行 `{"t":"control",...}`，按 `action` 分派：
   - `toggle` → `playOrPause()`
   - `previous` / `next` → 对应方法
   - `seek` → `seekTo(max(0, positionMs))`
-  - `shuffle` → 当前 mode 名：`Random` → `changePlaybackMode(记住的非随机模式)`；否则先记住当前模式再
-    `changePlaybackMode(Random)`。记住值默认 `Circle`，仅保存在插件内存。
-  - `queue-play` → `playMusicAt(index, random)`（`index<0` 时忽略；`random` 缺省 false）
-  - 未知 action：忽略并记日志（前向兼容）。
-- `fun queueJson(): String?`：读 `PlaybackController.getPlaybackQueueState().getValue()` 生成
-  `{"mode":"circle|circle-end|repeat-one|random","random":bool,"index":int,"items":[{"id","title","artist","album"}]}`。
+  - `shuffle` → 当前 mode 名：`Random` → `changePlaybackMode(记住的非随机模式)`；否则先记住当前
+    模式再 `changePlaybackMode(Random)`。记住值默认 `Circle`，**仅保存在插件内存**
+  - `queue-play` → `playMusicAt(index, random)`（`index<0` 忽略；`random` 缺省 false）
+  - 未知 action：忽略并记日志（前向兼容）
+- `queueJson(): String?`：读
+  `getPlaybackQueueState().getValue()` 生成
+  `{"mode":"circle|circle-end|repeat-one|random","random":bool,"index":int,"items":[{id,title,artist,album}]}`。
   `random = modeName == "Random"`；列表取 `randomQueue/randomIndex` 或 `normalQueue/normalIndex`；
-  字段用 `Json` 转义。反射不可用（宿主版本缺失）时返回 `null`。
-- 控制成功后置 `queueDirty = true`，让 pump 立即重发快照（例如 shuffle 切换后激活态、切歌后高亮）。
+  字段用 `Json` 转义。**反射不可用时返回 `null`**。
+- 控制成功后置 `queueDirty = true`，让 pump 立即重发快照（例如 shuffle 切换后的激活态、切歌后的
+  高亮）。
 
 `FoliaHostBridge.kt`：
 
-- providers 增加 `@Volatile var queueProvider: (() -> String?)? = null`。
+- providers 里有 `@Volatile var queueProvider: (() -> String?)? = null`（与 snapshot / lyrics /
+  track provider 同处；`onClosed` / disable 时清空）。
 - `replaySnapshot()` 在 `ready` 时发送一次 `queue`。
-- state pump 里每 5 tick（500ms）调用 `queueProvider`，与 `AtomicReference` 缓存比较，变化才
-  `sendLine("{\"t\":\"queue\",...}")`；`queueDirty` 时下一 tick 强制发送。
-- `handleHostLine` 增加 `"control"` 分支 → `FoliaPlaybackControls.handleControl(line)`；异常只记日志。
+- state pump 每 5 tick（500ms）调用 `queueProvider`，与 `AtomicReference` 缓存比较，变化才发送；
+  `queueDirty` 时下一 tick 强制发送。
+- `handleHostLine` 的 `"control"` 分支 → `FoliaPlaybackControls.handleControl(line)`；异常只记日志。
+- `queueJson()` 返回 `null` → **不发送**，页面保留上一份快照（不是清空）。
 - 首帧/回放顺序：`sendState` → `sendTrack` → `queue`（页面侧允许任意顺序）。
 
-`FoliaPlugin.kt`：装配 providers 处设置 `bridge.queueProvider = { FoliaPlaybackControls.queueJson() }`
-（与现有 snapshot/lyrics/track provider 同处；`onClosed`/disable 时清空可选）。
-
-不新增任何构建依赖；不要改动版本号、MANIFEST、spmod 配置。
-
-### 3.2 宿主（C#，.NET Framework 4.8，`poc/webview/host`）
+### 3.2 宿主（C#，`poc/webview/host`）
 
 `HostForm.cs`：
 
-- `OnWebMessageReceived`（页面→宿主）新增 `type == "control"` 分支：
-  - 白名单 `action ∈ {toggle, previous, next, seek, shuffle, queue-play}`；非法 action 丢弃并记日志。
-  - 组装并 `log.WriteLine`（即写插件 stdin，不要用 `Console.Out` 另开通道）：
+- `OnWebMessageReceived`（页面→宿主）的 `type == "control"` 分支：
+  - 白名单 `action ∈ {toggle, previous, next, seek, shuffle, queue-play}`；非法 action 丢弃并记
+    `control-drop` warn。
+  - 组装并 `log.WriteLine`（即写插件 stdin，**不要**用 `Console.Out` 另开通道）：
     `{"t":"control","action":"<a>"[, "positionMs":<num>][, "index":<num>][, "random":true|false]}`
     - `positionMs`/`index` 用 `JsonUtil.Num` 输出；负数夹到 0；`random` 用 `JsonUtil.GetBool`。
-- `HandleStdinLine`（插件→宿主）新增 `t == "queue"` 分支 → `SendQueueToPage(msg, line)`：
+- `HandleStdinLine`（插件→宿主）的 `t == "queue"` 分支 → `SendQueueToPage(msg, line)`：
   - payload：`{"type":"queue","mode":"...","random":true|false,"index":N,"items":<原样数组>}`
   - `items` 用 `JsonUtil.ExtractRawValue(line, "items")` 原样搬运；`mode` 白名单校验
-    （circle/circle-end/repeat-one/random，非法按 circle 处理）。
+    （非法按 `circle` 处理）。
   - 缓存 `lastQueuePayload`；`OnNavigationCompleted` 回放（紧邻 lyrics/track 回放），并在
-    `type == "bridgeReady"` 处理里再回放一次（设置 UI 晚挂载时补发）。
+    `type == "bridgeReady"` 处理里再回放一次（设置岛晚挂载时补发）。
 - `PostToPage` 已线程安全，不必额外 marshal。
 
 `Shim.js`：
 
-- host→page `switch` 增加 `case 'queue': inputs.queue = msg; emitLocal('queue', msg); break;`
+- host→page 的 `switch` 增加 `case 'queue': inputs.queue = msg; emitLocal('queue', msg); break;`
 - `emit()` 增加 `else if (type === 'control') post(Object.assign({type:'control'}, payload || {}))`
-  （平铺字段，与 §3.1 一致；不要嵌套 `payload`）。
-- 不改动其它消息路径；`__SPW_FOLIA__` 版本仍为 `protocol: 1`。
+  （**平铺字段**，不要嵌套 `payload`）。同一类「动作消息」的信封形状要统一。
+- 不改动其它消息路径；`__SPW_FOLIA__` 版本仍是 `protocol: 1`。
 
-### 3.3 设置 UI（React/TS，`poc/settings-ui`）
+### 3.3 设置岛（React/TS，`poc/settings-ui`）
 
 `src/bridge.ts`：
 
-- `BridgeEventType` 增加 `'queue'`；导出
-  `PlaybackQueueSnapshot { mode: 'circle'|'circle-end'|'repeat-one'|'random'; random: boolean; index: number; items: QueueItem[] }`、
-  `QueueItem { id: string; title: string; artist: string; album?: string }`。
+- `BridgeEventType` 含 `'queue'`；导出
+  `PlaybackQueueSnapshot { mode: 'circle'|'circle-end'|'repeat-one'|'random'; random: boolean;
+  index: number; items: QueueItem[] }`、`QueueItem { id; title; artist; album? }`。
 - 导出 `sendPlaybackControl(action, extra?)` → `getBridge().emit('control', { action, ...extra })`。
-- fake bridge（dev.html）：
-  - 维护 demo 队列（≥6 首，首项用 `DEMO_TRACK`），初始派发 `queue` 事件；
-  - `emit('control', …)` 记录到 `window.__SPW_FOLIA_TEST_CONTROLS__`（数组，验收脚本读取）；
-  - 模拟语义：`toggle` 切 `playing` 并推进/暂停 demo 时钟、`next/previous` 改 index、`seek` 改位置、
-    `shuffle` 切 `random`、`queue-play` 改 index；随后派发新的 `queue` 与 `state`，让 UI 有真实反馈；
-  - 不引入网络/新依赖。
+- fake bridge（`dev.html`）：维护 demo 队列，初始派发 `queue`；`emit('control', …)` 记录到
+  `window.__SPW_FOLIA_TEST_CONTROLS__` 并模拟语义后回发新的 `queue` / `state`，让 UI 有真实反馈。
 
-`src/chrome/playback/PlaybackBar.tsx`（重写）：
+`src/chrome/playback/PlaybackBar.tsx`：
 
-- 所有 `disabled` 与 `gapTitle` 移除；按钮可点击、可键盘聚焦（`type="button"`，保留 aria-label）。
-  - 播放/暂停：`sendPlaybackControl('toggle')`，图标仍按 `meta.playing`。
+- 所有按钮可点击、可键盘聚焦（`type="button"`，保留 `aria-label`）。
+  - 播放/暂停：`sendPlaybackControl('toggle')`，图标按 `meta.playing`。
   - 上一首/下一首：`previous` / `next`。
   - 随机播放：`sendPlaybackControl('shuffle')`；`data-active={queue?.mode==='random'}`，激活时高亮
-    （CSS `.spw-playback-icon[data-active='true']`），title 动态「随机播放：开/关」。
-  - 播放列表：切换 `PlaybackQueuePanel` 开合；`aria-expanded`；面板打开时保持展开。
-  - 进度条：pointerdown/move/up（以及点击）计算比例 → `sendPlaybackControl('seek', { positionMs })`；
-    拖动中本地预览填充，不等待回流；拖动时 `stopPropagation`，避免误触展开/收起。
-- 订阅 `bridgeOn<PlaybackQueueSnapshot>('queue')`（初值读 `getBridge().inputs?.queue` 兼容晚挂载）；
-  记录 `queue` 状态传给按钮与面板。
-- 新组件 `src/chrome/playback/PlaybackQueuePanel.tsx`（DOM 选择器契约，集成验收脚本依赖）：
-  - 面板根节点 class `spw-queue-panel`；每个可点击行 `data-queue-index="<items 下标>"`；
-    当前项行 `data-current="true"` 高亮。
-  - 标题「播放列表」+ 曲目数；列表项显示序号/标题/歌手；当前项
-    `scrollIntoView({ block:'center' })`；点击项 → `sendPlaybackControl('queue-play', { index, random })`。
-  - 打开时 capture 阶段监听 Escape 关闭面板并 `stopPropagation()`（不关设置覆盖层/窗口）；
-    点击面板外关闭；关闭后焦点回到列表按钮。
-  - 样式写 `app.css` 播放条附近：深色半透明+模糊、圆角、最大高度 46vh、内部滚动、
-    hover/current 高亮、宽度 420px 居中、位于栏上方；`data-flat` 下沿用现有扁平视觉。
-- 设置覆盖层打开或 mouse passthrough 时组件保持现有「不渲染」行为。
+    （`.spw-playback-icon[data-active='true']`），title 动态「随机播放：开/关」。
+  - 播放列表：切换 `PlaybackQueuePanel` 开合；`aria-expanded`。
+  - 进度条：pointerdown/move/up（以及点击）计算比例 → `sendPlaybackControl('seek', {positionMs})`；
+    拖动中本地预览填充，不等回流；拖动时 `stopPropagation`，避免误触展开/收起。
+- 订阅 `bridgeOn<PlaybackQueueSnapshot>('queue')`（初值读 `getBridge().inputs?.queue` 兼容晚挂载）。
+- 设置覆盖层打开或鼠标穿透时组件**不渲染**。
 
-`research/settings-ui/v030-playback-controls-verify.mjs`（新验收脚本，puppeteer-core + dev server）：
+`src/chrome/playback/PlaybackQueuePanel.tsx`（DOM 选择器契约，集成验收脚本依赖）：
 
-- 断言：5 个传输按钮（播放/暂停、上一首、下一首、随机播放、播放列表）均非 disabled；逐个点击后 `window.__SPW_FOLIA_TEST_CONTROLS__` 出现对应 action；
-- 点击「播放列表」出现面板与 demo 项；点击第 3 项 → `queue-play {index:2, random:false}`；
-- 点击「随机播放」→ `shuffle` 且按钮 `data-active="true"`（fake bridge 回发 random 队列后）；
-- 在进度条 50% 处点击 → `seek` 且 `positionMs` 落在 `durationMs*0.5 ± 5%`；
-- 打开面板按 Escape 只关面板；
-- 截图：`v030-controls-bar.png`、`v030-controls-queue.png`；
-- 输出 JSON 摘要 + 非零退出表示失败。
+- 面板根节点 class `spw-queue-panel`；每个可点击行 `data-queue-index="<items 下标>"`；
+  当前项行 `data-current="true"` 高亮。
+- 标题「播放列表」+ 曲目数；列表项显示序号/标题/歌手；当前项 `scrollIntoView({block:'center'})`；
+  点击项 → `sendPlaybackControl('queue-play', { index, random })`。
+- 打开时 capture 阶段监听 Escape 关闭面板并 `stopPropagation()`（不关设置覆盖层/窗口）；
+  点击面板外关闭；关闭后焦点回到列表按钮。
+- 样式写 `app.css` 播放条附近：深色半透明 + 模糊、圆角、最大高度 46vh、内部滚动、hover/current
+  高亮、宽度 420px 居中、位于栏上方；`data-flat` 下沿用扁平视觉。
 
-## 4. 验收（Definition of Done）
+`src/chrome/PlaybackClickZones.tsx`（画面点击分区）：左 1/3 上一首、中 1/3 播放/暂停、右 1/3
+下一首。三条规则保证它不抢真实控件的点击 —— 详见 [`docs/protocol.md`](protocol.md) §8 与文件
+头注释（z-index 层级、覆盖层/穿透时禁用、拖拽与 Alt 拖动不算点击）。
 
-1. 三层各自可构建：`pnpm --dir poc/settings-ui build`、`bash poc/webview/host/build.sh`、
-   `cd spw-folia && "C:/Users/24037/Downloads/gradle-9.8.0/bin/gradle.bat" plugin --console=plain`。
-2. `node research/settings-ui/v030-playback-controls-verify.mjs`（dev server :18090）全 PASS。
-3. Lead 集成：`bash packaging/build-package.sh` → 生成 `dist/release/spw-folia-0.3.0.spmod`；
-   `bash spw-folia/scripts/install-local.sh --restart`；真实 SPW 打开视觉器：按钮可点、暂停/继续/上下首/
-   拖动进度/随机切换/列表切歌均生效，`%APPDATA%` 插件日志无反射错误；截图存档 `research/settings-ui/`。
-4. 更新 `docs/archive/verification-v0.3.0.md` 与 `docs/archive/release-notes-v0.3.0.md`（Lead 负责）。
+## 4. DOM 选择器契约（验收脚本依赖）
+
+| 元素 | 选择器 |
+|---|---|
+| 播放条按钮 | `.spw-playback-play` / `.spw-playback-step` / `.spw-playback-icon` |
+| 随机按钮 | `aria-label="随机播放"` |
+| 列表按钮 | `aria-label="播放列表"` |
+| seek 区域 | `.spw-playback-bar .spw-playback-track`，须同时响应 `pointerdown+pointerup` 与 `click` |
+| 队列面板 | `.spw-queue-panel` / `[data-queue-index]` / `[data-current="true"]` |
+| 点击分区 | `[data-spw-click-zone]`（`data-enabled="true\|false"`）+ `[data-zone="prev"\|"toggle"\|"next"]` |
+| 测试记录 | `window.__SPW_FOLIA_TEST_CONTROLS__` |
+
+改这些选择器会让 `verify-playback-controls.mjs` 与 `verify-playback-bar-switch.mjs` FAIL ——
+它们是门禁，不是建议。
+
+## 5. 验收
+
+| 脚本 | 覆盖 |
+|---|---|
+| `packaging/tools/verify-playback-controls.mjs` | 拉起打包宿主，跑完整 control/queue 往返 |
+| `packaging/tools/verify-playback-bar-switch.mjs` | 「显示播放条」开关（含 E7：关掉后菜单按钮仍可点开，防锁死） |
+| `packaging/tools/verify-playback-switches.mjs` | 配置页开关链路 |
+| `packaging/tools/verify-mouse-back.mjs` | 侧键「返回」= ESC |
+
+`verify-all.mjs` 会把它们串起来跑。

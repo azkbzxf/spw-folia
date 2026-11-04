@@ -2,7 +2,7 @@
 
 Everything here exists to answer one question: **can we host Folia's own production visualizer
 bundle in a native window we control?** Answer: **yes** — WebView2 helper + injected EventSource
-bridge, all 15 styles, 119–120 fps, offline. Decision record: `docs/archive/webview-spike.md`; host
+bridge, all 17 styles, 119–120 fps, offline. Decision record: `docs/archive/webview-spike.md`; host
 implementation: `docs/host-app.md`; IPC contract: `docs/protocol.md`.
 
 ## One-command demo
@@ -21,7 +21,7 @@ cd poc/webview/host && node driver.mjs --window 1280x720 --out out/host-styles-r
 | --- | --- |
 | `dist/` | `app.asar` extraction from `C:\Program Files\Folia\resources\app.asar`; web build in `dist/dist/` (read-only input copy) |
 | `shared/demoData.mjs` | synthetic lyric timeline (16 s, 4 lines), theme, full `ObsBrowserSourceConfig`, audio/state frame generator |
-| `server/` | Node dev server + proof probes: `server.mjs` (static + `/obs/events` SSE), `check.mjs` (browser render), `styles.mjs` (15-style sweep), `probe-offline.mjs`, `probe-beat.mjs`, `probe-beat-chain.mjs` |
+| `server/` | Node dev server + proof probes: `server.mjs` (static + `/obs/events` SSE), `check.mjs` (browser render), `styles.mjs` (17-style sweep), `probe-offline.mjs`, `probe-beat.mjs`, `probe-beat-chain.mjs` |
 | `host/` | `spw-folia-host.exe` source (C# 5 / .NET 4.8 / WinForms + WebView2), `Shim.js`, `Overlay.js`, `build.sh`, `driver.mjs` |
 | `tools/` | WebView2 SDK (`Microsoft.Web.WebView2.*.dll`, `WebView2Loader.dll`) extracted from the NuGet package |
 | `out` artifacts | browser screenshots (`server/out/`), host runs (`host/out/`) |

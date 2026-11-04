@@ -36,7 +36,6 @@ v0.1.10 修掉这个转换（改为 `unchecked((int)x.ToInt64())`），同时修
 - **发布产物真机验收**：把本页发布的 `.spmod` 解包进真实 SPW 安装（`version=0.1.10`），
   打开透明模式后向真实捕获窗口投递 `WM_MOUSEWHEEL wparam=0xFF880000`（1 次 + 20 次连发）：
   辅助进程存活、捕获窗口仍响应、0 个新顶层窗口、0 条 error 日志；退出透明与关窗均正常（`host-exit code=0`）。
-- 细节见 [verification-v0.1.10.md](verification-v0.1.10.md)。
 
 ## 产物
 

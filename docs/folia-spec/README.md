@@ -1,74 +1,61 @@
-# Folia 复刻规格 · 总索引（task-2 交付）
+# Folia 复刻规格
 
-目标：让 spw-folia 插件在 WebView2 里托管 Folia 自己的可视化代码，1:1 复刻 **全屏歌词模式** 与 **歌词样式设置页**（截图 1）。
-所有文档基于 **Folia v0.7.21**：源码 `work/folia/folia-major-main`（AGPL-3.0），安装包 `C:\Program Files\Folia\resources\app.asar`（已解包到 `C:\tmp\asar`，临时目录）。
+插件跑的是 Folia **自己**的渲染代码，不是按截图重画的仿制品：宿主窗口里加载 Folia 的生产 OBS 浏览器源页面，
+17 种歌词样式、背景、字幕与转场全部是上游原码；插件的活是给这套渲染器喂数据、并在同一页面里注入自己的
+chrome 与设置界面。这套文档说明**它现在是什么样、怎么用、改的时候看哪里**。
 
----
+事实基线：Folia **0.7.25**（`work/folia/folia-major-main`，AGPL-3.0，只读副本）、**17 种样式**、
+插件 v0.4.17、SPW 兼容 ≥ 1.19.0。
 
-## 1. 文档索引
+## 文档
 
-| 文件 | 内容 | 谁该读 |
-|---|---|---|
-| [`style-map.md`](style-map.md) | 14 中文名 ↔ `src/components/visualizer/<dir>` 映射（网格顺序 = `order` 升序）、命名纠错、技术栈、webview 托管优先级/工时估算、字体主题 | 所有人 |
-| [`settings-ui.md`](settings-ui.md) | 设置页 1240×780 骨架、大预览 stage、4 个 tab（歌词动画/背景/字体/字幕）、**截图 1 每个控件 → 代码/default/min/max/step/格式**、kit 组件视觉规格、Vue 宿主复用方案、与截图差异、验收清单 | 做设置页的人 |
-| [`tunings.md`](tunings.md) | 13 个样式 tuning 的 storage key / setter / 面板 / **每个键的默认值** + 4 个背景 tuning 默认值 | 要调默认值/做持久化的人 |
-| [`runtime-contracts.md`](runtime-contracts.md) | `VisualizerSharedProps` 全表、MotionValue 契约、Line/Word 语义与词三态、GlowWord、音频输入（**0..255 + gamma + 呼吸值**）、平移/切换/交接、背景、字幕、renderer 生命周期、性能旋钮、**最小 harness 代码** | 做 webview harness / 数据层的人 |
-| [`fullscreen-shell.md`](fullscreen-shell.md) | 全屏歌词 = 播放页外壳：z-index 层表、背景/视频/样式/字幕/和声层序、返回键 120px 热点、底部胶囊、chrome 自动隐藏与光标、设置页大预览、截图参考、Vue harness 复刻清单与验收 | 做全屏模式的人 |
-| [`assets.md`](assets.md) | 已抽取素材清单（截图 11、cappella 头像/表情 24、占位封面 2、构建入口/CSS）、app.asar 结构、**无缩略图/无字体**说明、AGPL-3.0 合规约束 | 打包/法务/素材 |
+| 文档 | 内容 |
+|---|---|
+| [`style-map.md`](style-map.md) | 17 种样式的清单（货架顺序 / mode id / 渲染技术 / tuning 键）、样式注册契约、动感效果表、货架与预览机制、背景系统、主题与字体、随包素材与许可 |
+| [`settings-ui.md`](settings-ui.md) | 「歌词样式」窗口：骨架与颜色令牌、左栏预览与货架、四个 tab 的控件与默认值、构建期裁剪清单、「默认」语义、状态与下发链路 |
+| [`fullscreen-shell.md`](fullscreen-shell.md) | 全屏播放页：层叠顺序、chrome 与自动隐藏、点击分区与播放条、穿透热区上报、开屏与透明、与上游播放页的取舍 |
+| [`runtime-contracts.md`](runtime-contracts.md) | 渲染器契约：`VisualizerSharedProps` 全表、MotionValue、`Line`/`Word` 语义、`GlowWord` 词级动画、音频 0..255 + gamma + 呼吸值、字幕层、样式/歌曲切换、背景、宿主→页面三条流、性能开关 |
+| [`tunings.md`](tunings.md) | 16 个样式的 tuning：settingsKey / 面板 / 存储键，以及**每个字段的默认值**；4 个背景的 tuning 默认值；默认值打底为什么必须 |
 
-原始调研笔记（未精简、含源码行号）：`research/folia/notes-runtime.md`、`notes-audio.md`、`notes-shell.md`、`tuning-defaults.md`；素材与校验和：`research/assets/`（`SHA256SUMS.txt`）。
+相关文档：协议 [`../protocol.md`](../protocol.md)、宿主 [`../host-app.md`](../host-app.md)、
+设置岛实现 [`../settings-ui-impl.md`](../settings-ui-impl.md)、大预览契约
+[`../live-preview-iframe.md`](../live-preview-iframe.md)、透明 [`../live-transparency.md`](../live-transparency.md)、
+上游升级 [`../upstream-sync.md`](../upstream-sync.md)。
 
----
+## 六条必须知道的事实
 
-## 2. 十个必须知道的结论
+1. **画面来自 Folia 的 OBS 页面**：宿主用 `SetVirtualHostNameToFolderMapping` 把 web bundle 挂到
+   `https://spw-folia.local`，导航到 `index.html?obs=1`；`Shim.js` 把假的 `EventSource` 接上宿主消息，
+   页面自建 MV、rAF 与行号计算。没有 HTTP 服务、没有 Electron。
+2. **音频是 0..255，且已套 gamma**：`audioPower = ((bass + lowMid) / 2 / 255)^3 * 255`，各频段另有 boost；
+   暂停不是 0，是 `(sin(nowMs/2000)+1)*20` 的呼吸值（0..40）。照抄 0..1 会让多个样式「不随音乐动」。
+3. **config 由页面构建、单一入口下发**：设置岛把 `SettingsSnapshot` 编译成 Folia 的
+   `ObsBrowserSourceConfig`（≤10Hz、去重）后 `pushConfig`，`Shim.deliver('config')` 是播放页唯一的 config 入口。
+   不要另造一份「设置页以为的」配置。
+4. **样式 = 上游 `entry.tsx` 的注册项**：货架顺序是 `order` 升序（商籁10 … 静止130），第 16 个中文是
+   **镜台**不是「铭台」，顺序与中文名双向校验（`check-style-sync.mjs` + 模块加载期断言）。
+5. **tuning 必须 defaults-first 合并**：上游的 `apply` 原样存 bag，少一个键会让渲染器算出 `NaN` 并静默丢整个
+   构图。插件在持久化层与发布层各打一次底。
+6. **注入页做不到的事在构建期裁掉**：节拍效果、和声字幕、罗马音、上传类控件都不显示成死开关，裁剪由
+   `vite.config.ts` 的 `SETTINGS_SURGERY` 做标记校验，上游改源码导致标记失配时**构建直接报错**。
 
-1. **网格顺序 = 各样式 `entry.tsx` 的 `order` 升序**，不是目录名/字母序：商籁10 sonnet · 凝彩20 tempera · 绘光25 lumiere · 流光30 classic · 心象40 cadenza · 云阶50 partita · 浮名60 fume · 倾诉70 tilt · 回环80 claddagh · 莫奈90 monet · 时计100 pendolo · 群唱110 cappella · **镜台120** diorama · 静止130 still。
-2. **第 13 个中文是「镜台」，不是「铭台」**：`zh-CN.ts:865`、`diorama/entry.tsx` 均如此；`铭台` 在源码和打包产物中出现 0 次。
-3. **样式网格没有缩略图图片**：每格是 `preview/LyricStylePicture.tsx` 用真渲染器实时画的小图（多数时候是冻结帧）。复用组件即可，别找 PNG。
-4. **默认值以 `src/types.ts` 为准**：`DEFAULT_SMART_BEAT_SETTINGS.enabled = false`（截图 1 里开关是 ON = 用户自己开的）；`textureResolution` 默认 **1.5**（不是 1.00）；单效果默认 `{on:true, strength:1}`，强度上限 2。
-5. **音频尺度是 0..255，不是 0..1**，且要套 gamma：`audioPower = ((bass+lowMid)/2 /255)^3 *255`（各频段另有 boost）。设置页 preview 用 0..1 是**反例**，照抄会让多个样式「不随音乐动」。
-6. **渲染一个样式的最小输入**：`mode` + `currentTime/audioPower/audioBands` 三个 MotionValue + `currentLineIndex` + `lines` + `theme`，即可 `<VisualizerRenderer>`；不需要 Electron/播放器/文件系统。
-7. **Folia 自带现成「浏览器 harness」参照**：`src/components/obs/ObsBrowserSourceApp.tsx` 在纯浏览器页里挂 `VisualizerRenderer`，自造 MV、改写 DPR/尺寸，经 SSE 接收时钟/音频——可直接抄成 WebView 入口。
-8. **构建产物可直接静态托管**：`C:\tmp\asar\dist`（23MB，含 index.html）就是完整前端；主样式包 `dist/assets/src-*.css`（214KB）已抽到 `research/assets/folia/css/`。
-9. **全屏歌词不是独立窗口**：它就是播放页 `absolute inset-0 z-0` 的 visualizer 层；返回键是左上 120×120 热区，chrome 3s 自动隐藏。
-10. **授权硬约束**：Folia 是 **AGPL-3.0**。把其代码打进插件再分发 ⇒ 插件整体按 AGPL-3.0 开源并提供源码；需保留版权头、附 LICENSE/第三方说明，不得用 Folia 名称/图标当品牌。
+## 改东西时的路径
 
----
+| 要做的事 | 看/改哪里 |
+|---|---|
+| 加新样式、跟上上游版本 | [`upstream-sync.md`](../upstream-sync.md) + `poc/settings-ui/scripts/check-style-sync.mjs` |
+| 改样式调参或默认值 | [`tunings.md`](tunings.md) §1/§4 |
+| 改设置窗口控件 | [`settings-ui.md`](settings-ui.md) §6 |
+| 改渲染输入、字幕、音频 | [`runtime-contracts.md`](runtime-contracts.md) §2/§7/§8 |
+| 改播放页 chrome 或交互 | [`fullscreen-shell.md`](fullscreen-shell.md) §3–§5 |
+| 改跨进程字段 | [`protocol.md`](../protocol.md)（改动需同步三端） |
 
-## 3. 推荐实施路径（与 Lead 的 WebView 方案对齐）
+## 源码落点
 
-1. **设置页（截图 1）**：Vue 壳 + **React island**（`createRoot`）直接挂 Folia 的 `VisPlaygroundSettingsPanel`/`VisPlayground`/kit 组件；CSS 用 `src-*.css`，i18n 用项目 `zh-CN` locale，状态用自建 config store（文档 `settings-ui.md §8` 有 import 清单和 provider 清单）。兜底：Vue 手写 UI（视觉规格在 `settings-ui.md §7`）。
-2. **全屏歌词**：宿主全屏窗口 + 透明 WebView2，内部挂 `VisualizerRenderer`（单样式按需 lazy），字幕/和声由 renderer 自带；返回键/底部胶囊/自动隐藏按 `fullscreen-shell.md §7` 自写（可后置）。
-3. **数据**：时钟自建 rAF；音频接 audio-probe 的 WASAPI 数据或按 `runtime-contracts.md §7` 合成；智能动感默认关（webview 里 `useSmartBeatAvailability()` 恒 `desktopOnly`），**关状态下可像素级一致**，v1 直接不做。
-4. **打包**：`dist` 静态资源 + cappella PNG + 两个占位封面（Vite 会自动打进去）；字体用系统字体 / 自备 Noto Serif SC woff2（OFL），不要依赖 Folia 的 CDN。
-
----
-
-## 4. 待 Lead 决策 / 已知风险
-
-| 项 | 现状 | 建议 |
-|---|---|---|
-| 设置页 UI 技术 | React island 复用 vs Vue 重写 | 复用优先（省 80% 细节）；Vue 重写为兜底 |
-| 智能动感模式开关 | 源码默认关；截图 1 为开 | 复刻时默认**关**（与源码一致），或 UI 显示开但不接模型——需产品决策 |
-| pixi/three 性能 | sonnet/tempera/lumiere 是 WebGL2；diorama three.js | 先 P0 样式验证通道，再上 sonnet（`style-map.md §5` 工时表） |
-| 音频 | audio-probe 的 WASAPI helper 尚未验证 | 先用占位（呼吸值），音频到位后替换 |
-| 字体 | Noto Serif SC 走 CDN，离线/内网会回退 | 打包 woff2（OFL）并改 `@font-face` |
-| AGPL | 插件需整体 AGPL-3.0 | 仓库根放 LICENSE + THIRD_PARTY 说明 |
-
----
-
-## 5. 复现命令
-
-```bash
-# 源码
-cd D:\输出目录\dsh2\work\folia\folia-major-main
-# 打包产物
-npx --yes @electron/asar extract "C:\Program Files\Folia\resources\app.asar" C:\tmp\asar
-# 素材校验
-cd D:\输出目录\dsh2\research\assets && sha256sum -c SHA256SUMS.txt
-# 关键入口
-#   设置页:  src/components/visualizer/window/VisPlayground.tsx + VisPlaygroundSettingsPanel.tsx
-#   渲染器:  src/components/visualizer/VisualizerRenderer.tsx
-#   全屏层:  src/App.tsx:2790-2801
-#   OBS 参考: src/components/obs/ObsBrowserSourceApp.tsx
-```
+| 位置 | 是什么 |
+|---|---|
+| `work/folia/folia-major-main/` | 上游 Folia 0.7.25 只读副本（AGPL-3.0）；`src/components/visualizer/` 是样式层 |
+| `poc/webview/dist/dist/` | 上游构建产物（宿主就是加载它）；由 `packaging/tools/stage-web.mjs` 校验并暂存 |
+| `poc/webview/host/` | 宿主 exe 源码：`HostForm.cs`、`Program.cs`、`Shim.js`、`PreviewShim.js`、`audio/` |
+| `poc/settings-ui/` | 注入的设置岛：`src/App.tsx`、`src/model/`、`src/publisher/`、`src/chrome/`、`vite.config.ts`（含裁剪与闸门） |
+| `spw-folia/src/main/kotlin/` | 插件：菜单 hook、播放时钟、设置持久化、宿主生命周期 |
