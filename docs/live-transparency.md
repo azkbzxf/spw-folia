@@ -145,9 +145,11 @@ webView.DefaultBackgroundColor = Color.Black;
 
 ```bash
 node poc/settings-ui/scripts/verify-colour-key.mjs   # 真实宿主 + GDI 全屏截图，三段
-node packaging/tools/verify-transparent-hud.mjs      # 打包产物：透明窗口下的播放条 hover/淡出
-node packaging/tools/verify-mouse-back.mjs           # 打包产物：透明窗口下的鼠标侧键返回
 ```
+
+> v0.4.18：`verify-transparent-hud.mjs` 与 `verify-mouse-back.mjs` 已删除。透明窗口下的播放条
+> hover 与侧键返回自 v0.3.0 起未再改动，而 `verify-layout.mjs`（打包件真机）与
+> `verify-click-zones.mjs`（窗口级指针行为）覆盖了同一批风险。需要回看时从 Git 历史取回。
 
 `verify-colour-key.mjs` 三个 run：**run 1** 键生效（透明会话里 50%-alpha 像素应是 ~128 中性灰、整帧 magenta 族
 占比 0、窗口底色是近黑键值）；**run 2** `--no-colour-key`（日志报 `colour-key=off`、窗口底色纯黑、无粉色）；

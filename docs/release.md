@@ -3,7 +3,7 @@
 本文只讲**现在怎么打包、怎么发布**：发布物由什么组成、构建顺序、组装命令、体积门限、发版检查表、
 打包布局验收。它不记录"某个版本怎么一步步做出来"——那属于 Git 历史与 GitHub Releases。
 
-当前版本 **v0.4.17**（内嵌 Folia 0.7.25，17 种样式）。产物体积、条数与哈希见文末台账。
+当前版本 **v0.4.18**（内嵌 Folia 0.7.25，17 种样式）。产物体积、条数与哈希见文末台账。
 
 ---
 
@@ -51,7 +51,7 @@ packaging/                      # 暂存树，最终成为 .spmod 的 payload
 
 **不要**把 `packaging/tools/`、`packaging/out/`、`packaging/testdata/` 或任何报告打进 `.spmod`。
 
-当前 **v0.4.17** 的 payload（解压后）：
+当前 **v0.4.18** 的 payload（解压后）：
 
 | 区域 | 文件数 | 字节 |
 | --- | --- | --- |
@@ -137,14 +137,15 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
 1. 构建输入是新的：宿主、设置岛、Folia 产物都按 §2 重新产出。
 2. `bash packaging/build-package.sh` → 暂存干净、`size-report.json` 未超警戒线、
    `SHA256SUMS.txt` 已重写。
-3. **跑自检**（自检是发布物的一部分，按发布物验收）：
-   - `cd spw-folia && ./gradlew runDiagnostics` → exit 0，健康机上无 `FAIL` 行
-     （每项打 `VERDICT  label  detail` 与 `evidence:`；`UNKNOWN` 属正常）；
-   - `node packaging/tools/verify-diagnostics.mjs` → exit 0，页面侧无假 FAIL；
-   - 或者一条命令跑完整门禁：`node packaging/tools/verify-all.mjs` → `24/24 gate checks`
-     （`--static` 只跑不需要打包产物的部分）。
+3. **跑门禁**（自检是发布物的一部分，按发布物验收）：
+   - `node packaging/tools/verify-all.mjs` —— 按本次改动**自动选范围**：`core`（版本三处一致、
+     声明⇄读取双向、JVM 配置失败路径）永远跑，`page` / `plugin` / `layout` 只在对应目录被改时跑。
+     未被选中的项打印为 `SKIP` 并给出原因，**不计入 PASS**。
+   - 发布前跑一次 `--all`（全范围，慢），日常改动跑默认范围即可。
+   - `--static` 只跑不需要打包产物的部分。
    **健康机上出现 `FAIL` 就是阻断项。**
-4. `node packaging/tools/verify-layout.mjs` → PASS，`packaging/out/verify-report.json` 与截图留作发布证据。
+4. 发布前另跑一次 `node packaging/tools/verify-layout.mjs` → PASS，`packaging/out/verify-report.json`
+   与截图留作发布证据。
 5. 用 `assemble-release.py` 出包（§3），`licenses/` 必须留在包内。
 6. 在真实 SPW 安装里冒烟组装好的 `.spmod`：菜单 → 全屏、首次运行设置、ESC、切歌、暂停/跳转、
    「出现问题」能打开日志文件夹。
@@ -212,7 +213,7 @@ Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（
 只保留**仍可下载**的版本，以及当前版本与已下架版本的行。早期版本（v0.1.0–v0.4.5）的 Release 已下线，
 其字节数与哈希见 Git 历史；`local only` 的版本从未上传，改动并入后续发布。
 
-**当前发布版本是 v0.4.17。**
+**当前发布版本是 v0.4.18。**
 
 | 版本 | `.spmod` 字节 | 条目 | sha256 | 发布状态 |
 | --- | --- | --- | --- | --- |
@@ -221,7 +222,8 @@ Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（
 | v0.4.14 | 15,442,237 | 3,983 | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | 2026-11-03 发布（v0.4.13 的修复版） |
 | v0.4.15 | 15,443,035 | 3,983 | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | 2026-11-03 发布 |
 | v0.4.16 | 15,462,458 | 4,007 | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | 2026-11-03 发布 |
-| **v0.4.17** | **15,464,000** | **4,007** | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | **2026-11-04 发布（当前）** |
+| v0.4.17 | 15,464,000 | 4,007 | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | 2026-11-04 发布 |
+| **v0.4.18** | **15,464,554** | **4,007** | `19816c84b3252ffc77e78d32f5897aa6f02ca091609fe8dd5abe8493421354b2` | **2026-11-04 发布（当前）** |
 
 台账里"缺行"的版本说明，免得读起来像缺页：
 
@@ -243,5 +245,5 @@ sha256sum spw-folia-0.4.17.spmod        # 对比上表与 Release 附带的 SHA2
 node packaging/tools/verify-layout.mjs  # 干净解包上的打包布局验收
 ```
 
-各版本的详细更新内容在 GitHub Releases（正文即 [`docs/release-notes-v0.4.17.md`](release-notes-v0.4.17.md)
+各版本的详细更新内容在 GitHub Releases（正文即 [`docs/release-notes-v0.4.18.md`](release-notes-v0.4.18.md)
 这类文件），失败路径的技术细节在 `docs/lessons.md` 与 `docs/postmortem-v0.4.13.md`。

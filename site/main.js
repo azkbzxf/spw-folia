@@ -1,180 +1,323 @@
-/* spw-folia promo site — interaction layer */
+/* ============================================================================
+   spw-folia — promo site interaction layer
+   ----------------------------------------------------------------------------
+   Everything here is progressive: without JS the page is a readable document
+   (nav, copy, screens). JS adds the 17-tile gallery, the lightbox, the scroll
+   spy and lazy scene video playback.
+
+   The only place a release version appears is <html data-release="0.4.18">;
+   see site/README.md. Don't hard-code a version string in this file.
+   ========================================================================== */
 (function () {
   "use strict";
 
-  /* ── the 17 real Folia styles, in Folia's own shelf order ─────── */
+  /* ── the 17 real Folia styles, in Folia's own shelf order ──────────────── */
   const STYLES = [
-    { id: "sonnet",    zh: "商籁",  en: "Sonnet"    },
-    { id: "tempera",   zh: "凝彩",  en: "Tempera"   },
-    { id: "lumiere",   zh: "绘光",  en: "Lumiere"   },
-    { id: "hanabi",    zh: "花火",  en: "Hanabi"    },
-    { id: "machi",     zh: "町景",  en: "Machi"     },
-    { id: "nebbia",    zh: "雾笺",  en: "Nebbia"    },
-    { id: "classic",   zh: "流光",  en: "Classic"   },
-    { id: "cadenza",   zh: "心象",  en: "Cadenza"   },
-    { id: "partita",   zh: "云阶",  en: "Partita"   },
-    { id: "fume",      zh: "浮名",  en: "Fume"      },
-    { id: "tilt",      zh: "倾诉",  en: "Tilt"      },
-    { id: "claddagh",  zh: "回环",  en: "Claddagh"  },
-    { id: "monet",     zh: "莫奈",  en: "Monet"     },
-    { id: "pendolo",   zh: "时计",  en: "Pendolo"   },
-    { id: "cappella",  zh: "群唱",  en: "Cappella"  },
-    { id: "diorama",   zh: "镜台",  en: "Diorama"   },
-    { id: "still",     zh: "静止",  en: "Still"     },
+    { id: "sonnet",   zh: "商籁", en: "Sonnet"   },
+    { id: "tempera",  zh: "凝彩", en: "Tempera"  },
+    { id: "lumiere",  zh: "绘光", en: "Lumiere"  },
+    { id: "hanabi",   zh: "花火", en: "Hanabi"   },
+    { id: "machi",    zh: "町景", en: "Machi"    },
+    { id: "nebbia",   zh: "雾笺", en: "Nebbia"   },
+    { id: "classic",  zh: "流光", en: "Classic"  },
+    { id: "cadenza",  zh: "心象", en: "Cadenza"  },
+    { id: "partita",  zh: "云阶", en: "Partita"  },
+    { id: "fume",     zh: "浮名", en: "Fume"     },
+    { id: "tilt",     zh: "倾诉", en: "Tilt"     },
+    { id: "claddagh", zh: "回环", en: "Claddagh" },
+    { id: "monet",    zh: "莫奈", en: "Monet"    },
+    { id: "pendolo",  zh: "时计", en: "Pendolo"  },
+    { id: "cappella", zh: "群唱", en: "Cappella" },
+    { id: "diorama",  zh: "镜台", en: "Diorama"  },
+    { id: "still",    zh: "静止", en: "Still"    },
   ];
 
-  /* ── gallery ──────────────────────────────────────────────── */
-  const gallery = document.getElementById("gallery");
-  if (gallery) {
-    const frag = document.createDocumentFragment();
-    STYLES.forEach((s, i) => {
-      const btn = document.createElement("button");
-      btn.className = "tile";
-      btn.type = "button";
-      btn.dataset.src = `assets/styles/large/${s.id}.jpg`;
-      btn.dataset.name = `${s.zh} ${s.en}`;
-      btn.setAttribute("aria-label", `放大查看「${s.zh}」样式截图`);
-      btn.style.setProperty("--i", String(i));
-      btn.innerHTML =
-        `<img src="assets/styles/${s.id}.jpg" alt="Folia「${s.zh}」样式：金色逐字歌词渲染画面" loading="lazy" decoding="async" />` +
-        `<span class="tile-label"><b>${s.zh}</b><i>${s.en}</i></span>`;
-      frag.appendChild(btn);
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const root = document.documentElement;
+
+  /* ── release version, single source of truth ───────────────────────────── */
+  const version = (root.getAttribute("data-release") || "").trim();
+  if (version) {
+    root.querySelectorAll('[data-release="v"]').forEach((el) => {
+      el.textContent = "v" + version;
     });
-    gallery.appendChild(frag);
+    const year = String(new Date().getFullYear());
+    root.querySelectorAll('[data-release="year"]').forEach((el) => {
+      el.textContent = year;
+    });
   }
 
-  /* ── reveal on scroll ─────────────────────────────────────── */
+  /* ── scroll spy: rail + top nav ────────────────────────────────────────── */
+  const spyTargets = Array.from(
+    document.querySelectorAll("[data-chapter]")
+  ).map((link) => {
+    const id = link.getAttribute("data-chapter");
+    return { link, section: document.getElementById(id) };
+  }).filter((entry) => entry.section);
+
+  const topNavLinks = Array.from(document.querySelectorAll(".topbar__nav a"));
+
+  if (spyTargets.length && "IntersectionObserver" in window) {
+    const visible = new Map();
+    const spy = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const hit = spyTargets.find((t) => t.section === entry.target);
+          if (!hit) return;
+          if (entry.isIntersecting) visible.set(entry.target.id, entry.intersectionRatio);
+          else visible.delete(entry.target.id);
+        });
+        let bestId = null;
+        let bestRatio = -1;
+        visible.forEach((ratio, id) => {
+          if (ratio > bestRatio) { bestRatio = ratio; bestId = id; }
+        });
+        spyTargets.forEach(({ link, section }) => {
+          const active = section.id === bestId;
+          if (active) link.setAttribute("aria-current", "true");
+          else link.removeAttribute("aria-current");
+        });
+        topNavLinks.forEach((a) => {
+          const active = bestId && a.getAttribute("href") === "#" + bestId;
+          if (active) a.setAttribute("aria-current", "true");
+          else a.removeAttribute("aria-current");
+        });
+      },
+      { rootMargin: "-34% 0px -46% 0px", threshold: [0, 0.08, 0.24, 0.5, 0.76, 1] }
+    );
+    spyTargets.forEach(({ section }) => spy.observe(section));
+  }
+
+  /* ── top bar background on scroll ──────────────────────────────────────── */
+  const topbar = document.getElementById("topbar");
+  if (topbar) {
+    const syncTopbar = () => topbar.classList.toggle("is-solid", window.scrollY > 32);
+    syncTopbar();
+    window.addEventListener("scroll", syncTopbar, { passive: true });
+  }
+
+  /* ── reveal on scroll ──────────────────────────────────────────────────── */
   const reveals = Array.from(document.querySelectorAll(".reveal"));
-  if ("IntersectionObserver" in window && reveals.length) {
+  if ("IntersectionObserver" in window && !reduceMotion.matches) {
     const io = new IntersectionObserver(
       (entries) => {
-        entries.forEach((e) => {
-          if (!e.isIntersecting) return;
-          const el = e.target;
-          const delay = Number(el.dataset.delay || 0);
-          setTimeout(() => el.classList.add("in"), delay);
-          io.unobserve(el);
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-in");
+          io.unobserve(entry.target);
         });
       },
-      { rootMargin: "0px 0px -12% 0px", threshold: 0.08 }
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.06 }
     );
-    reveals.forEach((el, i) => {
-      // stagger siblings that share a parent, so grids cascade
-      if (!el.dataset.delay) el.dataset.delay = String((i % 4) * 90);
-      io.observe(el);
-    });
+    reveals.forEach((el) => io.observe(el));
   } else {
-    reveals.forEach((el) => el.classList.add("in"));
+    reveals.forEach((el) => el.classList.add("is-in"));
   }
 
-  /* ── counting stats ───────────────────────────────────────── */
-  const counters = Array.from(document.querySelectorAll(".count"));
-  const runCount = (el) => {
-    if (el.dataset.done) return;
-    el.dataset.done = "1";
-    const to = Number(el.dataset.to || 0);
-    const dur = 1400;
-    const t0 = performance.now();
-    const tick = (t) => {
-      const p = Math.min(1, (t - t0) / dur);
-      const eased = 1 - Math.pow(1 - p, 3);
-      el.textContent = String(Math.round(to * eased));
-      if (p < 1) requestAnimationFrame(tick);
-      else el.textContent = String(to);
-    };
-    requestAnimationFrame(tick);
+  /* ── scene videos: never fetch on first paint ──────────────────────────── */
+  /* Every <video preload="none"> gets its bytes only when it is about to be
+     seen. The hero is on screen at load time, so it waits for the window
+     `load` event — first paint shows the poster, not 1.7 MB of H.264. */
+  const sceneVideos = Array.from(document.querySelectorAll("video[data-scene-video]"));
+  const loadVideo = (video) => {
+    if (video.dataset.loaded === "1") return;
+    video.dataset.loaded = "1";
+    video.load();
   };
-  if ("IntersectionObserver" in window && counters.length) {
-    const co = new IntersectionObserver(
-      (entries) => entries.forEach((e) => { if (e.isIntersecting) { runCount(e.target); co.unobserve(e.target); } }),
-      { threshold: 0.5 }
-    );
-    counters.forEach((c) => co.observe(c));
-  } else {
-    counters.forEach((c) => (c.textContent = c.dataset.to));
-  }
-
-  /* ── nav background on scroll ─────────────────────────────── */
-  const nav = document.getElementById("nav");
-  const onScroll = () => {
-    if (!nav) return;
-    nav.classList.toggle("solid", window.scrollY > 40);
+  const playVideo = (video) => {
+    if (reduceMotion.matches) return;
+    const promise = video.play();
+    if (promise && typeof promise.catch === "function") promise.catch(() => {});
   };
-  onScroll();
-  window.addEventListener("scroll", onScroll, { passive: true });
 
-  /* ── lazy video loading (don't pull 5MB on first paint) ───── */
-  const vids = Array.from(document.querySelectorAll("video.frame-video, video.desk-video"));
-  if ("IntersectionObserver" in window && vids.length) {
+  const watchVideo = (video, rootMargin) => {
+    if (!("IntersectionObserver" in window)) return;
     const vo = new IntersectionObserver(
       (entries) => {
-        entries.forEach((e) => {
-          const v = e.target;
-          if (!e.isIntersecting) {
-            if (!v.paused) v.pause();
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) {
+            if (!entry.target.paused) entry.target.pause();
             return;
           }
-          if (!v.dataset.loaded) {
-            v.dataset.loaded = "1";
-            v.load();
-          }
-          const p = v.play();
-          if (p && p.catch) p.catch(() => {});
+          const active = entry.target;
+          loadVideo(active);
+          const onReady = () => {
+            active.classList.add("is-ready");
+            playVideo(active);
+            active.removeEventListener("canplay", onReady);
+          };
+          if (active.readyState >= 2) onReady();
+          else active.addEventListener("canplay", onReady);
         });
       },
-      { threshold: 0.15 }
+      { threshold: 0.12, rootMargin: rootMargin }
     );
-    vids.forEach((v) => vo.observe(v));
-  }
-
-  /* the promo film never autoplays — just warm it when nearby */
-  const film = document.querySelector("video.film-video");
-  if (film && "IntersectionObserver" in window) {
-    const fo = new IntersectionObserver(
-      (entries) => entries.forEach((e) => {
-        if (!e.isIntersecting || film.dataset.loaded) return;
-        film.dataset.loaded = "1";
-        film.load();
-        fo.disconnect();
-      }),
-      { rootMargin: "300px 0px" }
-    );
-    fo.observe(film);
-  }
-
-  /* ── lightbox ─────────────────────────────────────────────── */
-  const lb = document.createElement("div");
-  lb.className = "lightbox";
-  lb.innerHTML = '<img alt="" /><button class="lightbox-close" type="button" aria-label="关闭">✕</button>';
-  document.body.appendChild(lb);
-  const lbImg = lb.querySelector("img");
-  const closeLb = () => {
-    lb.classList.remove("open");
-    document.body.style.overflow = "";
+    vo.observe(video);
+    return vo;
   };
-  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.classList.contains("lightbox-close")) closeLb(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLb(); });
 
-  gallery &&
-    gallery.addEventListener("click", (e) => {
-      const tile = e.target.closest(".tile");
-      if (!tile) return;
-      lbImg.src = tile.dataset.src;
-      lbImg.alt = tile.dataset.name;
-      lb.classList.add("open");
-      document.body.style.overflow = "hidden";
+  const deferVideos = [];
+  if (sceneVideos.length) {
+    sceneVideos.forEach((video) => {
+      if (video.hasAttribute("data-defer")) deferVideos.push(video);
+      else watchVideo(video, "200px 0px");
+    });
+  }
+
+  if (deferVideos.length) {
+    const startDeferred = () => {
+      deferVideos.forEach((video) => {
+        video.removeAttribute("data-defer");
+        watchVideo(video, "120px 0px");
+      });
+    };
+    if (document.readyState === "complete") startDeferred();
+    else window.addEventListener("load", startDeferred, { once: true });
+  }
+
+  /* reduced motion can be toggled at runtime by the OS setting */
+  const stopAllVideos = () => sceneVideos.forEach((v) => { if (!v.paused) v.pause(); });
+  if (typeof reduceMotion.addEventListener === "function") {
+    reduceMotion.addEventListener("change", (event) => {
+      if (event.matches) stopAllVideos();
+    });
+  }
+
+  /* ── gallery: 17 real style stills ─────────────────────────────────────── */
+  const gallery = document.getElementById("gallery");
+  const tiles = [];
+
+  if (gallery) {
+    const frag = document.createDocumentFragment();
+    STYLES.forEach((style, index) => {
+      const tile = document.createElement("button");
+      tile.className = "tile";
+      tile.type = "button";
+      tile.setAttribute("role", "listitem");
+      tile.dataset.styleId = style.id;
+      tile.dataset.index = String(index);
+      tile.style.transitionDelay = Math.min(index, 8) * 30 + "ms";
+      tile.innerHTML =
+        '<img src="assets/styles/' + style.id + '.jpg"' +
+        ' alt="Folia「' + style.zh + '」样式：' + style.zh + '（' + style.en + '）渲染的逐字歌词画面"' +
+        ' width="960" height="540" loading="lazy" decoding="async" />' +
+        '<span class="tile__label"><b class="tile__zh">' + style.zh + "</b>" +
+        '<i class="tile__en">' + style.en + "</i></span>";
+      frag.appendChild(tile);
+      tiles.push(tile);
+    });
+    gallery.appendChild(frag);
+
+    /* staggered entrance */
+    if ("IntersectionObserver" in window && !reduceMotion.matches) {
+      const tio = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("is-in");
+            tio.unobserve(entry.target);
+          });
+        },
+        { rootMargin: "0px 0px -6% 0px", threshold: 0.04 }
+      );
+      tiles.forEach((tile) => tio.observe(tile));
+    } else {
+      tiles.forEach((tile) => tile.classList.add("is-in"));
+    }
+  }
+
+  /* ── lightbox ──────────────────────────────────────────────────────────── */
+  const lightbox = document.getElementById("lightbox");
+  let lastFocused = null;
+  let currentIndex = -1;
+
+  const lightboxName = lightbox && lightbox.querySelector(".lb__name");
+  const lightboxImg = lightbox && lightbox.querySelector(".lb__img");
+  const lightboxCount = lightbox && lightbox.querySelector(".lb__count");
+  const lightboxStage = lightbox && lightbox.querySelector(".lb__stage");
+
+  const paintLightbox = (index) => {
+    if (!lightboxName || !lightboxImg) return;
+    const style = STYLES[index];
+    if (!style) return;
+    currentIndex = index;
+    lightboxName.innerHTML =
+      style.zh + "<small>" + style.en + "</small>";
+    lightboxImg.src = "assets/styles/large/" + style.id + ".jpg";
+    lightboxImg.alt =
+      "Folia「" + style.zh + "」样式大图：" + style.zh + "（" + style.en + "）渲染的逐字歌词画面";
+    if (lightboxCount) {
+      lightboxCount.textContent = (index + 1) + " / " + STYLES.length;
+    }
+    lightboxImg.classList.remove("is-swap");
+    /* force reflow so the fade restarts on every step */
+    void lightboxImg.offsetWidth;
+    lightboxImg.classList.add("is-swap");
+  };
+
+  const openLightbox = (index, trigger) => {
+    if (!lightbox) return;
+    lastFocused = trigger || null;
+    paintLightbox(index);
+    lightbox.hidden = false;
+    lightbox.classList.add("is-open");
+    document.body.style.overflow = "hidden";
+    const closeBtn = lightbox.querySelector(".lb__close");
+    if (closeBtn) closeBtn.focus();
+  };
+
+  const closeLightbox = () => {
+    if (!lightbox || !lightbox.classList.contains("is-open")) return;
+    lightbox.classList.remove("is-open");
+    lightbox.hidden = true;
+    document.body.style.overflow = "";
+    if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+    lastFocused = null;
+  };
+
+  const stepLightbox = (delta) => {
+    if (!lightbox || !lightbox.classList.contains("is-open")) return;
+    const next = (currentIndex + delta + STYLES.length) % STYLES.length;
+    paintLightbox(next);
+  };
+
+  if (gallery && lightbox) {
+    gallery.addEventListener("click", (event) => {
+      const tile = event.target.closest(".tile");
+      if (!tile || !gallery.contains(tile)) return;
+      openLightbox(Number(tile.dataset.index), tile);
     });
 
-  /* ── hero video: pause when scrolled away ─────────────────── */
-  const heroVideo = document.querySelector(".hero-video");
-  if (heroVideo && "IntersectionObserver" in window) {
-    const ho = new IntersectionObserver(
-      (entries) => entries.forEach((e) => {
-        if (e.isIntersecting) { const p = heroVideo.play(); if (p && p.catch) p.catch(() => {}); }
-        else heroVideo.pause();
-      }),
-      { threshold: 0.02 }
-    );
-    ho.observe(heroVideo);
+    lightbox.addEventListener("click", (event) => {
+      const actionEl = event.target.closest("[data-lb-action]");
+      if (actionEl) {
+        const action = actionEl.getAttribute("data-lb-action");
+        if (action === "close") closeLightbox();
+        else if (action === "prev") stepLightbox(-1);
+        else if (action === "next") stepLightbox(1);
+        return;
+      }
+      /* click on the backdrop (not the image / bar / nav) closes */
+      if (event.target === lightbox || event.target === lightboxStage) closeLightbox();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (!lightbox.classList.contains("is-open")) return;
+      if (event.key === "Escape") { event.preventDefault(); closeLightbox(); }
+      else if (event.key === "ArrowLeft") { event.preventDefault(); stepLightbox(-1); }
+      else if (event.key === "ArrowRight") { event.preventDefault(); stepLightbox(1); }
+      else if (event.key === "Tab") {
+        /* keep focus inside the dialog */
+        const focusables = lightbox.querySelectorAll("button, [href], img[tabindex]");
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    });
   }
 })();

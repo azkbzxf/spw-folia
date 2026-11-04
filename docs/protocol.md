@@ -36,8 +36,9 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 > `settings` 推送被拆成几百条非法片段，页面永远收不到三个配置页开关。
 >
 > 规则：发送前对外部来源的 JSON 调用 `Json.singleLine()`（跳过字符串字面量内部，只压缩 token
-> 之间的空白）。回归见 `packaging/tools/verify-json-singleline.mjs`；压缩后的载荷与压缩前
-> `JSON.parse` 结果必须完全等价。
+> 之间的空白）。压缩后的载荷与压缩前 `JSON.parse` 结果必须完全等价。
+> （原独立回归脚本 `verify-json-singleline.mjs` 已于 v0.4.18 删除；该规则由 Kotlin 侧
+> `FoliaConfigSyncTest` 与 `verify-live-settings-payload.mjs` 的真实宿主往返覆盖。）
 
 | t | 字段 | 说明 |
 |---|---|---|
@@ -267,12 +268,28 @@ unknown 绝不表述成「缺失」。
 - 视觉器页面本身保持 OBS 模式（`isPlayerChromeHidden:true`），不注入任何 Folia 播放器 chrome。
 - 光标策略：全屏窗口内鼠标静止 2.5 s 后隐藏，移动即恢复；覆盖层打开期间强制显示；关窗后恢复系统光标。
   宿主把「`settingsOpen` OR 未空闲」作为目标可见性（幂等，只在状态变化时写日志）。
-- **画面点击分区（v0.4.17）**：`chrome/PlaybackClickZones.tsx` 提供一层不可见热区 —— 左 1/3 上一首、
-  中 1/3 播放/暂停、右 1/3 下一首。它在所有控件**之下**（z-index 2147482990，播放条 2147483000、
-  chrome 按钮/面板 2147483001+），因此被覆盖的控件永远赢；设置覆盖层打开时与鼠标穿透时整层禁用
-  （`data-enabled="false"` → `pointer-events:none`）；位移 > `DRAG_SLOP_PX`(10px)、手势取消或按住
-  Alt（宿主窗口拖动）都不算点击。DOM 契约：`[data-spw-click-zone]` 容器 +
-  `[data-zone="prev"|"toggle"|"next"]`。
+- **画面点击分区（v0.4.17，v0.4.18 改为幽灵层）**：`chrome/PlaybackClickZones.tsx` 提供一层不可见分区 ——
+  左 1/3 上一首、中 1/3 播放/暂停、右 1/3 下一首。v0.4.17 的整层 `pointer-events:auto` 会把下层画布的
+  `pointerdown` 全部吃掉，「町景」`MachiCamera.attach()` 挂在 canvas 上的 three `OrbitControls`
+  （拖动旋转 / 滚轮缩放 / 右键平移）与 monet 的歌词轨滚轮因此全废（issue #19 第 1 项）。现在：
+  - 层级 `pointer-events:none`，子元素也不可命中 —— 画布重新是画面的命中目标；
+  - 手势判定改到 `window` 的 **capture 阶段**（`pointerdown`/`move`/`up`/`cancel`）。capture 从 `window`
+    往下走，所以先于画布看到按下，画布随后仍拿到自己那份；OrbitControls 的 `setPointerCapture`
+    只是把后续指针事件**重定向**给 canvas，不缩短传播路径，因此 window capture 仍收得到整个手势；
+  - `pointerdown` 的目标落在交互控件里（`button`/`a`/`input`/`select`/`textarea`/`label`/`summary`/
+    `[contenteditable]`、`[role=button|checkbox|dialog|listbox|menu|menuitem|option|radio|region|slider|
+    switch|tab|textbox|toolbar]`，以及本岛的 `[data-spw-chrome]`、`[data-spw-settings-overlay]`、
+    `[data-spw-font-picker]`、`.spw-chrome-btn`、`.spw-playback`、`.spw-player-bg`、`.spw-queue-panel`；
+    另外祖先链上 `cursor` 语义为 `pointer`/`grab`/`grabbing`/`move`/`*-resize`/`zoom-*` 等也算 ——
+    上游有些控件是裸 `div.cursor-pointer`，「monet」的挂绳与可 seek 的歌词轨就是这样）
+    就放弃这次手势：控件自己的单击不会被热区抢走，也不会被重复触发；
+  - 设置覆盖层打开、鼠标穿透、右下角菜单 / 问题反馈面板 / 字体选择器打开时整层失效
+    （`data-enabled="false"`，同时 `window` 侧不再记账）；位移 > `DRAG_SLOP_PX`(10px)、手势取消或按住
+    Alt（宿主窗口拖动，`Shim.js` 同一组合）都不算点击。
+  - DOM 契约不变：`[data-spw-click-zone]` 容器（`data-enabled="true|false"`、`display:flex`）+
+    顺序固定的三个子元素 `[data-zone="prev"|"toggle"|"next"]`，各占 1/3 宽；子元素虽然不再是命中
+    目标，但仍在 DOM 里，并且仍是合成输入入口 —— 对子元素 `dispatchEvent(pointerdown)` + window 上
+    `pointerup`，以及纯 `el.click()`，都仍然恰好触发一次动作。
 - 覆盖层内容在 `display:none` 下保持挂载（不重建 React 树），重新打开是瞬时的。
 
 ## 9. DPI 与多显示器

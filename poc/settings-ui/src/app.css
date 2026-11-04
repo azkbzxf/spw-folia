@@ -360,18 +360,30 @@ body.spw-injected {
 
 /* ===========================================================================
  * v0.4.17 (issue #18 item 4) · full-screen click zones over the player picture.
- * Three columns: prev | toggle (pause) | next. The layer paints BELOW the playback HUD
- * (2147483000) and the chrome (2147483001) so those controls always win a click they
- * cover, and it is switched off entirely while the settings overlay is open or the host
- * is in mouse passthrough. No cursor override: a hand cursor over the whole artwork
- * would be visual noise.
+ * Three columns: prev | toggle (pause) | next.
+ *
+ * v0.4.18 (issue #19 item 1) · GHOST LAYER. It used to be `pointer-events: auto`, which
+ * made it the hit target for every press over the picture: the canvas underneath never saw
+ * a `pointerdown`, so 「町景」's three.js OrbitControls (drag rotate / wheel zoom / right-drag
+ * pan, attached to the canvas by `MachiCamera.attach()`) and monet's lyric-rail wheel were
+ * dead. Both now have to receive the press, so the layer takes no hits at all and the
+ * gesture is judged from `window` capture listeners instead (see PlaybackClickZones.tsx).
+ *
+ * The three children stay in the DOM and stay laid out one third each — the documented DOM
+ * contract `[data-spw-click-zone]` / `[data-zone="prev"|"toggle"|"next"]` is read by the
+ * acceptance scripts — they are just never a hit-test target any more.
+ *
+ * `data-enabled` still records whether the zones are live (settings overlay / passthrough /
+ * open menus switch them off); the value now only drives the gesture listener in JS, and the
+ * rule below stays as the belt-and-braces guard for a child that re-enables itself.
+ * No cursor override: a hand cursor over the whole artwork would be visual noise.
  * =========================================================================== */
 .spw-click-zones {
     position: fixed;
     inset: 0;
     z-index: 2147482990;
     display: flex;
-    pointer-events: auto;
+    pointer-events: none;
 }
 
 .spw-click-zones[data-enabled='false'] {
@@ -381,6 +393,8 @@ body.spw-injected {
 .spw-click-zone {
     flex: 1 1 0;
     height: 100%;
+    /* Never a hit target: the picture under it keeps its own pointer events (issue #19). */
+    pointer-events: none;
     /* no background, no border, no cursor: the layer must be invisible */
 }
 

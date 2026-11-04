@@ -26,6 +26,8 @@ can also be floated straight over your desktop.
 - **A playback bar you can actually use** — play / pause, previous / next, drag to seek,
   shuffle / repeat, plus a queue panel you can click to jump around. You can also **click the
   picture itself**: the middle pauses, the left and right thirds step through the queue.
+  That layer never gets in the picture's own way — 「町景」 still rotates when you drag it, zooms
+  with the wheel and pans on right-drag, so a drag stays a drag and a click stays a click.
 - **What you see in settings is what you get** — the "Lyric style" window shows the player page
   itself on the left (real song, real lyrics, real background), so every slider reflects live.
 - **Custom fonts and subtitles** — import a font pack (`.ttf` / `.otf` / `.woff` / `.woff2`, up to
@@ -120,7 +122,7 @@ The full dependency matrix and crash troubleshooting live in
 
 ## Versions
 
-The current version is **v0.4.17** (2026-11-04). The `.spmod` and its SHA-256 checksum for every
+The current version is **v0.4.18** (2026-11-04). The `.spmod` and its SHA-256 checksum for every
 release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases), together with that
 release's notes.
 
@@ -131,7 +133,7 @@ it. **Download only from versions that still exist on the
 [Releases](https://github.com/azkbzxf/spw-folia/releases) page.**
 
 Detailed notes for the current release live in
-[docs/release-notes-v0.4.17.md](docs/release-notes-v0.4.17.md).
+[docs/release-notes-v0.4.18.md](docs/release-notes-v0.4.18.md).
 
 ## Build from source
 

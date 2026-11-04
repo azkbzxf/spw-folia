@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Encode the promo-site video assets from the captures made by the other tools
-# in this directory. Run from the repo root after capture-hero.mjs,
-# capture-scenes.mjs and tour.mjs have produced $RAW/*.webm and
-# $SITE_RAW/tour.webm.
+# in this directory. Run from the repo root after capture-hero.mjs and
+# capture-scenes.mjs have produced $RAW/*.webm.
 #
 # Needs a full ffmpeg (libx264). Set FFMPEG to point at one; by default we look
 # next to the repo in .tmp-capture/bin (where the capture toolchain puts it) and
@@ -18,7 +17,6 @@ fi
 echo "ffmpeg: $FF"
 
 RAW=".tmp-capture/raw"
-SITE_RAW=".tmp-capture/site-raw"
 OUT="site/assets/video"
 mkdir -p "$OUT"
 
@@ -58,12 +56,5 @@ echo "== overlay demo (lyrics on desktop, 10s) =="
   -pix_fmt yuv420p -movflags +faststart -an "$OUT/overlay.mp4"
 "$FF" -y -hide_banner -loglevel error -ss 6.0 -i "$RAW/s7-overlay.webm" -frames:v 1 \
   -vf "scale=1280:720:flags=lanczos" -q:v 4 "$OUT/overlay-poster.jpg"
-
-echo "== site tour (the page itself, 1080p, no captions) =="
-"$FF" -y -hide_banner -loglevel error -i "$SITE_RAW/tour.webm" \
-  -vf "fade=t=in:st=0:d=0.9,fade=t=out:st=47.2:d=1.6" \
-  -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart -an "$OUT/tour.mp4"
-"$FF" -y -hide_banner -loglevel error -ss 1.2 -i "$SITE_RAW/tour.webm" -frames:v 1 \
-  -q:v 4 "$OUT/tour-poster.jpg"
 
 ls -la "$OUT"

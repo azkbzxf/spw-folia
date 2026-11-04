@@ -212,9 +212,12 @@ spw-folia 的两条约束**必须由 `stage-web.mjs` 的硬闸守住**（grep �
 
 ## 10. 验收
 
-- `packaging/tools/verify-splash-gates.mjs` —— 三向：正常通过 / 删 splash 抛错 / preview 带 splash 抛错。
-- `packaging/tools/verify-splash-browser.mjs` —— 真 Chromium 加载两页，断言盒子、条数、底色。
 - `packaging/tools/verify-layout.mjs` —— 打包件真机：`previewHasNoSplash` + 样式缩略图。
+
+> v0.4.18：`verify-splash-gates.mjs` 与 `verify-splash-browser.mjs` 已删除 —— splash 契约自 v0.4.8
+> 起未再变动，`stage-web.mjs` 里的同名断言（`assertIndexHtmlKeepsSplash` /
+> `assertPreviewHtmlHasNoSplash`）每次构建都在跑，重复的独立脚本只增加了门禁的运行时间。
+> 需要它们时从 Git 历史取回（`git show v0.4.17:packaging/tools/verify-splash-gates.mjs`）。
 - `poc/settings-ui/scripts/diag-real-preview.mjs` —— 真机、真实宿主、模拟插件 track/lyrics，
   17 项断言：overlay open、iframe mounted、ready、config delivered、shim live、真实 song/lyrics、
   `iframe config === player config`、真实 clock 跟随 host posMs、frames 渲染、透明标记到父级与

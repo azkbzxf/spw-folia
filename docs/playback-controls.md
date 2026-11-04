@@ -161,8 +161,15 @@ Windows / Linux 构建也不相同。`HostMemberResolver` 用两条与名字无�
   高亮、宽度 420px 居中、位于栏上方；`data-flat` 下沿用扁平视觉。
 
 `src/chrome/PlaybackClickZones.tsx`（画面点击分区）：左 1/3 上一首、中 1/3 播放/暂停、右 1/3
-下一首。三条规则保证它不抢真实控件的点击 —— 详见 [`docs/protocol.md`](protocol.md) §8 与文件
-头注释（z-index 层级、覆盖层/穿透时禁用、拖拽与 Alt 拖动不算点击）。
+下一首。**v0.4.18 起它是幽灵层**：`pointer-events` 全为 `none`，画布重新拿到 `pointerdown`
+（「町景」的 OrbitControls 拖动旋转 / 滚轮缩放 / 右键平移、monet 的歌词轨滚轮因此恢复），手势判定
+改在 `window` 的 capture 阶段做。四条规则保证它不抢真实控件的点击：从交互控件上按下就放弃这次手势
+（标签/ARIA role/本岛 `data-spw-chrome` 等等，**外加祖先链上 `cursor` 是 `pointer|grab|move|*-resize`
+之类的「我要指针」语义** —— 上游有些控件只是裸 `div.cursor-pointer`，monet 的挂绳就是；
+那个判定是这条规则的一半，删了挂绳单击会连带暂停）；覆盖层 / 穿透 / 打开的菜单与面板时整层失效
+（`data-enabled="false"`）；位移 > `DRAG_SLOP_PX`(10px)、手势取消、Alt 拖动不算点击；对 zone
+子元素的合成 `pointerdown`+window `pointerup` 与纯 `el.click()` 仍各触发一次。
+详见 [`docs/protocol.md`](protocol.md) §8 与文件头注释。
 
 ## 4. DOM 选择器契约（验收脚本依赖）
 
@@ -173,19 +180,24 @@ Windows / Linux 构建也不相同。`HostMemberResolver` 用两条与名字无�
 | 列表按钮 | `aria-label="播放列表"` |
 | seek 区域 | `.spw-playback-bar .spw-playback-track`，须同时响应 `pointerdown+pointerup` 与 `click` |
 | 队列面板 | `.spw-queue-panel` / `[data-queue-index]` / `[data-current="true"]` |
-| 点击分区 | `[data-spw-click-zone]`（`data-enabled="true\|false"`）+ `[data-zone="prev"\|"toggle"\|"next"]` |
+| 点击分区 | `[data-spw-click-zone]`（`data-enabled="true\|false"`，`pointer-events:none`）+ `[data-zone="prev"\|"toggle"\|"next"]`（仍在 DOM，仍是合成输入入口，但不再是命中目标） |
 | 测试记录 | `window.__SPW_FOLIA_TEST_CONTROLS__` |
 
-改这些选择器会让 `verify-playback-controls.mjs` 与 `verify-playback-bar-switch.mjs` FAIL ——
+改这些选择器会让 `verify-click-zones.mjs` 与 `verify-playback-bar-switch.mjs` FAIL ——
 它们是门禁，不是建议。
 
 ## 5. 验收
 
 | 脚本 | 覆盖 |
 |---|---|
-| `packaging/tools/verify-playback-controls.mjs` | 拉起打包宿主，跑完整 control/queue 往返 |
+| `packaging/tools/verify-click-zones.mjs` | 点击分区 / 幽灵层：DOM 契约、三等分命中、拖动不发指令、控件不被抢、覆盖层失效、画布收得到指针（也覆盖 control/queue 往返的既有断言） |
 | `packaging/tools/verify-playback-bar-switch.mjs` | 「显示播放条」开关（含 E7：关掉后菜单按钮仍可点开，防锁死） |
-| `packaging/tools/verify-playback-switches.mjs` | 配置页开关链路 |
-| `packaging/tools/verify-mouse-back.mjs` | 侧键「返回」= ESC |
+| `packaging/tools/verify-live-settings-payload.mjs` | 设置树端到端下发 |
 
-`verify-all.mjs` 会把它们串起来跑。
+`verify-all.mjs` 按改动范围自动串起来跑；`--all` 跑全部。
+
+> v0.4.18：`verify-playback-controls.mjs`（v0.3.0 的 control/queue 全链路冒烟）、
+> `verify-playback-switches.mjs`（配置页开关链路）、`verify-mouse-back.mjs`（侧键返回）、
+> `verify-json-singleline.mjs`（行协议单行）已删除 —— 这些契约自 v0.3.0/v0.4.13 起未再变动，
+> 而 `verify-click-zones.mjs` 与 `verify-live-settings-payload.mjs` 在真实宿主上覆盖了同一批风险。
+> 需要回看时从 Git 历史取回（例如 `git show v0.4.17:packaging/tools/verify-mouse-back.mjs`）。

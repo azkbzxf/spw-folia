@@ -309,7 +309,9 @@ IndexedDB，下次开窗口直接贴出来 —— 贴进的是**上游那只 Map
 | `cached` | 当前显示「磁盘恢复图」的格子数；**static 模式恒 0** |
 | `pending` | 还没有图、也还没在造图的**样式格**数（随机格不计）；**static 模式恒 0** |
 
-验收：`packaging/tools/verify-preview-animation-switch.mjs`（接入 `verify-all.mjs`）。
+验收：`node site/tools/check-site.mjs` 里的货架断言 + 手工观察；原独立门禁
+`verify-preview-animation-switch.mjs` 已于 v0.4.18 删除（该开关自 v0.4.16 起未变动，
+门禁只留本次改动相关的范围，见 `packaging/tools/verify-all.mjs` 头部）。
 
 ### 4.2 tuning 合并：默认值打底，持久化覆盖
 
@@ -331,8 +333,8 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
 - 树里有、本 build 的默认值里没有的样式，原样带过 —— 更新版本的页面或改过的 build 不能因为本 build
   不认识那个键就丢数据。
 
-该文件**刻意做成纯函数**（无 import、无副作用），好让 `packaging/tools/verify-tuning-merge.mjs`
-与其他 Node 侧工具直接加载它、驱动真实的合并逻辑。
+该文件**刻意做成纯函数**（无 import、无副作用），好让 Node 侧工具与门禁直接加载它、驱动真实的
+合并逻辑（`verify-tuning-merge.mjs` 已删，纯函数这一约束仍然有效：它让合并逻辑可被任意脚本驱动）。
 
 ## 5. 元数据（tuning）与样式面板
 
@@ -442,10 +444,11 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
 
 设置岛自己的验收入口：
 
-- `packaging/tools/verify-all.mjs` —— 一条命令跑全部门禁（静态契约 + 自检 + 各开关套件）。
+- `packaging/tools/verify-all.mjs` —— 按改动范围跑门禁（`--all` 跑全部；未选中的项显示为 SKIP 并给出原因）。
+- `packaging/tools/verify-click-zones.mjs` —— 点击分区 / 幽灵层（DOM 契约、命中、拖动、控件不被抢）。
 - `packaging/tools/verify-layout.mjs` —— 打包产物端到端（`consoleErrors=0`、canvases、货架格数）。
-- `packaging/tools/verify-preview-animation-switch.mjs` —— 预览动画开关五组断言。
 - `packaging/tools/verify-live-settings-payload.mjs` —— 设置树单行载荷。
+- `packaging/tools/verify-playback-bar-switch.mjs` —— 「显示播放条」开关。
 - `poc/settings-ui/scripts/host-ui-check.mjs` —— chrome/ESC/指针命中契约。
 - `poc/settings-ui/scripts/diag-real-preview.mjs` —— 真机预览断言（清单见
   [`docs/live-preview-iframe.md`](live-preview-iframe.md) §10）。
