@@ -29,6 +29,21 @@ const LOCAL_KEYS = {
         chooseSystemFontEmpty: '这台电脑上没有可用的系统字体列表',
         /** v0.4.0: top-left close button on the player chrome (mirror of the top-right gear). */
         closePlayer: '退出 Folia',
+        /** v0.4.17 (issue #18 item 2): 「显示播放条」 moved off SPW's 配置 page into the player page's
+         *  bottom-right settings menu, as one row of that panel. */
+        showPlaybackBar: '显示播放条',
+        /** v0.4.17: that panel now holds three unrelated switches, so it can no longer be named after
+         *  the transparency switch alone ("透明背景" would be a lie for a screen reader). */
+        playerPageSettings: '播放页设置',
+    },
+} as const;
+
+/** en overlay for the same keys. Folia's upstream bundle is keyed in English already, but this
+ *  overlay wins for the two strings above (the merge is shallow per namespace, ours last). */
+const LOCAL_KEYS_EN = {
+    options: {
+        showPlaybackBar: 'Show playback bar',
+        playerPageSettings: 'Player page settings',
     },
 } as const;
 
@@ -63,6 +78,8 @@ const applyLocalKeys = (): void => {
     for (const language of ['zh-CN', 'en']) {
         i18n.addResourceBundle(language, 'translation', LOCAL_KEYS as ResourceLanguage, true, true);
     }
+    // The en strings are a full bundle over `LOCAL_KEYS`'s zh-CN one: the same key set, translated.
+    i18n.addResourceBundle('en', 'translation', LOCAL_KEYS_EN as ResourceLanguage, true, true);
 };
 
 applyLocalKeys();

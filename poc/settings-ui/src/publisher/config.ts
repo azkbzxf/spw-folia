@@ -10,6 +10,7 @@ import {
     type StyleMode,
     BACKGROUND_TUNING_DEFAULTS,
     DEFAULT_COMMON_BACKGROUND,
+    STYLE_TUNING_DEFAULTS,
 } from '~/model/settings';
 import { suppressesClosingPoster, transparentStyleTuning } from '~/model/transparencyCompat';
 import { normalizeRandomModes } from '~/model/settings';
@@ -165,7 +166,15 @@ export const buildBackgroundConfig = (settings: SettingsSnapshot) => {
  *  v0.2.0: while the player window is transparent, styles that paint a large semi-transparent
  *  plate get a render-only override merged in (see `model/transparencyCompat.ts`). The override is
  *  applied here and not in the settings store, so it disappears as soon as transparency is off and
- *  the user's own tuning values are never touched. */
+ *  the user's own tuning values are never touched.
+ *
+ *  v0.4.17 (issue #18 item 1): upstream's defaults are laid under every bag here as well, as the
+ *  LAST line of defence before Folia's renderer. The store already merges them (`applySnapshot`),
+ *  but this is the single function whose output becomes `props.<style>Tuning`, and Folia's
+ *  `defineVisualizerTuning.apply` stores that bag verbatim — it never runs the style's own
+ *  `resolve()`. One `undefined` key there is not an error: a renderer multiplying by it computes
+ *  NaN, and a NaN `position` / `alpha` / `scale` silently erases the whole composition (凝彩 lost
+ *  its glyphs that way). Belt and braces is cheap here; a NaN canvas is not diagnosable by users. */
 export const buildTuningBundle = (
     settings: SettingsSnapshot,
     options?: { transparent?: boolean; isDaylight?: boolean },
@@ -173,7 +182,8 @@ export const buildTuningBundle = (
     const bundle: Record<string, Record<string, unknown>> = {};
     for (const [mode, tuning] of Object.entries(settings.styleTunings)) {
         if (mode === 'still') continue;
-        bundle[mode] = tuning;
+        const defaults = STYLE_TUNING_DEFAULTS[mode as StyleMode];
+        bundle[mode] = defaults ? { ...defaults, ...tuning } : tuning;
     }
     if (options?.transparent === true) {
         const styleMode = settings.styleId as StyleMode;

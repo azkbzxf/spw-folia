@@ -39,6 +39,9 @@ import {
     type HitRegion,
 } from '~/bridge';
 import PlayerBackgroundControl from '~/chrome/PlayerBackgroundControl';
+/* v0.4.17 (issue #18 item 4): the picture itself answers to clicks — middle third toggles playback,
+ * left/right thirds step through the queue. */
+import PlaybackClickZones from '~/chrome/PlaybackClickZones';
 /* v0.4.11: 配置 page 「显示问题反馈按钮」 switch (plugin-owned injected member; default off). */
 import { useShowProblemButton } from '~/model/useInjectedSwitch';
 /* issue #12 增加日志功能: 「出现问题」 environment self-check + pre-filled feedback panel. */
@@ -77,6 +80,26 @@ const App: React.FC<AppProps> = ({ injected }) => {
     /** v0.1.7: with the player background transparent the page is click-through on its keyed pixels,
      *  so the chrome buttons must stay pinned on screen — otherwise they could never be clicked again. */
     const chromeAlwaysOn = state.transparentPlayerBackground === true;
+    /* v0.4.17 (issue #18 item 2): 「显示播放条」 is page-owned now. Read through narrow selectors (not
+     * the whole store object) so toggling it re-renders only what depends on it.
+     * The value gates `PlaybackBar` alone: the menu button that flips it must stay mounted, otherwise
+     * switching the bar off would take away the only way to switch it back on.
+     * `DEFAULT_SHOW_PLAYBACK_BAR` is the fallback for a store that has not been hydrated by an
+     * `applySnapshot` yet — a non-boolean there must not read as "off". */
+    const storedShowPlaybackBar = useSettingsStore(s => s.showPlaybackBar);
+    const showPlaybackBar = typeof storedShowPlaybackBar === 'boolean'
+        ? storedShowPlaybackBar
+        : DEFAULT_SHOW_PLAYBACK_BAR;
+    const setShowPlaybackBar = useSettingsStore(s => s.setShowPlaybackBar);
+    /** v0.4.17 (issue #18 item 4): the picture-level click zones are inert while the settings overlay
+     *  owns the stage and while the host is in mouse passthrough (clicks belong to the desktop then).
+     *  They also stand down while the bottom-right settings menu or the diagnostics/modal is open: the
+     *  click that dismisses such a card must not also pause the song. */
+    const clickZonesEnabled = !open
+        && state.mousePassthrough !== true
+        && !playerPanelOpen
+        && !problemPanelOpen
+        && !fontPickerOpen;
 
     useConfigPublisher();
 
@@ -196,6 +219,10 @@ const App: React.FC<AppProps> = ({ injected }) => {
         window.addEventListener('keydown', onKeyDown, true);
         return () => window.removeEventListener('keydown', onKeyDown, true);
     }, [playerPanelOpen]);
+
+    /* v0.4.17 (issue #18 item 2): the 「显示播放条」 row lives INSIDE the bottom-right settings menu
+     * (`PlayerBackgroundControl`), so the menu already owns ESC — there is no second panel to handle
+     * here. See the `playerPanelOpen` ESC effect above. */
 
     /* issue #12: same ESC ownership for the diagnostics panel — it is a modal-ish card over the
      * player page, so the first Escape closes it and a second one closes the window. */
@@ -335,7 +362,17 @@ const App: React.FC<AppProps> = ({ injected }) => {
 
     return (
         <>
-            {/* v0.1.7: Folia's own player-chrome row, reachable from the player's bottom-right corner. */}
+            {/* v0.4.17 (issue #18 item 4): the picture answers to clicks — middle third toggles
+             *  playback, left/right thirds step the queue. It renders FIRST (and paints at a lower
+             *  z-index than every control) so the playback bar, the chrome buttons and their panels
+             *  always get a click they cover; it is disabled outright while the settings overlay is
+             *  open or the host forwards clicks to the desktop. It does NOT depend on
+             *  「显示播放条」: pausing the picture is a picture-level feature. */}
+            <PlaybackClickZones enabled={clickZonesEnabled} />
+            {/* v0.1.7: Folia's own player-chrome row, reachable from the player's bottom-right corner.
+             *  v0.4.17 (issue #18 item 2): the panel now also holds 「显示播放条」 (`playerPanelOpen`).
+             *  The button is mounted unconditionally — switching the playback bar off unmounts
+             *  `PlaybackBar`, never this menu, because this menu is the only way back. */}
             <PlayerBackgroundControl
                 visible={chromeAlwaysOn || ((chromeVisible || playerPanelOpen) && !open)}
                 open={playerPanelOpen}
@@ -348,6 +385,10 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 passthroughLabel="鼠标穿透（操作桌面）"
                 compat={styleCompat}
                 compatNote={compatNote}
+                showPlaybackBar={showPlaybackBar}
+                onToggleShowPlaybackBar={setShowPlaybackBar}
+                showPlaybackBarLabel={t('options.showPlaybackBar')}
+                panelLabel={t('options.playerPageSettings')}
             />
             {/* v0.4.0: with the player page opaque the chrome otherwise offers no way out of the
              *  fullscreen window (ESC / the host hotkey work, but they are not discoverable), so the
@@ -411,8 +452,11 @@ const App: React.FC<AppProps> = ({ injected }) => {
             <ProblemReportPanel open={problemPanelOpen} onClose={() => setProblemPanelOpen(false)} />
             {/* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar).
              *  Hidden while the settings overlay owns the stage; unmounts itself entirely under
-             *  mouse passthrough so no pixels and no hit region remain there. */}
-            <PlaybackBar settingsOpen={open} />
+             *  mouse passthrough so no pixels and no hit region remain there.
+             *  v0.4.17 (issue #18 item 2): whether it mounts at all is now this page's own
+             *  「显示播放条」 setting (bottom-right menu), no longer a plugin-injected member. The menu
+             *  button that flips it lives above this line and is never gated by it. */}
+            {showPlaybackBar ? <PlaybackBar settingsOpen={open} /> : null}
             <div
                 className="font-sans"
                 data-spw-settings-overlay={open ? 'true' : 'false'}

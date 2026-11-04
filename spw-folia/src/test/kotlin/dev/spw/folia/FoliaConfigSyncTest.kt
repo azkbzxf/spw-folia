@@ -6,6 +6,7 @@ import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.config.ConfigHelper
 import com.xuncorp.spw.workshop.api.config.ConfigManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -205,8 +206,11 @@ class FoliaConfigSyncTest {
 
         sync.start(FakeConfigManager(dir))
 
+        // v0.4.17 (issue #18 item 2): showPlaybackBar is a MIGRATION SOURCE now, not a live switch.
+        // It still defaults to the pre-move default (on) so a user who never touched the old switch
+        // keeps their bar; the page owns the value from here on.
         assertEquals(
-            "显示播放条 defaults to on",
+            "the legacy 显示播放条 seed must default to on (pre-move default)",
             FoliaConfigSyncAccess.defaultShowPlaybackBar,
             sync.showPlaybackBar,
         )
@@ -242,7 +246,14 @@ class FoliaConfigSyncTest {
         sync.start(FakeConfigManager(dir))
         try {
             assertTrue("打开过渡动画 must be read", sync.transitionAnimation)
-            assertEquals("显示播放条 must be read", false, sync.showPlaybackBar)
+            // Still READ (it is the legacy seed for the page's own switch), even though the plugin
+            // no longer applies it. Losing this read would silently re-show the bar for users who
+            // had turned it off under the old 配置 page.
+            assertEquals(
+                "the legacy 显示播放条 value must still be read as the page's migration seed",
+                false,
+                sync.showPlaybackBar,
+            )
             assertTrue("显示问题反馈按钮 must be read", sync.showProblemButton)
         } finally {
             sync.stop()
@@ -335,6 +346,70 @@ class FoliaConfigSyncTest {
         sync.sync("start")
 
         assertEquals(FoliaConfigSyncAccess.defaultShowPlaybackBar, sync.showPlaybackBar)
+    }
+
+    /**
+     * v0.4.17 (issue #18 item 2): the settings tree must carry the old `config.json` value as
+     * `showPlaybackBarLegacy` and must NOT carry a `showPlaybackBar` member written by the plugin.
+     *
+     * This is the whole migration seam. The page owns `showPlaybackBar` now; if the plugin also
+     * wrote that key it would become a second writer for one fact and a stale config.json value
+     * could overwrite the user's live choice on every push. A DISTINCT spelling is what lets the page
+     * tell "the old value you may seed from" apart from "your value".
+     */
+    @Test(timeout = 15_000)
+    fun `applyTo injects the old bar value under the legacy name only`() {
+        val dir = tmp.newFolder()
+        File(dir, "config.json").writeText("""{"showPlaybackBar":false}""")
+        val rec = Recorder()
+        val sync = newSync(dir, rec)
+        sync.start(FakeConfigManager(dir))
+        try {
+            assertEquals("关闭播放条 must be read from the old key", false, sync.showPlaybackBar)
+
+            val tree = sync.applyTo("""{"styleId":"sonnet"}""")
+
+            assertEquals(
+                "the old value must reach the page under the legacy name",
+                false,
+                Json.boolField(tree, "showPlaybackBarLegacy"),
+            )
+            assertNull(
+                "the plugin must NOT write showPlaybackBar any more: the page owns that key, and a " +
+                    "second writer would overwrite the user's live choice on every push",
+                Json.boolField(tree, "showPlaybackBar"),
+            )
+            assertEquals("the rest of the tree must survive untouched", "sonnet", Json.stringField(tree, "styleId"))
+        } finally {
+            sync.stop()
+        }
+    }
+
+    /** A tree that already carries the page's own `showPlaybackBar` must keep it verbatim. */
+    @Test(timeout = 15_000)
+    fun `applyTo never overwrites the page's own showPlaybackBar`() {
+        val dir = tmp.newFolder()
+        File(dir, "config.json").writeText("""{"showPlaybackBar":false}""")
+        val rec = Recorder()
+        val sync = newSync(dir, rec)
+        sync.start(FakeConfigManager(dir))
+        try {
+            // The page's persisted value disagrees with the old file on purpose: the page wins.
+            val tree = sync.applyTo("""{"showPlaybackBar":true}""")
+
+            assertEquals(
+                "the page's value must survive: it is the owner now",
+                true,
+                Json.boolField(tree, "showPlaybackBar"),
+            )
+            assertEquals(
+                "the legacy hint is still offered alongside it",
+                false,
+                Json.boolField(tree, "showPlaybackBarLegacy"),
+            )
+        } finally {
+            sync.stop()
+        }
     }
 
     /** `stop()` must be safe and idempotent even when `start()` never ran. */

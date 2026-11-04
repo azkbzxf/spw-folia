@@ -359,6 +359,93 @@ class FoliaDiagnosticsTest {
         generatedAt = java.time.LocalDateTime.now(),
     )
 
+    // --------------------------------------------------- issue #18 item 3: open the LOG folder ----
+
+    /**
+     * The `/select` switch and the path must stay in SEPARATE argv entries.
+     *
+     * This is the whole bug: v0.4.16 passed `"/select," + path` as ONE argument. `ProcessBuilder`
+     * quotes an argument only when it contains a space, and it wraps the WHOLE argument — which put
+     * a literal `"` in front of `/select,`, so Explorer did not recognise the switch and opened its
+     * default start location (Documents) instead of the log folder.
+     *
+     * The real install path on every default Windows profile contains a space
+     * (`...\Salt Player for Windows\...`), so this is not an edge case: it is the normal case.
+     * Asserting on the list (rather than spawning Explorer) makes the regression a build failure
+     * instead of a support report. The on-machine landing point is covered separately by
+     * `.scratch/probing/` (Shell.Application LocationURL), which is where that behaviour belongs.
+     */
+    @Test
+    fun `open log folder keeps the select switch and the path in separate arguments`() {
+        // A REAL file is required: the branch under test keys off `isFile`. Inventing a path here
+        // silently exercised the directory branch instead (which is how this test first failed).
+        // The space is in the parent directory, because that is what ProcessBuilder reacts to.
+        val root = java.nio.file.Files.createTempDirectory("Salt Player for Windows").toFile()
+        val log = java.io.File(root, "spw-folia.log")
+        log.writeText("x")
+        val command = FoliaDiagnostics.logFolderCommand(log)
+
+        assertEquals("explorer must be the program", "explorer.exe", command[0])
+        assertEquals(
+            "the /select, switch must be its OWN argument; joining it with a space-containing path " +
+                "makes ProcessBuilder wrap the whole thing and Explorer opens Documents instead",
+            "/select,",
+            command[1],
+        )
+        assertEquals("the path must be its own argument", log.absolutePath, command[2])
+        assertEquals("nothing else may be passed", 3, command.size)
+        assertFalse(
+            "the switch must not carry a quote of its own: ProcessBuilder does not escape it, so the " +
+                "child sees the quote and the path splits apart",
+            command[1].contains('"'),
+        )
+        assertFalse(
+            "the path must not be hand-quoted either",
+            command[2].contains('"'),
+        )
+    }
+
+    /**
+     * The negative control: the SHIPPED v0.4.16 shape must fail the assertion above.
+     *
+     * Without this, "the switch is a separate argument" is unfalsifiable — a test that only ever
+     * sees the fixed value cannot show it would have caught the bug. This pins the exact old string.
+     */
+    @Test
+    fun `the shipped single-argument select shape would fail that assertion`() {
+        val root = java.nio.file.Files.createTempDirectory("Salt Player for Windows").toFile()
+        val log = java.io.File(root, "spw-folia.log")
+        log.writeText("x")
+
+        // v0.4.16 verbatim: one argument, no space after the comma.
+        val shipped = listOf("explorer.exe", "/select," + log.absolutePath)
+
+        assertEquals(2, shipped.size)
+        assertFalse(
+            "if this ever passes, the regression test above has stopped testing anything",
+            shipped[1] == "/select,",
+        )
+        assertTrue(
+            "the shipped argv carried the switch glued to the path, which is the whole defect",
+            shipped[1].startsWith("/select,") && shipped[1].length > "/select,".length + 1,
+        )
+    }
+
+    /**
+     * The no-file branch (a directory) needs no `/select` and must stay a plain single-argument open,
+     * otherwise a fresh install with no log yet would open nothing at all.
+     */
+    @Test
+    fun `open log folder without a log file opens the directory plainly`() {
+        val dir = java.io.File("C:/Users/x/AppData/Roaming/Salt Player for Windows/plugins/1")
+        val command = FoliaDiagnostics.logFolderCommand(dir)
+
+        assertEquals(2, command.size)
+        assertEquals("explorer.exe", command[0])
+        assertEquals(dir.absolutePath, command[1])
+        assertFalse("no switch when there is nothing to select", command[1].startsWith("/select"))
+    }
+
     /** Mirrors the summary section of `buildSummary`, which is private; the shape is under test. */
     private fun bodyOf(checks: List<FoliaDiagnostics.Check>): String = buildString {
         checks.forEach { check ->

@@ -114,6 +114,19 @@ const SUITES = [
     // The script exits 2 (not 1) when those artifacts are absent, so a stale local build shows up
     // as "missing payload" rather than as a silent pass.
     { name: '歌词样式预览动画 switch + 小图缓存', file: 'verify-preview-animation-switch.mjs' },
+    // v0.4.17 (issue #18 item 1): 「凝彩样式失效」. A settings tree persisted before Folia 0.7.25
+    // carries no `depthOfField`/`depthPan`/`glyphDepth`; the old whole-object replacement kept it
+    // that way and the renderer multiplied by `undefined` -> NaN -> no composition at all. This
+    // suite loads the page's TypeScript sources directly (Node --experimental-transform-types,
+    // self-re-exec'd), so unlike the browser suites above it needs NO packaged payload — which is
+    // why it also runs under --static.
+    { name: 'tuning merge: 默认值打底 + 持久化覆盖', file: 'verify-tuning-merge.mjs' },
+    // v0.4.17 (issue #18 item 3): 「出现问题」must open the LOG folder. This one spawns a real
+    // explorer.exe with the shape `FoliaDiagnostics.logFolderCommand` builds and reads the landing
+    // back through Shell.Application (LocationURL + Document.SelectedItems()), with the shipped
+    // v0.4.16 shape and the tempting hand-quoted "fix" as negative controls. It needs a real
+    // interactive desktop, so it exits 2 (not 1) on a machine where Explorer cannot be driven.
+    { name: '「出现问题」打开日志文件夹落点', file: 'verify-log-folder.mjs' },
 ];
 
 // ---------------------------------------------------------------- 1f. hang guards ----
@@ -250,6 +263,14 @@ function runSuite(file) {
 
 // ---------------------------------------------------------------- main ----
 
+/**
+ * Suites that do NOT need the packaged payload (they load the page's TypeScript sources / plain
+ * JSON), so a `--static` run executes them too. Everything else in [SUITES] drives the real
+ * WebView2 host and is skipped without a payload. Before v0.4.17 `--static` ran no suite at all,
+ * which meant an unwired or rotted gate script stayed invisible until somebody ran the full gate.
+ */
+const SOURCE_ONLY_SUITES = new Set(['verify-tuning-merge.mjs']);
+
 function main() {
     if (!STATIC_ONLY) {
         const exe = join(PKG, 'native', 'spw-folia-host.exe');
@@ -273,9 +294,19 @@ function main() {
     const jvm = runJvmTests();
     record('jvm unit tests (config failure paths)', jvm.ok, jvm.detail);
 
+    // Source-only suites run in BOTH modes: they never touch the packaged payload, so `--static`
+    // can and must execute them — an unwired gate script must not stay invisible.
+    console.log('\n== source-only suites (no packaged payload needed) ==');
+    for (const suite of SUITES) {
+        if (!SOURCE_ONLY_SUITES.has(suite.file)) continue;
+        const { ok, detail } = runSuite(suite.file);
+        record(suite.name, ok, detail);
+    }
+
     if (!STATIC_ONLY) {
         console.log('\n== real host + real WebView2 ==');
         for (const suite of SUITES) {
+            if (SOURCE_ONLY_SUITES.has(suite.file)) continue; // already ran above
             const { ok, detail } = runSuite(suite.file);
             record(suite.name, ok, detail);
         }

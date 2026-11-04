@@ -3,12 +3,15 @@
 Status: **complete** (task-8). `packaging/` holds the exact payload of the final `.spmod`; the
 assembly script, checksums, size budget and a scripted packaged-layout acceptance test are included.
 
-**Version state (read this first):** the newest assembled build is **v0.4.16** (2026-11-03,
-`dist/release/spw-folia-0.4.16.spmod`, sha256 `4d3cde0f…`). Before it, v0.4.15 (the first-open
-self-close fix + the feedback-URL truncation fix) and v0.4.14 (the v0.4.13 hang fix). Everything
-between v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and v0.4.12 — was
-built and tested locally only and was **never published**, so their changes ship inside v0.4.13+.
-Do not point users at the tags of those intermediate versions.
+**Version state (read this first):** the newest assembled build is **v0.4.17** (2026-11-04,
+`dist/release/spw-folia-0.4.17.spmod`, sha256 `9ff9f66e…`). It fixes the four issue #18 items
+(凝彩 dead after 0.7.25's three new tuning keys, 「显示播放条」 moved into the player page's
+bottom-right menu, 「出现问题」 opening Documents instead of the log folder, and click zones on the
+picture). Before it, v0.4.16 (style-thumbnail cache + 歌词样式预览动画 switch), v0.4.15 (the
+first-open self-close fix + the feedback-URL truncation fix) and v0.4.14 (the v0.4.13 hang fix).
+Everything between v0.4.6 and v0.4.13 — v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
+v0.4.12 — was built and tested locally only and was **never published**, so their changes ship
+inside v0.4.13+. Do not point users at the tags of those intermediate versions.
 
 **v0.4.13 was published and withdrawn the same day.** It fixed the three dead config switches but
 shipped an unbounded retry recursion that hung SPW's UI for 9 minutes on a machine whose config files
@@ -16,9 +19,11 @@ did not exist yet (`failure.kind=TERMINATED_HANG`). The Release and tag were del
 are preserved in `dist/release/taken-down/v0.4.13-handoff/`. **v0.4.14 is that release, fixed** — see
 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) and [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md).
 
-Last verified: 2026-11-03 (v0.4.16 assembled from a fresh `packaging/` staging and gated with
-`verify-all.mjs` → **22/22**, including 48 JVM unit tests, the v0.4.13 hang guards, the three
-regression suites that were previously orphaned, and the new cross-process preview-cache suite).
+Last verified: 2026-11-04 (v0.4.17 assembled from a fresh `packaging/` staging, gated with
+`verify-all.mjs` → **24/24**, including 57 JVM unit tests, the v0.4.13 hang guards, the three
+regression suites that were previously orphaned, the v0.4.16 preview-cache suite, and two new
+suites for this release: the defaults-first tuning merge — which is the 凝彩 fix — and the
+real-explorer landing test for 「出现问题」. `verify-layout.mjs` on a clean unpack → 13/13).
 The v0.4.5/v0.4.6 bytes, entry counts and sha256
 below were recomputed from the actual downloaded assets, not copied from notes. Payload numbers
 quoted for the host exe (`spw-folia-host.exe` 164,864 B) and WebView2 150.0.4078.83 are the
@@ -332,7 +337,7 @@ repository; per-version change essays and full payload breakdowns live in
 [`docs/archive/`](archive/) (and in the GitHub Releases bodies, which ship `SHA256SUMS.txt` next to
 every `.spmod`).
 
-**The last published release is v0.4.16.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
+**The last published release is v0.4.17.** v0.4.6.1, v0.4.7, v0.4.8, v0.4.9, v0.4.10, v0.4.11 and
 v0.4.12 were built and tested locally only — they have **no** GitHub release and **no** tag, so they
 must not be presented as downloadable; their changes ship inside the later published releases.
 v0.4.13 **was** published and was withdrawn the same day (see the row below and
@@ -377,6 +382,7 @@ name.)
 | **v0.4.14** | **15,442,237** | **3,983** | `9d787a8b6431e72f6455d167b8c7eb4b2ce66803e1941ca334a2f6c5aeefd612` | **2026-11-03 发布**，v0.4.13 的修复版。①重试改为常量上限循环 + 同线程递归深度兜底（绝不再递归）；②`isOs64` 改三态，读不到位数不再假失败；③`runReg` 先起守护线程读管道再带超时等待，3s 硬超时真正生效；④`stringField` 非法转义返回 null（防止坏行被错派发）；⑤`save()` 返回 false 不再被记成已保存；⑥验收门禁补齐：3 个此前从未被调用的回归脚本接入、`fails.length >= 0` 恒真断言修正、`live-settings-payload` 不再依赖开发者本机安装、新增 v0.4.13 卡死守卫与 46 个 JVM 单测。`verify-all.mjs` 18/18。详见 [`release-notes-v0.4.14.md`](release-notes-v0.4.14.md) 与 [`postmortem-v0.4.13.md`](postmortem-v0.4.13.md) |
 | **v0.4.15** | **15,443,035** | **3,983** | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | **2026-11-03 发布**。修 v0.4.14 的两个用户可见缺陷：①**设置面板首次打开几秒后自动退出** —— 根因是设置岛被加载两次（宿主注入带 `?v=`，而 35 个 chunk 反向 `import "../settings-ui.js"` 不带查询串，浏览器按完整 URL 区分模块），第二实例 `createRoot` 了同一个容器并卸载了第一棵树；修复用 `window` 级挂载标记 + 控制器所有者标记 + 容器 root 检测三道防线（模块作用域在两次加载间不共享，只能放 `window`）。②**反馈网址打不开**（GitHub `Whoa there!`）—— 上限按字符数 6000 算，但中文百分号编码后每字 9 字符，实际网址 ~15000 超限；改为按编码后长度截断，并修掉 emoji 输入会抛 `URIError` 的问题。门禁新增 3 条守卫（扫描打包产物 44 处反向引用），拆掉防线即 FAIL（已实测）。`verify-all.mjs` **21/21**、47 个 JVM 单测。详见 [`release-notes-v0.4.15.md`](release-notes-v0.4.15.md) |
 | **v0.4.16** | **15,462,458** | **4,007** | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | **2026-11-03 发布**。①**歌词样式小图缓存到本机**：上游 `pictureImages` 那只 Map 只活在页面生命周期里，重启窗口后 17 格要重画一遍（真机实测 23.0 s，主线程最长单次阻塞 1.77 s）；新增 IndexedDB 二级缓存（库 `spw-folia-preview` / 表 `pictures`，键 = `v1\|` + 上游 `stylePictureKey`，**不传上传图**以避开 WeakMap 序号跨进程漂移），命中时把冻结图贴回上游 Map，`LivePicture` 便不再排队造图 → 重启后 **23.0 s → 0.37 s**、`peakMaking 1→0`、样式渲染器 chunk 增量 `19→0`。canvas 用 WebP q0.85（PNG 下 hanabi/machi/pendolo 会撞 512 KB 单条上限被静默跳过，而它们恰是最慢三格；17 格 1.47 MB → 298 KB）。②**新增 `previewAnimation` 开关（默认开）**：关闭时货架走 `ShelfStatic`，经 `React.lazy` 在**模块加载层面**断链，真机 resource entries 匹配 `Visualizer\|ShelfLiveView` 为 **0**（不是渲染了不显示），热切换双向生效。③顺带修真缺陷：上游 `freezeStage` 只清理冻结那一刻在 `getAnimations()` 里的动画，群唱 `cappella-char-fade`（37 个）漏网、挂回新页面会从头重播；落盘前统一剥掉 `animation`/`transition`，恢复后 `getAnimations` 为 0。验收新增真机套件 `verify-preview-animation-switch.mjs`（37 条断言，含反恒真 A7 与跨进程 C 组），`verify-all.mjs` **22/22**、48 个 JVM 单测。详见 [`release-notes-v0.4.16.md`](release-notes-v0.4.16.md) |
+| **v0.4.17** | **15,464,000** | **4,007** | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | **2026-11-04 发布**。修 issue #18 四项：①**凝彩样式失效** —— 根因不在凝彩本身：Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField`/`depthPan`/`glyphDepth`，而 `applySnapshot` 对每种样式的 tuning 做**整对象替换**，旧设置树缺这三个键 → 上游 `defineVisualizerTuning.apply` 不过 `resolve()` → 渲染器拿 `undefined` 参与 `temperaShotFrame` 的坐标运算 → NaN → 整个构图消失（只剩背景噪点）。改为「**默认值打底 + 持久化值覆盖**」逐样式合并（新增纯函数 `model/mergeTuning.ts`），`buildTuningBundle` 出库前再兜一层默认值；顺带修未知样式不允许透传的隐患。②**「显示播放条」搬到播放页右下角菜单** —— 所有权从插件侧（配置页 `showPlaybackBar` → `withInjectedMembers()` → 只读注入成员）迁移到**页面自己的 settings 树**（`showPlaybackBar`/`setShowPlaybackBar`），开关成为既有 `player-background` 面板里的**一行**（`data-spw-chrome="playback-bar-row"`，无条件常显）；`preference_config.json` 与 `KNOWN_CONFIG_SWITCHES` 同步删除该键；老用户经 `showPlaybackBarLegacy` 顶层成员一次性播种（树里有键则永远以树为准），`onSettingsFromPage` 不再剥除它。**菜单按钮无条件挂载**，关掉播放条后仍可开回来（门禁 E7 专门钉死锁）。③**「出现问题」打开的是文档文件夹** —— `openLogFolder` 把 `/select,` 与路径拼成**一个**参数，`ProcessBuilder` 对含空格参数整体加引号（安装路径默认含 `Salt Player for Windows`），explorer 收到前面带引号的怪参数 → 退回默认起始位置。改为**两个独立参数**，并用真实 explorer + `Shell.Application`（`LocationURL` **与** `Document.SelectedItems()`）验证落点，附两条必须 FAIL 的负面对照（v0.4.16 形状、以及「自己加内层引号」这个会让路径碎成 4 段的假修复）。④**播放画面点击分区** —— 中央 1/3 暂停/播放、左右切歌；热区层级在播放条与所有 chrome 之下（不抢点击），拖动 >10px 不算点击，设置覆盖层/鼠标穿透时不生效，且不依赖播放条开关。门禁新增 `verify-tuning-merge.mjs`（17 条，含反恒真回退变体）与 `verify-log-folder.mjs`（16 条，含真实 explorer 落点与负面对照），`verify-playback-bar-switch.mjs` 改写为驱动新菜单（25 条）；`verify-all.mjs` **24/24**、57 个 JVM 单测、`verify-layout.mjs` 13/13。详见 [`release-notes-v0.4.17.md`](release-notes-v0.4.17.md) |
 
 `local only` builds were verified on a real install but never uploaded; their changes shipped inside
 the next published release. v0.1.11 was never built as a standalone artifact either — its two fixes
@@ -394,10 +400,10 @@ Notes on how to read this table:
   unifies them; the artifacts named `*-0.4.7*.spmod` in `dist/release/` are therefore older local
   builds, not the published 0.4.7 — and 0.4.7 itself was never published either.
 
-Current release payload (**v0.4.16**): `web/` 3,891 files / 33,900,280 B, `native/` 5 files /
+Current release payload (**v0.4.17**): `web/` 3,891 files / 33,904,033 B, `native/` 5 files /
 1,116,126 B (host `spw-folia-host.exe` 178,688 B), `licenses/` 7 files / 49,757 B, `classes/`
-104 files / 828,860 B — 35,895,023 B uncompressed across 4,007 file entries, shipped as
-15,462,458 B with sha256 `4d3cde0f…`.
+104 files / 829,445 B — 35,899,361 B uncompressed across 4,007 file entries, shipped as
+15,464,000 B with sha256 `9ff9f66e…`.
 
 For reference, the v0.4.6 artifact (the historical baseline) was: `web/` 3,820 files /
 26,112,116 B, `native/` 5 files / 1,097,142 B (host `spw-folia-host.exe` 164,864 B), `licenses/`
@@ -406,6 +412,6 @@ For reference, the v0.4.6 artifact (the historical baseline) was: `web/` 3,820 f
 (62 files / 493,078 B → 12,227,007 B total, sha256 `3b2a7474…`). Verify a downloaded artifact with:
 
 ```bash
-sha256sum spw-folia-0.4.16.spmod    # compare with the ledger row and the release's SHA256SUMS.txt
+sha256sum spw-folia-0.4.17.spmod    # compare with the ledger row and the release's SHA256SUMS.txt
 node packaging/tools/verify-layout.mjs   # packaged-layout acceptance on a clean unpack
 ```

@@ -139,10 +139,16 @@ internal object FoliaDiagnostics {
      *
      * Keep this in step with the `readXxx` functions in [FoliaPlugin]; the check exists precisely so a
      * forgotten entry here fails loudly instead of silently ignoring a user's setting.
+     *
+     * v0.4.17 (issue #18 item 2): `showPlaybackBar` is gone. The switch moved from the 配置 page to a
+     * menu on the player page itself, so it is no longer DECLARED in `preference_config.json` — and
+     * the comparison is two-directional, so it must not be listed here either. The plugin still READS
+     * the old `config.json` key, but only as a migration source for the page's own store
+     * (injected as `showPlaybackBarLegacy`); see [FoliaConfigSync.showPlaybackBar]. A legacy read is
+     * not a declared switch.
      */
     private val KNOWN_CONFIG_SWITCHES = setOf(
         "transitionAnimation",
-        "showPlaybackBar",
         "showProblemButton",
         "previewAnimation",
         "verboseLog",
@@ -879,22 +885,78 @@ internal object FoliaDiagnostics {
 
     // ---------------------------------------------------------------------- feedback ----
 
-    /** Opens Explorer in the plugin dir with `spw-folia.log` selected (`explorer /select,<file>`). */
+    /**
+     * Opens Explorer in the log directory with `spw-folia.log` selected (`explorer /select,<file>`).
+     *
+     * ## Why the switch and the path are TWO arguments (issue #18 item 3)
+     *
+     * The shipped v0.4.16 code passed them as ONE string, `"/select," + path`, which is wrong for any
+     * path containing a space — including the real install path on every default Windows profile
+     * (`...\AppData\Roaming\Salt Player for Windows\workshop\plugins\spw-folia-0.4.16\spw-folia.log`).
+     *
+     * `ProcessBuilder` quotes an argument **only** when it contains a space, and it wraps the WHOLE
+     * argument. It does **not** escape quotation marks the argument itself contains. So the old shape
+     * reached Explorer as:
+     *
+     * ```
+     * explorer.exe "/select,C:\...\Salt Player for Windows\...\spw-folia.log"
+     * ```
+     *
+     * — a single argument whose literal text starts with `"`. Explorer does not recognise it as the
+     * `/select` switch, ignores it, and falls back to its default start location: **Documents**. That
+     * is the reported bug ("打开的是文档文件夹，而不是日志所在文件夹"), and it reproduces deterministically.
+     *
+     * Do NOT "fix" it by hand-quoting the inside (`"/select,\"" + path + "\""`). That is a trap: the
+     * same missing-escape rule then closes the quoting early and the path splits into several
+     * arguments. Measured raw lines (`GetCommandLineW` of a stand-in child process):
+     *
+     * ```
+     * "/select,"C:\...\Salt Player for Windows\...\spw-folia.log""      <- path broken into 4 args
+     * ```
+     *
+     * Two clean arguments is the only shape that survives: `ProcessBuilder` quotes the path alone,
+     * so the child sees the literal switch `/select,` followed by the full path, spaces intact.
+     * Measured:
+     *
+     * ```
+     * explorer.exe /select, "C:\...\Salt Player for Windows\...\spw-folia.log"
+     *   argv[0] = /select,   argv[1] = C:\...\Salt Player for Windows\...\spw-folia.log
+     * ```
+     *
+     * Verified on a real machine by enumerating `Shell.Application.Windows().LocationURL` and
+     * `Document.SelectedItems()`: this shape lands in `...\spw-folia-0.4.16` with `spw-folia.log`
+     * selected, for paths containing spaces, commas, `&`, `%`, `!`, `^`, `#`, CJK and long names.
+     * `cmd.exe /c start` was also measured and rejected — it needs a second `cmd` parse pass and only
+     * works when the path has no space, i.e. exactly where no fix was needed.
+     *
+     * The no-file branch (a directory, e.g. when no log exists yet) already passes a single argument
+     * and needs no switch, so it is unaffected.
+     */
     fun openLogFolder(report: Report) {
         val target = report.logFiles.firstOrNull() ?: report.logDir
         val ok = runCatching {
-            val command = if (target.isFile) {
-                listOf("explorer.exe", "/select,${target.absolutePath}")
-            } else {
-                listOf("explorer.exe", target.absolutePath)
-            }
-            ProcessBuilder(command).start()
+            ProcessBuilder(logFolderCommand(target)).start()
             true
         }.getOrElse { t ->
             FoliaPlugin.logStatic("open log folder failed: ${t::class.java.name}: ${t.message}")
             false
         }
         FoliaPlugin.logStatic("open log folder target=${target.absolutePath} ok=$ok")
+    }
+
+    /**
+     * The argv [openLogFolder] hands to `ProcessBuilder`.
+     *
+     * `internal` so a JVM test can pin the SHAPE without spawning Explorer: the bug was never in the
+     * path, it was in how the switch and the path were packed into arguments, and that is exactly
+     * what an assertion on this list can prove. See [openLogFolder] for the measured command lines.
+     */
+    internal fun logFolderCommand(target: java.io.File): List<String> = if (target.isFile) {
+        // Keep "/select," and the path in SEPARATE arguments: ProcessBuilder then quotes the path on
+        // its own. Joining them (or hand-quoting the path) re-creates the bug — see openLogFolder.
+        listOf("explorer.exe", "/select,", target.absolutePath)
+    } else {
+        listOf("explorer.exe", target.absolutePath)
     }
 
     /** Opens the pre-filled GitHub issue form in the default browser. */

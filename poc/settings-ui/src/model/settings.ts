@@ -24,6 +24,7 @@ import {
     type SmartBeatSettings,
 } from '@/types';
 import { getStyleTransparencyCompat } from './transparencyCompat';
+import { mergeTuningMap } from './mergeTuning';
 import { systemPrefersLight } from './theme';
 /* 0.7.22 花火's tuning defaults live with the style's own module, not in `src/types.ts` (unlike the
  * 14 older styles), so they are imported from there.
@@ -213,6 +214,12 @@ export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
 export const DEFAULT_LYRIC_MOTION = 0.8;
 export const DEFAULT_TEXTURE_RESOLUTION = 1.0;
 
+/** 「显示播放条」的默认值：与引入开关之前的版本行为一致（见 `useInjectedSwitch.ts` 的同名常量，
+ *  两处必须一致 —— 那边是插件注入契约的镜像，这边是页面自己的持久化默认值）。
+ *  v0.4.17 (issue #18 item 2): 所有权移到页面侧，所以这个值现在是**页面 store 的默认值**，
+ *  不再是只读的注入成员。 */
+export const DEFAULT_SHOW_PLAYBACK_BAR = true;
+
 export const DEFAULT_COMMON_BACKGROUND: CommonBackgroundSettings = {
     opacity: 0.75,
     useCoverColorBg: false,
@@ -264,18 +271,26 @@ interface SettingsState {
      *  desktop shows through (v0.1.7). */
     transparentPlayerBackground: boolean;
     setTransparentPlayerBackground: (value: boolean) => void;
-
     /** v0.1.9: while the player background is transparent, let the mouse fall through to the desktop
      *  (the bottom-right round button and the top-right gear stay clickable). */
     mousePassthrough: boolean;
     setMousePassthrough: (value: boolean) => void;
 
-    /** v0.2.0: effective theme lightness, mirrored from `useConfigPublisher` so the transparent
+    /** v0.4.16: effective theme lightness, mirrored from `useConfigPublisher` so the transparent
      *  window guard can tell whether lumiere's light-theme dark field floor applies. v0.3.0: the
      *  cover decides while the window is opaque, the system colour scheme while it is transparent.
      *  Not persisted. */
     isDaylightTheme: boolean;
     setIsDaylightTheme: (value: boolean) => void;
+
+    /** v0.4.17 (issue #18 item 2): 「显示播放条」now belongs to this page's own settings tree instead
+     *  of the plugin's 配置 page (see the contract in `.scratch/issue18-contract.md`). The player page
+     *  reads it to decide whether `PlaybackBar` mounts at all (v0.4.10 behaviour: off means the bar and
+     *  its hot zone are both gone). Persisted through the tree like every other page-owned setting;
+     *  `applySnapshot` seeds it once from the plugin's legacy injected member so the value an existing
+     *  user had in `config.json` survives the move. */
+    showPlaybackBar: boolean;
+    setShowPlaybackBar: (value: boolean) => void;
 
     backgroundMode: BackgroundMode;
     setBackgroundMode: (mode: BackgroundMode) => void;
@@ -420,6 +435,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     mousePassthrough: false,
     setMousePassthrough: mousePassthrough => set({ mousePassthrough }),
 
+    // v0.4.17 (issue #18 item 2): page-owned 「显示播放条」. `applySnapshot` replaces this value from
+    // the persisted tree (or seeds it from the plugin's legacy injected member exactly once).
+    showPlaybackBar: DEFAULT_SHOW_PLAYBACK_BAR,
+    setShowPlaybackBar: showPlaybackBar => set({ showPlaybackBar }),
+
     backgroundMode: 'latent',
     setBackgroundMode: backgroundMode => set({ backgroundMode }),
     backgroundTunings: JSON.parse(JSON.stringify(BACKGROUND_TUNING_DEFAULTS)),
@@ -486,6 +506,10 @@ export interface SettingsSnapshot {
     textureResolution: number;
     transparentPlayerBackground: boolean;
     mousePassthrough: boolean;
+    /** v0.4.17 (issue #18 item 2): 「显示播放条」, page-owned since the 配置 page switch was retired.
+     *  Absent from every tree persisted by an older build — `applySnapshot` seeds it from the
+     *  plugin's legacy injected member `showPlaybackBarLegacy` in exactly that case. */
+    showPlaybackBar: boolean;
 }
 
 export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
@@ -505,7 +529,41 @@ export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
     textureResolution: state.textureResolution,
     transparentPlayerBackground: state.transparentPlayerBackground,
     mousePassthrough: state.mousePassthrough,
+    showPlaybackBar: state.showPlaybackBar,
 });
+
+/**
+ * v0.4.17 (issue #18 item 2): the plugin used to own 「显示播放条」 and inject it as a top-level
+ * boolean in the settings tree. Ownership moved to this page, so the plugin now ships the old
+ * `config.json` value under a different name — `showPlaybackBarLegacy` — and it is only ever read to
+ * SEED a tree that has no `showPlaybackBar` of its own (a user upgrading from a build where the
+ * switch lived in the 配置 page). Once the tree carries the key, the tree wins forever: that is what
+ * "the page owns it" means, and it is also what stops an old plugin from resurrecting a value the
+ * user has since changed here.
+ *
+ * Strict boolean, like `useInjectedSwitch.extractInjectedSwitch`: only `true` / `false` count, so a
+ * missing or stringly-typed member falls back to [DEFAULT_SHOW_PLAYBACK_BAR] rather than flipping.
+ */
+export const LEGACY_SHOW_PLAYBACK_BAR_KEY = 'showPlaybackBarLegacy';
+
+/** Reads the plugin's legacy injected member; `null` when the payload does not carry it. */
+export const readLegacyShowPlaybackBar = (snapshot: unknown): boolean | null => {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    const value = (snapshot as Record<string, unknown>)[LEGACY_SHOW_PLAYBACK_BAR_KEY];
+    return value === true ? true : value === false ? false : null;
+};
+
+/**
+ * The value 「显示播放条」should take when hydrating from [snapshot]:
+ * a `showPlaybackBar` key in the tree always wins; otherwise the legacy injected member seeds it;
+ * otherwise the default. Exported so the gate script can drive the migration rule directly.
+ */
+export const resolveShowPlaybackBar = (snapshot: Partial<SettingsSnapshot> | null | undefined): boolean => {
+    if (!snapshot || typeof snapshot !== 'object') return DEFAULT_SHOW_PLAYBACK_BAR;
+    const stored = (snapshot as Record<string, unknown>).showPlaybackBar;
+    if (typeof stored === 'boolean') return stored;
+    return readLegacyShowPlaybackBar(snapshot) ?? DEFAULT_SHOW_PLAYBACK_BAR;
+};
 
 /** Hydrates the store from a snapshot the plugin persisted (unknown/missing keys keep defaults). */
 export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undefined): void => {
@@ -526,9 +584,17 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
                 ? state.randomVisualizerModes
                 : normalizeRandomModes(snapshot.randomVisualizerModes),
             smartBeat: clean(snapshot.smartBeat, state.smartBeat),
-            styleTunings: { ...state.styleTunings, ...clean(snapshot.styleTunings, {} as Record<StyleMode, Record<string, unknown>>) },
+            // v0.4.17 (issue #18 item 1): DEFAULTS FIRST, persisted values on top — never a whole-object
+            // replacement. Folia's `defineVisualizerTuning.apply` does not run the style's own
+            // `resolve()`, so a tuning key missing from the bag we publish reaches the renderer as
+            // `undefined` and turns its maths into NaN (凝彩 lost its whole composition that way when
+            // 0.7.25 added `depthOfField` / `depthPan` / `glyphDepth` and every older tree lacked them).
+            // Merging per style also keeps the stored `layerImages` array intact, because mergeTuning
+            // replaces a whole array instead of spreading it.
+            styleTunings: mergeTuningMap(STYLE_TUNING_DEFAULTS, snapshot.styleTunings, state.styleTunings),
             backgroundMode: clean(snapshot.backgroundMode, state.backgroundMode),
-            backgroundTunings: { ...state.backgroundTunings, ...clean(snapshot.backgroundTunings, {} as Record<'monet' | 'nomand' | 'latent' | 'sora', Record<string, unknown>>) },
+            // The same rule for the background tunings; upstream owns their defaults too.
+            backgroundTunings: mergeTuningMap(BACKGROUND_TUNING_DEFAULTS, snapshot.backgroundTunings, state.backgroundTunings),
             commonBackground: { ...state.commonBackground, ...clean(snapshot.commonBackground, {} as CommonBackgroundSettings) },
             appearance: { ...state.appearance, ...clean(snapshot.appearance, {} as AppearanceSettings) },
             uploadedFonts: Array.isArray(snapshot.uploadedFonts) ? snapshot.uploadedFonts : state.uploadedFonts,
@@ -539,6 +605,7 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
                 ? false
                 : clean(snapshot.transparentPlayerBackground, state.transparentPlayerBackground),
             mousePassthrough: transparentBlocked ? false : clean(snapshot.mousePassthrough, state.mousePassthrough),
+            showPlaybackBar: resolveShowPlaybackBar(snapshot),
         };
     });
 };

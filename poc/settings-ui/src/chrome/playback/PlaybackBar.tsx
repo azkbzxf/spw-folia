@@ -10,8 +10,9 @@ import {
 } from '~/bridge';
 import { clockPosition, formatTime, usePlaybackClock, type PlaybackClock } from './playbackClock';
 import PlaybackQueuePanel from './PlaybackQueuePanel';
-/* v0.4.10: 配置 page 显示播放条 switch (plugin-owned; read-only injected settings-tree member). */
-import { useShowPlaybackBar } from '~/model/useInjectedSwitch';
+/* v0.4.17 (issue #18 item 2): 「显示播放条」 is page-owned now — read it from the settings store, not
+ * from the plugin-injected member (`useInjectedSwitch.SHOW_PLAYBACK_BAR_KEY` no longer names it; the
+ * plugin ships the old config value as `showPlaybackBarLegacy` for the one-time migration only). */
 
 /**
  * v0.3.0 · bottom-centre playback HUD.
@@ -120,9 +121,12 @@ interface DragState {
 const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
     const mousePassthrough = useSettingsStore((s) => s.mousePassthrough);
     const flat = useSettingsStore((s) => s.transparentPlayerBackground);
-    /* v0.4.10: the 配置 page switch. Off means the HUD never mounts at all — no pixels and, with it,
-     * no hit region, which is why this is a guard here rather than `display:none` in the markup. */
-    const showPlaybackBar = useShowPlaybackBar();
+    /* v0.4.17 (issue #18 item 2): the page's own 「显示播放条」 setting (bottom-right menu). Off means
+     * the HUD never mounts at all — no pixels and, with it, no hit region, which is why this is a
+     * guard here rather than `display:none` in the markup.
+     * `App.tsx` also gates the mount on the same value; keeping the guard here means the component is
+     * safe to render anywhere (the acceptance gate drives it directly too). */
+    const showPlaybackBar = useSettingsStore((s) => s.showPlaybackBar);
     /* 0.7.22 随机歌词样式: the 重抽 chip ("draw another style from the pool") only exists while the
      * per-song random draw is on — the same rule Folia's own appearance section uses. */
     const randomSongMode = useSettingsStore((s) => s.randomVisualizerModePerSong);

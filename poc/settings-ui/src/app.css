@@ -358,6 +358,32 @@ body.spw-injected {
     transform: translateY(4px) scale(0.96);
 }
 
+/* ===========================================================================
+ * v0.4.17 (issue #18 item 4) · full-screen click zones over the player picture.
+ * Three columns: prev | toggle (pause) | next. The layer paints BELOW the playback HUD
+ * (2147483000) and the chrome (2147483001) so those controls always win a click they
+ * cover, and it is switched off entirely while the settings overlay is open or the host
+ * is in mouse passthrough. No cursor override: a hand cursor over the whole artwork
+ * would be visual noise.
+ * =========================================================================== */
+.spw-click-zones {
+    position: fixed;
+    inset: 0;
+    z-index: 2147482990;
+    display: flex;
+    pointer-events: auto;
+}
+
+.spw-click-zones[data-enabled='false'] {
+    pointer-events: none;
+}
+
+.spw-click-zone {
+    flex: 1 1 0;
+    height: 100%;
+    /* no background, no border, no cursor: the layer must be invisible */
+}
+
 .spw-player-bg-panel {
     position: fixed;
     right: 32px;
@@ -412,6 +438,20 @@ body.spw-injected {
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0 0 12px 12px;
     padding-top: 13px;
+}
+
+/* v0.4.17 (issue #18 item 2): 「显示播放条」 is the panel's third row, and it is ALWAYS shown (the
+ * passthrough row above it only exists while the page is transparent). Whichever row is last owns the
+ * panel's bottom rounding, so the two rules below hand it over to the playback row whenever that one
+ * is rendered after the transparency / passthrough rows. */
+.spw-player-bg-row--third {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0 0 12px 12px;
+    padding-top: 13px;
+}
+
+.spw-player-bg-row--second + .spw-player-bg-row--third {
+    border-radius: 0 0 12px 12px;
 }
 
 .spw-player-bg-text {

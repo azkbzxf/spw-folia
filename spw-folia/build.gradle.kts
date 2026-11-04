@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.spw"
-version = "0.4.16"
+version = "0.4.17"
 
 // A global init.gradle on this machine injects Aliyun mirrors into every project and
 // thereby suppresses settings repos, so declare the repositories this build needs here.
@@ -84,7 +84,7 @@ spmod {
     PluginId = "dev.spw.folia"
     PluginName = "spw-folia"
     PluginDescription = "Folia fullscreen lyric mode for Salt Player for Windows"
-    PluginVersion = "0.4.16"
+    PluginVersion = "0.4.17"
     PluginProvider = "azkbzxf"
     // v0.4.0: preference_config.json declares the plugin's 配置 page (SPW 模组管理 → 配置),
     // which carries the 打开过渡动画 switch read by FoliaPlugin via ConfigManager.
@@ -211,4 +211,23 @@ tasks.register<JavaExec>("runDiagnostics") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("dev.spw.folia.DiagnosticsMain")
     args(rootDir.absolutePath, providers.gradleProperty("spwVersion").getOrElse("1.19.3"))
+}
+
+// Runs the REAL 「出现问题」 log-folder callsite on this machine (issue #18 item 3). Unlike a unit
+// test it actually spawns explorer.exe, so the landing folder and the selected file can be observed
+// from the outside — the defect was invisible to review precisely because the argv looked right.
+// `packaging/tools/verify-log-folder.mjs` drives the same shape and asserts the landing; this task
+// exists so a maintainer can reproduce the single callsite by hand.
+//
+// The directory is read from the FOLIA_PLUGIN_DIR environment variable, NOT from an argument:
+// this checkout lives under `D:\输出目录\...` and a real plugin install lives under
+// `...\Salt Player for Windows\...`, and either path's spaces/CJK get split or mangled on the way
+// through the shell's argument list before the JVM ever sees it.
+tasks.register<JavaExec>("runOpenLogFolder") {
+    group = "verification"
+    description = "Opens the log folder through the shipped 「出现问题」 callsite (real explorer.exe)."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.spw.folia.OpenLogFolderMain")
+    val configured = providers.environmentVariable("FOLIA_PLUGIN_DIR").orNull
+    args(configured ?: rootDir.absolutePath)
 }

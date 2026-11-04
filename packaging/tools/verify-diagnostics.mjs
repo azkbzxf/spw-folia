@@ -269,8 +269,12 @@ async function main() {
     // be a tautology). It therefore has to be edited together with `preference_config.json` — and
     // NOT named after a version, because then the name lies after the next switch lands (it read
     // "the v0.4.11 switches" through v0.4.16's `previewAnimation`).
+    // v0.4.17 (issue #18 item 2): `showPlaybackBar` LEFT this list on purpose. The switch moved to
+    // the player page's own bottom-right menu, so it is no longer declared on the 配置 page and the
+    // plugin no longer treats it as a config.json switch (only as the one-time `showPlaybackBarLegacy`
+    // migration hint). If it ever comes back here, that is a second writer for a page-owned value.
     assert('C1 the 配置 page declares every known switch',
-        declaredKeys.join(',') === 'previewAnimation,showPlaybackBar,showProblemButton,transitionAnimation,verboseLog',
+        declaredKeys.join(',') === 'previewAnimation,showProblemButton,transitionAnimation,verboseLog',
         declaredKeys.join(','));
     assert('C2 显示问题反馈按钮 defaults to off',
         (declaredSwitches.find((s) => s.key === 'showProblemButton') || {}).def === false,

@@ -161,23 +161,7 @@ class FoliaPlugin(
         // v0.3.0 playback bar: queue snapshot + controls (reflection over the host player).
         bridge.queueProvider = { FoliaPlaybackControls.queueJson() }
         bridge.onSettingsFromPage = { tree ->
-            // The page echoes the tree it was given, including the members we injected for it. All
-            // four are stripped before they reach the in-memory tree or the settings file:
-            //   * `systemFonts` is derived data (recomputed on every start); persisting it would add
-            //     ~10-20 KB of names that go stale as soon as a font is installed;
-            //   * `showPlaybackBar` / `showProblemButton` / `previewAnimation` are owned by the 配置
-            //     page (config.json), so keeping a copy in the settings file would give one fact two
-            //     writers and let the page's echo win.
-            val cleanTree = Json.withoutMember(
-                Json.withoutMember(
-                    Json.withoutMember(
-                        FoliaSystemFonts.withoutSystemFontsJson(tree),
-                        SHOW_PLAYBACK_BAR_KEY,
-                    ),
-                    SHOW_PROBLEM_BUTTON_KEY,
-                ),
-                PREVIEW_ANIMATION_KEY,
-            )
+            val cleanTree = stripInjectedMembers(tree)
             settingsTree = cleanTree
             bridge.settingsTree = withInjectedMembers(cleanTree)
             settingsStore.persist(cleanTree)
@@ -499,9 +483,13 @@ class FoliaPlugin(
      *
      * The switches are owned by SPW's ConfigManager (`preference_config.json` → one file per group)
      * and the plugin never renders its own UI for them; it only mirrors them. Two are spawn-time
-     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and three are hot
-     * (`showPlaybackBar`, `showProblemButton`, `previewAnimation`), injected into the settings tree
-     * so the page remounts the HUD / the 救生圈 button / the style shelf without a restart.
+     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and two are hot
+     * (`showProblemButton`, `previewAnimation`), injected into the settings tree so the page remounts
+     * the 救生圈 button / the style shelf without a restart.
+     *
+     * v0.4.17 (issue #18 item 2): `showPlaybackBar` is no longer one of them. The switch moved to the
+     * player page's own menu and the page owns it; the plugin only reads its old `config.json` value
+     * as a one-time migration hint (`showPlaybackBarLegacy`).
      */
     private fun registerConfigSync() {
         val manager = try {
@@ -522,9 +510,12 @@ class FoliaPlugin(
      * Four of them today, and they differ in where the truth lives:
      *  - `systemFonts` — derived data enumerated locally, stripped on the way back by
      *    [FoliaSystemFonts.withoutSystemFontsJson];
-     *  - `showPlaybackBar` / `showProblemButton` (v0.4.11) — 配置 page switches owned by the plugin,
-     *    rewritten from [FoliaConfigSync] on every push instead of trusted from the incoming tree;
-     *  - `previewAnimation` (v0.4.15) — the same kind of switch, same rule.
+     *  - `showProblemButton` (v0.4.11) — a 配置 page switch owned by the plugin, rewritten from
+     *    [FoliaConfigSync] on every push instead of trusted from the incoming tree;
+     *  - `previewAnimation` (v0.4.15) — the same kind of switch, same rule;
+     *  - `showPlaybackBarLegacy` (v0.4.17) — a one-time MIGRATION hint, not a setting: the old
+     *    `config.json` value, offered to the page so it can seed its own switch. The page owns that
+     *    switch now, so this member is stripped on the way back and never trusted from the echo.
      *
      * One helper for all of them matters because four call sites publish the tree (startup, host
      * open, shortcut edits, page echo); missing one used to mean "the setting silently stops
@@ -532,7 +523,6 @@ class FoliaPlugin(
      */
     private fun withInjectedMembers(tree: String): String =
         withSystemFonts(configSync.applyTo(tree))
-
 
     /**
      * v0.4.0: registers the two player-page transparency shortcuts.
@@ -756,7 +746,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.4.16"
+        const val PLUGIN_VERSION = "0.4.17"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -783,12 +773,21 @@ class FoliaPlugin(
         private const val VERBOSE_LOG_KEY = "verboseLog"
 
         /**
-         * v0.4.10: 配置 page switch that shows/hides the player page's bottom playback HUD.
+         * v0.4.17 (issue #18 item 2): the root-level settings-tree member that seeds the page's own
+         * 「显示播放条」 switch from the OLD `config.json` value.
          *
-         * Also the name of the root-level settings-tree member the page reads, so the declaration,
-         * the injected tree and the page's store all use one spelling.
+         * The switch itself moved to the player page's menu, and the page persists it in the settings
+         * tree, so `showPlaybackBar` is no longer ours: it is stripped from nothing, injected by
+         * nobody, and only ever echoed back to us for storage.
+         *
+         * This `…Legacy` spelling is separate because the two roles must stay distinguishable: the
+         * page seeds its store from this ONCE (only while its tree has no `showPlaybackBar`), and we
+         * strip it on the way back. Reusing one name would let a stale config.json value masquerade
+         * as the page's live value and overwrite the user's choice on the next push.
+         *
+         * Kept in step with `FoliaConfigSync.SHOW_PLAYBACK_BAR_LEGACY_KEY`, which produces it.
          */
-        private const val SHOW_PLAYBACK_BAR_KEY = "showPlaybackBar"
+        private const val SHOW_PLAYBACK_BAR_LEGACY_KEY = "showPlaybackBarLegacy"
 
         /**
          * v0.4.11: 配置 page switch that shows the 救生圈 diagnostics button on the player page.
@@ -812,6 +811,43 @@ class FoliaPlugin(
         private var instance: FoliaPlugin? = null
 
         fun devRoot(): File = File(DEV_ROOT)
+
+        /**
+         * Removes the injected members from a tree the page echoed back, before it is persisted.
+         *
+         * Three are stripped, and they are stripped for two different reasons:
+         *  - `systemFonts` is DERIVED data (recomputed on every start); persisting it would add
+         *    ~10-20 KB of names that go stale as soon as a font is installed;
+         *  - `showProblemButton` / `previewAnimation` are owned by the 配置 page (config.json), so
+         *    keeping a copy in the settings file would give one fact two writers and let the page's
+         *    echo win;
+         *  - `showPlaybackBarLegacy` is a one-time MIGRATION HINT, not a setting: its value is
+         *    whatever the old config.json still holds. Persisting it would freeze a stale copy into
+         *    the tree and make it look like the page's own value.
+         *
+         * ## `showPlaybackBar` is deliberately NOT in that list (v0.4.17, issue #18 item 2)
+         *
+         * The 「显示播放条」 switch moved from the 配置 page to a menu on the player page itself.
+         * That makes the PAGE the owner and this settings file its persistence, so stripping the
+         * member here would silently discard every change the user makes in the new menu: the switch
+         * would look live and forget itself on the next restart. This is the exact inverse of the
+         * pre-v0.4.17 rule — the two must not be "harmonised" back together, which is why it is
+         * spelled out.
+         *
+         * `internal` (not private) so a JVM test can pin both halves of that rule: the legacy hint
+         * and the config-page switches are removed, the page-owned one survives. Losing either half
+         * is invisible in the UI and would only show up as "my setting does not stick" from a user.
+         */
+        internal fun stripInjectedMembers(tree: String): String = Json.withoutMember(
+            Json.withoutMember(
+                Json.withoutMember(
+                    FoliaSystemFonts.withoutSystemFontsJson(tree),
+                    SHOW_PROBLEM_BUTTON_KEY,
+                ),
+                PREVIEW_ANIMATION_KEY,
+            ),
+            SHOW_PLAYBACK_BAR_LEGACY_KEY,
+        )
 
         fun logStatic(message: String) {
             instance?.log(message)

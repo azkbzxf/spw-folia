@@ -50,7 +50,18 @@ internal class FoliaConfigSync(
     private val pushTree: () -> Unit,
 ) {
 
-    /** Last known values. Written only by [sync], read by [withInjectedMembers] callers. */
+    /**
+     * The OLD `config.json` value of 「显示播放条」, kept ONLY as a migration source.
+     *
+     * v0.4.17 (issue #18 item 2): the switch lives in the player page's menu now and the page owns
+     * the value (it persists in the settings tree). The plugin must never write `showPlaybackBar`
+     * again — that would be a second writer for one fact. But upgraded users still have a value under
+     * this old key, and dropping it would silently turn their playback bar back on or make a hidden
+     * bar reappear. So the value is still read, and handed to the page as
+     * [SHOW_PLAYBACK_BAR_LEGACY_KEY], which the page uses only to seed an empty store.
+     *
+     * Written only by [sync], read by [applyTo].
+     */
     @Volatile
     var showPlaybackBar: Boolean = DEFAULT_SHOW_PLAYBACK_BAR
         private set
@@ -157,10 +168,22 @@ internal class FoliaConfigSync(
         started.set(false)
     }
 
-    /** The switch values as the settings tree carries them. */
+    /**
+     * The switch values as the settings tree carries them.
+     *
+     * v0.4.17 (issue #18 item 2): `showPlaybackBar` is injected as **`showPlaybackBarLegacy`** and
+     * NOT as `showPlaybackBar`. The switch now belongs to the page (it lives in the player page's own
+     * menu and is persisted in the settings tree), so the plugin may no longer write that key — a
+     * second writer is exactly the "one fact, two owners" bug this class documents. What the plugin
+     * still has is the OLD value from `config.json`, which the page needs once, to seed its store for
+     * users who upgraded. A distinct spelling is what keeps those two roles apart: the page uses it
+     * only when its own tree has no `showPlaybackBar` yet, and we strip it on the way back
+     * (see `FoliaPlugin.onSettingsFromPage`). Reusing `showPlaybackBar` here would make an old value
+     * indistinguishable from the page's live one and overwrite the user's choice on every push.
+     */
     fun applyTo(tree: String): String {
-        val withBar = Json.withBoolMember(tree, SHOW_PLAYBACK_BAR_KEY, showPlaybackBar)
-        val withProblem = Json.withBoolMember(withBar, SHOW_PROBLEM_BUTTON_KEY, showProblemButton)
+        val withLegacyBar = Json.withBoolMember(tree, SHOW_PLAYBACK_BAR_LEGACY_KEY, showPlaybackBar)
+        val withProblem = Json.withBoolMember(withLegacyBar, SHOW_PROBLEM_BUTTON_KEY, showProblemButton)
         return Json.withBoolMember(withProblem, PREVIEW_ANIMATION_KEY, previewAnimation)
     }
 
@@ -242,11 +265,16 @@ internal class FoliaConfigSync(
                 log("config $TRANSITION_ANIMATION_KEY=$value (splash=${if (value) "on" else "off"})")
             }
         }
+        // v0.4.17 (issue #18 item 2): a MIGRATION read only — the switch moved to the player page, so
+        // this value is not applied by us; it is forwarded as `showPlaybackBarLegacy` so the page can
+        // seed a store that has no value yet. Keep the read: dropping it would silently reset the
+        // playback bar for every user who upgraded, and the log line is what settles "my bar came
+        // back" reports from the file alone.
         readBoolean(playerText, SHOW_PLAYBACK_BAR_KEY)?.let { value ->
             if (value != showPlaybackBar) {
                 showPlaybackBar = value
                 changed = true
-                log("config $SHOW_PLAYBACK_BAR_KEY=$value (playback bar ${if (value) "shown" else "hidden"})")
+                log("config $SHOW_PLAYBACK_BAR_KEY=$value (legacy playback bar hint for the page)")
             }
         }
         readBoolean(playerText, SHOW_PROBLEM_BUTTON_KEY)?.let { value ->
@@ -294,7 +322,7 @@ internal class FoliaConfigSync(
         } else if (firstSyncDone.compareAndSet(false, true)) {
             log(
                 "config sync ($reason): unchanged " +
-                    "(showPlaybackBar=$showPlaybackBar showProblemButton=$showProblemButton " +
+                    "(showPlaybackBarLegacy=$showPlaybackBar showProblemButton=$showProblemButton " +
                     "previewAnimation=$previewAnimation " +
                     "transitionAnimation=$transitionAnimation verboseLog=$verboseLog)"
             )
@@ -391,7 +419,24 @@ internal class FoliaConfigSync(
         const val DIAGNOSTICS_CONFIG = "diagnostics.json"
 
         const val TRANSITION_ANIMATION_KEY = "transitionAnimation"
+
+        /**
+         * The OLD `config.json` key for 「显示播放条」 (v0.4.16 and earlier).
+         *
+         * v0.4.17 (issue #18 item 2): the switch moved to the player page's menu, so the plugin no
+         * longer DECLARES or owns it — but upgraded users still have a value under this key, and
+         * silently dropping it would flip their playback bar back on. It is therefore still read
+         * here, and injected under the distinct name [SHOW_PLAYBACK_BAR_LEGACY_KEY].
+         */
         const val SHOW_PLAYBACK_BAR_KEY = "showPlaybackBar"
+
+        /**
+         * The root-level settings-tree member that carries [SHOW_PLAYBACK_BAR_KEY] to the page as a
+         * migration hint. Distinct from `showPlaybackBar` on purpose: the page owns that key now, and
+         * a shared spelling would let a stale config.json value overwrite the user's live choice.
+         */
+        const val SHOW_PLAYBACK_BAR_LEGACY_KEY = "showPlaybackBarLegacy"
+
         const val SHOW_PROBLEM_BUTTON_KEY = "showProblemButton"
         const val PREVIEW_ANIMATION_KEY = "previewAnimation"
         const val VERBOSE_LOG_KEY = "verboseLog"

@@ -39,6 +39,14 @@ if (typeof baseSettings.smartBeat === 'boolean') baseSettings.smartBeat = { enab
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The HUD probe.
+ *
+ * v0.4.17 (issue #18 item 2): `showPlaybackBar` is no longer a plugin-owned injected member, so
+ * `legacy` now reads the MIGRATION hint (`showPlaybackBarLegacy`) instead — that is the only
+ * showPlaybackBar-shaped member the page still receives from the plugin. `menuBtn` / `menuOpen` /
+ * `rowChecked` describe the switch NEW home: the bottom-right player-page menu.
+ */
 const HUD_PROBE = [
     'JSON.stringify({',
     '  present: !!document.querySelector(".spw-playback"),',
@@ -46,16 +54,31 @@ const HUD_PROBE = [
     '  settingsUiReady: !!window.__SPW_FOLIA_SETTINGS_UI_READY__,',
     '  storage: (() => { try { return localStorage.getItem("visualizer_frame_rate"); } catch (e) { return "ERR"; } })(),',
     '  capped: typeof window.__foliaNativeRequestAnimationFrame === "function",',
-    '  injected: (() => { try { const b = window.__SPW_FOLIA__; const s = b && b.getSettings ? b.getSettings() : null; if (!s) return "NO-BRIDGE"; const v = s.showPlaybackBar; return v === undefined ? "ABSENT" : v; } catch (e) { return "ERR"; } })()',
+    '  legacy: (() => { try { const b = window.__SPW_FOLIA__; const s = b && b.getSettings ? b.getSettings() : null; if (!s) return "NO-BRIDGE"; const v = s.showPlaybackBarLegacy; return v === undefined ? "ABSENT" : v; } catch (e) { return "ERR"; } })(),',
+    "  menuBtn: !!document.querySelector('[data-spw-chrome=\"player-background\"]'),",
+    "  menuOpen: (() => { const p = document.querySelector('[data-spw-chrome=\"player-background-panel\"]'); return p ? p.getAttribute(\"data-open\") : null; })(),",
+    "  rowChecked: (() => { const r = document.querySelector('[data-spw-chrome=\"playback-bar-row\"]'); return r ? r.getAttribute(\"aria-checked\") : null; })(),",
     '})',
 ].join('\n');
+
+/** Clicks the bottom-right menu button, opening (or closing) the player-page panel. */
+const MENU_TOGGLE_PROBE =
+    "(function(){ var b = document.querySelector('[data-spw-chrome=\"player-background\"]'); if (b) b.click(); " +
+    'return JSON.stringify({ clicked: !!b }); })()';
+
+/** Clicks the 「显示播放条」 row inside the panel and reports the resulting HUD state. */
+const ROW_TOGGLE_PROBE =
+    "(function(){ var r = document.querySelector('[data-spw-chrome=\"playback-bar-row\"]'); " +
+    'if (!r) return JSON.stringify({ clicked: false, present: !!document.querySelector(".spw-playback") }); ' +
+    'var before = !!document.querySelector(".spw-playback"); r.click(); ' +
+    'return JSON.stringify({ clicked: true, before: before, checked: r.getAttribute("aria-checked") }); })()';
 
 /**
  * Runs one host session. `settings` is the tree the plugin would have pushed for this launch.
  * When `seedFrameRate` is set the session only seeds that localStorage key; a following session
  * reuses the same profile, so the removal happens across a genuine process restart.
  */
-function runHost({ label, settings, userData, seedFrameRate = null }) {
+function runHost({ label, settings, userData, seedFrameRate = null, driveMenu = false }) {
     return new Promise((resolvePromise) => {
         const work = join(OUT, label);
         mkdirSync(work, { recursive: true });
@@ -117,7 +140,6 @@ function runHost({ label, settings, userData, seedFrameRate = null }) {
             if (!msg || typeof msg.value !== 'string') { results[tag] = null; return; }
             results[tag] = unwrap(msg.value);
         };
-
         child.stdout.on('data', (chunk) => {
             buf += chunk.toString('utf8');
             const parts = buf.split('\n');
@@ -145,6 +167,21 @@ function runHost({ label, settings, userData, seedFrameRate = null }) {
                 await sleep(600);
                 await evalJs('seedBack', 'JSON.stringify({ storage: (function(){ try { return localStorage.getItem("visualizer_frame_rate"); } catch (e) { return "ERR"; } })() })');
                 await sleep(600);
+            } else if (driveMenu) {
+                // v0.4.17: the switch lives in the player page's bottom-right menu now, so drive it
+                // through the UI the way a user would: open the panel, click the row, re-read.
+                await evalJs('probe', HUD_PROBE);
+                await sleep(500);
+                await evalJs('menuOpen', MENU_TOGGLE_PROBE);
+                await sleep(500);
+                await evalJs('menuState', HUD_PROBE);
+                await evalJs('rowClick', ROW_TOGGLE_PROBE);
+                await sleep(700);
+                await evalJs('afterToggle', HUD_PROBE);
+                await evalJs('rowClickBack', ROW_TOGGLE_PROBE);
+                await sleep(700);
+                await evalJs('restored', HUD_PROBE);
+                await sleep(300);
             } else {
                 await evalJs('probe', HUD_PROBE);
                 await sleep(700);
@@ -175,12 +212,17 @@ async function main() {
     assert('A2 default tree keeps the playback HUD', pa && pa.present === true, pa && pa.present);
 
     // ---- B. showPlaybackBar:false -> the HUD must not exist at all
-    const b = await runHost({ label: 'b-switch-off', settings: { ...baseSettings, showPlaybackBar: false } });
+    //
+    // v0.4.17: the key reaches the page as the MIGRATION hint `showPlaybackBarLegacy`, not as the
+    // plugin-owned `showPlaybackBar` member it used to be — the page owns the switch now. The page
+    // seeds its own tree from the hint on the first launch that has no stored value, which is
+    // exactly this case (a fresh profile + a tree that only carries the hint).
+    const b = await runHost({ label: 'b-switch-off', settings: { ...baseSettings, showPlaybackBarLegacy: false } });
     const pb = parse(b.results.probe2) ?? parse(b.results.probe);
     assert('B1 settings island mounted', pb && pb.settingsUiReady === true, pb && pb.settingsUiReady);
-    assert('B2 showPlaybackBar:false removes the HUD element', pb && pb.present === false, pb && pb.present);
+    assert('B2 showPlaybackBarLegacy:false removes the HUD element', pb && pb.present === false, pb && pb.present);
     assert('B3 no .spw-playback-bar subtree left behind', pb && pb.bar === false, pb && pb.bar);
-    assert('B4 bridge exposes the injected switch as false', pb && pb.injected === false, pb && pb.injected);
+    assert('B4 bridge exposes the legacy hint as false', pb && pb.legacy === false, pb && pb.legacy);
 
     // ---- C. legacy cap removed across a real restart
     const profileDir = join(OUT, 'c-legacy-cap', 'profile');
@@ -195,22 +237,58 @@ async function main() {
     assert('C4 host logged the legacy cap removal', !!cleared, cleared || null);
 
     // ---- D. the 配置 page declaration
+    //
+    // v0.4.17 (issue #18 item 2): the switch has MOVED OFF the 配置 page into the player page's own
+    // bottom-right menu, so the declaration assertions are inverted on purpose. D3 is the important
+    // one: a stale `showPlaybackBar` entry here would offer the user a second, competing writer for a
+    // value the page now owns, and `verify-all.mjs`'s declaration ⇄ KNOWN_CONFIG_SWITCHES check would
+    // fail on it anyway. Keeping the negative assertion here means the same drift is caught by the
+    // suite that is specifically about this switch.
     const prefPath = join(ROOT, 'spw-folia', 'src', 'main', 'resources', 'preference_config.json');
     const pref = JSON.parse(readFileSync(prefPath, 'utf8'));
     const prefs = pref.configs.flatMap((cfg) => cfg.preferences ?? []);
     const keys = prefs.map((p) => p.key).filter(Boolean);
     assert('D1 preference_config has no frameRate entry', !prefs.some((p) => p.key === 'frameRate'), keys.join(','));
     assert('D2 preference_config has no list type left', !prefs.some((p) => p.type === 'list'), prefs.map((p) => p.type).join(','));
-    const bar = prefs.find((p) => p.key === 'showPlaybackBar');
-    assert('D3 preference_config declares showPlaybackBar', !!bar, bar ? bar.type : null);
-    assert('D4 it is a switch', !!bar && bar.type === 'switch', bar && bar.type);
-    assert('D5 it defaults to on', !!bar && bar.default_value === true, bar && bar.default_value);
+    assert('D3 preference_config no longer declares showPlaybackBar (moved to the player page)',
+        !prefs.some((p) => p.key === 'showPlaybackBar'), keys.join(','));
+
+    // ---- E. the switch's NEW home: the bottom-right player-page menu
+    const e = await runHost({ label: 'e-menu-drive', settings: { ...baseSettings }, driveMenu: true });
+    const pe0 = parse(e.results.probe);
+    const peMenu = parse(e.results.menuState);
+    const peToggled = parse(e.results.afterToggle);
+    const peRestored = parse(e.results.restored);
+    const rowClick = parse(e.results.rowClick);
+    assert('E1 the bottom-right menu button is mounted', pe0 && pe0.menuBtn === true, pe0 && pe0.menuBtn);
+    assert('E2 clicking it opens the panel', peMenu && peMenu.menuOpen === 'true', peMenu && peMenu.menuOpen);
+    assert('E3 the panel carries a 「显示播放条」 switch row', peMenu && peMenu.rowChecked !== null, peMenu && peMenu.rowChecked);
+    assert('E4 the row reads the live value (on by default)', peMenu && peMenu.rowChecked === 'true', peMenu && peMenu.rowChecked);
+    assert('E5 clicking the row removes the HUD', rowClick && rowClick.clicked === true && peToggled && peToggled.present === false, peToggled && peToggled.present);
+    assert('E6 the row now reads off', peToggled && peToggled.rowChecked === 'false', peToggled && peToggled.rowChecked);
+    // The lock-out guard: with the bar gone the ONLY way back is this menu button, so it must still
+    // be there. A build that unmounts the chrome together with the bar would strand the user here.
+    assert('E7 the menu button SURVIVES the bar being off (no lock-out)', peToggled && peToggled.menuBtn === true, peToggled && peToggled.menuBtn);
+    assert('E8 clicking the row again brings the HUD back', peRestored && peRestored.present === true, peRestored && peRestored.present);
+    assert('E9 the row reads on again', peRestored && peRestored.rowChecked === 'true', peRestored && peRestored.rowChecked);
+
+    // ---- F. the legacy migration hint (old config.json value, injected once)
+    //
+    // An upgrading user still has `showPlaybackBar: false` in config.json. The page stores the switch
+    // in its own tree now, so the plugin forwards the old value as `showPlaybackBarLegacy` and the
+    // page seeds its switch from it exactly once. Without this an upgrade would silently turn the
+    // bar back on for everyone who had switched it off.
+    const f = await runHost({ label: 'f-legacy-off', settings: { ...baseSettings, showPlaybackBarLegacy: false } });
+    const pf = parse(f.results.probe2) ?? parse(f.results.probe);
+    assert('F1 the legacy hint reaches the page', pf && pf.legacy === false, pf && pf.legacy);
+    assert('F2 showPlaybackBarLegacy:false seeds the HUD off', pf && pf.present === false, pf && pf.present);
+    assert('F3 the menu button is still there to switch it back on', pf && pf.menuBtn === true, pf && pf.menuBtn);
 
     const report = {
         at: new Date().toISOString(),
         exe: { path: exe, bytes: readFileSync(exe).length },
         settingsUi: { path: settingsBundle, bytes: readFileSync(settingsBundle).length },
-        runs: { defaultOn: pa, switchOff: pb, legacyCap: pc, seeded },
+        runs: { defaultOn: pa, switchOff: pb, legacyCap: pc, seeded, menu: pe0, menuOpen: peMenu, toggled: peToggled, restored: peRestored, legacyOff: pf },
         clearedLogLine: cleared || null,
         checks,
         pass: checks.every((c) => c.ok),

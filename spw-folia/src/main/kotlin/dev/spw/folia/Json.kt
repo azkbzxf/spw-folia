@@ -254,7 +254,8 @@ internal object Json {
      * Returns [json] with the root-level member [key] removed entirely.
      *
      * Needed by the "injected member" rule: the page echoes the whole settings tree back on every
-     * interaction, including members the plugin injected for it (`systemFonts`, `showPlaybackBar`).
+     * interaction, including members the plugin injected for it (`systemFonts`,
+     * `showPlaybackBarLegacy`).
      * Those are derived from other state and must never reach the settings file, or the file becomes a
      * second source of truth that can disagree with the 配置 page.
      *

@@ -8,7 +8,13 @@
  * v0.2.0: the selected lyric style decides whether the transparent window is usable at all. A style
  * that paints a large semi-transparent plate under the colour key turns into a pink haze, so for
  * those styles the switch is disabled and the panel says why (the store closes transparency when
- * such a style is selected, see `model/transparencyCompat.ts`). */
+ * such a style is selected, see `model/transparencyCompat.ts`).
+ *
+ * v0.4.17 (issue #18 item 2): this panel is the player page's settings menu, so 「显示播放条」 lives
+ * here — not on SPW's 配置 page any more, and not in a third corner button. The row is always shown
+ * (unlike 鼠标穿透, which only exists while the page is transparent) because the playback bar is a
+ * player-page setting in its own right. Switching the bar off unmounts `PlaybackBar` entirely, but
+ * the button that opens THIS panel never depends on that value: it is the only way back. */
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import type { TransparencyCompat } from '~/model/transparencyCompat';
@@ -30,6 +36,13 @@ interface PlayerBackgroundControlProps {
     compat: TransparencyCompat;
     /** v0.2.0: extra line under the switches (why the switch is off / what is simplified). */
     compatNote: string | null;
+    /** v0.4.17 (issue #18 item 2): the page's own 「显示播放条」 setting. */
+    showPlaybackBar: boolean;
+    onToggleShowPlaybackBar: (next: boolean) => void;
+    showPlaybackBarLabel: string;
+    /** v0.4.17: the panel's own name — it now holds three unrelated switches, so it can no longer be
+     *  labelled with the transparency switch's text (`options.playerPageSettings`). */
+    panelLabel: string;
 }
 
 const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
@@ -44,6 +57,10 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
     passthroughLabel,
     compat,
     compatNote,
+    showPlaybackBar,
+    onToggleShowPlaybackBar,
+    showPlaybackBarLabel,
+    panelLabel,
 }) => {
     const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -73,7 +90,7 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
                 data-spw-chrome="player-background-panel"
                 data-open={open ? 'true' : 'false'}
                 role="group"
-                aria-label={label}
+                aria-label={panelLabel}
             >
                 <button
                     type="button"
@@ -111,6 +128,25 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
                         </span>
                     </button>
                 ) : null}
+                {/* v0.4.17 (issue #18 item 2): 「显示播放条」 — always present, whatever the
+                 *  transparency switch above says. Switching it off unmounts the playback HUD; this
+                 *  panel (and the button that opens it) stays, which is the only way back. */}
+                <button
+                    type="button"
+                    className="spw-player-bg-row spw-player-bg-row--third"
+                    data-spw-chrome="playback-bar-row"
+                    role="switch"
+                    aria-checked={showPlaybackBar ? 'true' : 'false'}
+                    aria-label={showPlaybackBarLabel}
+                    onClick={() => onToggleShowPlaybackBar(!showPlaybackBar)}
+                >
+                    <span className="spw-player-bg-text">
+                        <span className="spw-player-bg-label">{showPlaybackBarLabel}</span>
+                    </span>
+                    <span className="spw-switch" data-on={showPlaybackBar ? 'true' : 'false'} aria-hidden="true">
+                        <span className="spw-switch-knob" />
+                    </span>
+                </button>
                 {compatNote ? <p className="spw-player-bg-note spw-player-bg-note--compat">{compatNote}</p> : null}
             </div>
             <button
@@ -118,9 +154,9 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
                 className="spw-chrome-btn spw-chrome-btn--player"
                 data-spw-chrome="player-background"
                 data-visible={visible ? 'true' : 'false'}
-                aria-label={label}
+                aria-label={panelLabel}
                 aria-expanded={open ? 'true' : 'false'}
-                title={label}
+                title={panelLabel}
                 onClick={() => onOpenChange(!open)}
             >
                 <SlidersHorizontal size={20} strokeWidth={1.75} />
