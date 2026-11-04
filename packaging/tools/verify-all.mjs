@@ -1,39 +1,46 @@
 #!/usr/bin/env node
-// Post-build gate. Run this after EVERY build, before packaging or releasing.
+// Post-build gate. Run this before packaging or releasing.
 //
-// ## Two rules this file follows, and why they are in the header
+// ## What this is, and what it deliberately is not
 //
-// 1. **Scope, don't blanket-run.** The gate is organised in scopes and only runs the scopes the
-//    change actually touches. Running every suite on every release was how the gate grew to 24
-//    checks, most of them re-proving areas that have not changed in ten versions: a slow,
-//    noisy ritual that trains people to ignore it. A check earns its runtime by covering something
-//    that can plausibly have broken.
+// Three host suites plus a small block of static checks. Each entry is the only automated check for
+// something that can plausibly break in a release:
 //
-// 2. **A skipped check is never a pass.** Anything not selected is printed as `SKIP` with the
-//    reason, and the summary says how many checks were actually executed. "Green" always means
-//    "this many checks ran and passed", never "nothing complained".
+//   core                 version stamps agree in all three places; every declared switch has a
+//                        reader and vice versa; no duplicate switch keys; no orphaned verify-*
+//                        scripts; the JVM config-failure tests. Cheap, and the failure modes users
+//                        cannot recover from. Always runs.
+//   verify-click-zones   the click-zone / ghost-layer contract (issue #19). The thing that actually
+//                        breaks when the settings island is touched.
+//   verify-layout        does the packaged payload boot and paint? Catches a broken .spmod, which
+//                        nothing else can.
+//   verify-diagnostics   the self-check is the one feature that can lie to users about their
+//                        machine. 3 s.
+//
+// Everything else was deleted rather than kept: gates for areas that have been stable for several
+// versions were a slow, noisy ritual that trains people to ignore a red gate. Notably
+// verify-log-folder spawned a real explorer.exe on every run — it opened a folder window each time
+// the gate ran — and was the slowest check in the suite. All deleted scripts are recoverable from
+// git history (`git show v0.4.18:packaging/tools/<name>`).
+//
+// ## Rules that must survive any future edit
+//
+// 1. **A skipped check is never a pass.** Anything not run prints `SKIP` with a reason and is
+//    excluded from the count; "green" means "this many checks ran and passed".
+// 2. **A killed suite is reported as killed.** `spawnSync` returns `status: null` when the timeout
+//    fires; treating that as a normal failure and quoting the last `PASS` line as the reason is how
+//    a half-finished run reads as a product regression.
+// 3. **No assertion may be tautological.** If a check cannot fail, it is not a check.
+// 4. **Every verify-*.mjs on disk must be wired into REMAINING_SUITES**, or the orphan guard fails.
 //
 // ## Usage
 //
-//   node packaging/tools/verify-all.mjs                    # scopes inferred from the working diff
-//   node packaging/tools/verify-all.mjs --all              # every scope (pre-release, slow)
-//   node packaging/tools/verify-all.mjs --scopes=page,cli  # explicit
-//   node packaging/tools/verify-all.mjs --static           # no browser, no packaged payload
-//
-// ## Scopes
-//
-//   core    version stamps, declaration ⇄ reader contract, and the JVM config-failure tests.
-//           Cheap, and the failure mode users cannot recover from. Always runs.
-//   page    the injected settings island: click zones / ghost layer, playback bar, problem button,
-//           diagnostics self-check, live settings payload. Runs when poc/settings-ui/src or
-//           poc/webview/** changed.
-//   plugin  the Kotlin plugin side: log-folder landing, config sync. Runs when spw-folia/** changed.
-//   layout  packaged-payload smoke test (real unpack, real host). Runs when packaging/** or a
-//           release is being assembled (`--all`).
+//   node packaging/tools/verify-all.mjs            # everything (needs packaged payload)
+//   node packaging/tools/verify-all.mjs --static   # static checks only, no browser
 //
 // Exit code 0 = PASS, 1 = FAIL, 2 = missing packaged payload (run bash packaging/build-package.sh).
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,8 +53,6 @@ mkdirSync(OUT, { recursive: true });
 
 const argv = process.argv.slice(2);
 const STATIC_ONLY = argv.includes('--static');
-const ALL = argv.includes('--all');
-const scopeArg = (argv.find((a) => a.startsWith('--scopes=')) || '').replace('--scopes=', '');
 
 const results = [];
 const record = (suite, ok, detail) => {
@@ -59,64 +64,20 @@ const skip = (suite, reason) => {
     console.log(`SKIP  ${suite}  (${reason})`);
 };
 
-// ---------------------------------------------------------------- 0. which scopes run ----
+// ---------------------------------------------------------------- 0. suite registry ----
 
-const SUITES = {
-    core: [],           // filled by runCore(); listed here so the summary is uniform
-    page: [
-        { name: 'click zones / ghost layer (issue #19)', file: 'verify-click-zones.mjs' },
-        { name: '显示播放条 switch', file: 'verify-playback-bar-switch.mjs' },
-        { name: '显示问题反馈按钮 switch', file: 'verify-problem-button-switch.mjs' },
-        { name: 'live settings payload end-to-end', file: 'verify-live-settings-payload.mjs' },
-    ],
-    plugin: [
-        { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
-        { name: '「出现问题」打开日志文件夹落点', file: 'verify-log-folder.mjs' },
-    ],
-    layout: [
-        { name: 'packaged layout smoke', file: 'verify-layout.mjs' },
-    ],
-};
-
-/** Files touched since the last tag, or the working diff when there is no tag. */
-function changedFiles() {
-    const attempts = [
-        ['git', ['diff', '--name-only', 'HEAD']],
-        ['git', ['diff', '--name-only', '--cached']],
-        ['git', ['diff', '--name-only', 'HEAD~1']],
-    ];
-    const seen = new Set();
-    for (const [cmd, args] of attempts) {
-        const r = spawnSync(cmd, args, { cwd: ROOT, encoding: 'utf8' });
-        if (r.status !== 0) continue;
-        for (const line of (r.stdout || '').split('\n')) {
-            const f = line.trim();
-            if (f) seen.add(f.replace(/\\/g, '/'));
-        }
-    }
-    return [...seen].sort();
-}
-
-/**
- * Map changed paths onto scopes. Deliberately conservative in one direction only: an unknown path
- * widens the scope rather than narrowing it, because a check that did not need to run is cheap while
- * a check that should have run and did not is how releases break.
- */
-function scopesFor(files) {
-    const scopes = new Set(['core']);
-    for (const f of files) {
-        if (f.startsWith('poc/settings-ui/src/') || f.startsWith('poc/webview/') || f.startsWith('poc/settings-ui/scripts/')) scopes.add('page');
-        else if (f.startsWith('spw-folia/src/') || f.startsWith('spw-folia/build.gradle.kts')) scopes.add('plugin');
-        else if (f.startsWith('packaging/')) scopes.add('layout');
-        else if (f.startsWith('work/')) scopes.add('page'); // upstream Folia tree feeds the page
-    }
-    // The page and the plugin both own part of the packaged payload, so either one implies a
-    // layout check whenever a payload exists.
-    if ((scopes.has('page') || scopes.has('plugin')) && existsSync(join(PKG, 'web', 'settings', 'settings-ui.js'))) {
-        scopes.add('layout');
-    }
-    return scopes;
-}
+/* The gate is deliberately short. Each entry below is the only automated check for something that
+ * can plausibly break in a release; anything whose area has been stable for several versions was
+ * deleted rather than kept on a slow, noisy ritual that trains people to ignore it. Deleted
+ * 2026-11-04 at the user's direction: verify-log-folder (opened an Explorer window on every run and
+ * was the slowest check), verify-playback-bar-switch, verify-problem-button-switch,
+ * verify-live-settings-payload. All four are recoverable from git history
+ * (`git show v0.4.18:packaging/tools/<name>`). */
+const REMAINING_SUITES = [
+    { name: 'click zones / ghost layer (issue #19)', file: 'verify-click-zones.mjs' },
+    { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
+    { name: 'packaged layout smoke', file: 'verify-layout.mjs' },
+];
 
 // ---------------------------------------------------------------- 1. core ----
 
@@ -149,7 +110,7 @@ function runCore() {
 
     // 1c. every gate script on disk must be reachable from this file. An unwired gate is a check
     // nobody runs — the v0.4.13 failure mode.
-    const wired = new Set(Object.values(SUITES).flat().map((s) => s.file).concat('verify-all.mjs'));
+    const wired = new Set(REMAINING_SUITES.map((s) => s.file).concat('verify-all.mjs'));
     const present = spawnSync('bash', ['-lc', `ls "${HERE}"/verify-*.mjs | xargs -n1 basename`], { encoding: 'utf8' })
         .stdout.split('\n').map((s) => s.trim()).filter(Boolean);
     const orphans = present.filter((f) => !wired.has(f)).sort();
@@ -188,77 +149,113 @@ function runJvmTests() {
 
 // ---------------------------------------------------------------- 2. suites ----
 
-function runSuite(file) {
+/**
+ * Run one suite, buffering its output.
+ *
+ * Output is buffered rather than streamed because suites run concurrently: six interleaved live
+ * streams make a FAIL hard to spot, whereas one contiguous block per suite reads like the serial
+ * version did. The buffer is flushed even on failure.
+ */
+function runSuiteBuffered(file, { timeoutMs = 420000 } = {}) {
     const script = join(HERE, file);
-    if (!existsSync(script)) return { ok: false, detail: 'missing script ' + file };
-    // 300 s was too tight for the click-zone suite (three style sessions, ~90 s each on a cold
-    // WebView2 profile); 420 s keeps a real hang distinguishable from a slow machine.
-    const r = spawnSync(process.execPath, [script], { cwd: ROOT, encoding: 'utf8', timeout: 420000 });
-    const out = `${r.stdout || ''}${r.stderr || ''}`;
-    if (r.status === 2) return { ok: false, detail: 'missing payload — ' + (out.trim().split('\n').slice(-1)[0] || '') };
-
-    /* The detail line is for a human scanning the gate, so prefer what the suite says about itself.
-     * Some suites end with a `PASS …` / `ALL PASS` summary; others (verify-layout.mjs) only print a
-     * JSON report, where "the last line" is a bare `}`. Fall back to the suite's own json field
-     * rather than reporting a closing brace as the reason a check passed. */
-    const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
-    const summary = [...lines].reverse().find((l) => /^(PASS|FAIL|ALL PASS|SKIP)\b/i.test(l));
-    let detail = summary || '';
-    if (!detail) {
-        const passMatch = /"pass":\s*(true|false)/.exec(out);
-        const checksMatch = /(\d+)\s*\/\s*(\d+)\s+checks/i.exec(out);
-        detail = passMatch
-            ? `pass=${passMatch[1]}${checksMatch ? ` (${checksMatch[1]}/${checksMatch[2]} checks)` : ''}`
-            : 'exit ' + r.status;
-    }
-    return { ok: r.status === 0, detail };
+    if (!existsSync(script)) return Promise.resolve({ ok: false, detail: 'missing script ' + file, out: '', ms: 0 });
+    const startedAt = Date.now();
+    return new Promise((resolvePromise) => {
+        const child = spawn(process.execPath, [script], { cwd: ROOT });
+        let out = '';
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { child.kill('SIGKILL'); } catch { /* gone */ }
+            resolvePromise({
+                ok: false,
+                out,
+                ms: Date.now() - startedAt,
+                detail: `killed after ${timeoutMs / 1000}s (timeout) — it did not finish`,
+            });
+        }, timeoutMs);
+        child.stdout.on('data', (c) => { out += c.toString('utf8'); });
+        child.stderr.on('data', (c) => { out += c.toString('utf8'); });
+        child.on('close', (code, signal) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            const ms = Date.now() - startedAt;
+            if (code === null) {
+                const lastLines = out.split('\n').map((l) => l.trim()).filter(Boolean).slice(-2).join(' | ');
+                return resolvePromise({
+                    ok: false, out, ms,
+                    detail: `killed by ${signal || 'a signal'} — it did not finish; last output: ${lastLines || '(nothing)'}`,
+                });
+            }
+            if (code === 2) {
+                const last = out.trim().split('\n').slice(-1)[0] || '';
+                return resolvePromise({ ok: false, out, ms, detail: 'missing payload — ' + last });
+            }
+            const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
+            if (code !== 0) {
+                const fails = lines.filter((l) => /^FAIL\b/i.test(l));
+                const reason = fails.length ? fails.slice(0, 3).join(' | ') : (lines.slice(-1)[0] || '');
+                return resolvePromise({ ok: false, out, ms, detail: `exit ${code} — ${reason}` });
+            }
+            const summary = [...lines].reverse().find((l) => /^(PASS|ALL PASS)\b/i.test(l));
+            let detail = summary || '';
+            if (!detail) {
+                const passMatch = /"pass":\s*(true|false)/.exec(out);
+                const checksMatch = /(\d+)\s*\/\s*(\d+)\s+checks/i.exec(out);
+                detail = passMatch
+                    ? `pass=${passMatch[1]}${checksMatch ? ` (${checksMatch[1]}/${checksMatch[2]} checks)` : ''}`
+                    : 'exit 0';
+            }
+            resolvePromise({ ok: true, out, ms, detail });
+        });
+    });
 }
+
+/** Run every suite of a scope concurrently, then print one contiguous block per suite. */
+async function runSuitesConcurrently(scope, suites) {
+    const startedAt = Date.now();
+    const running = suites.map((s) => runSuiteBuffered(s.file).then((r) => ({ suite: s, ...r })));
+    const done = await Promise.all(running);
+    for (const r of done) {
+        // Flush the suite's own output first, then its one-line verdict, so the log reads in the
+        // same order a serial run would have produced it.
+        const body = r.out.trim();
+        if (body) console.log(body);
+        record(r.suite.name, r.ok, `${r.detail}  [${(r.ms / 1000).toFixed(1)}s]`);
+    }
+    return Date.now() - startedAt;
+}
+
 
 // ---------------------------------------------------------------- 3. main ----
 
-function main() {
-    const files = ALL ? [] : changedFiles();
-    let scopes = ALL ? new Set(['core', 'page', 'plugin', 'layout']) : scopesFor(files);
-    if (scopeArg) scopes = new Set(['core', ...scopeArg.split(',').map((s) => s.trim()).filter(Boolean)]);
-
-    console.log(`== scope: ${[...scopes].join(', ')}` +
-        (ALL ? ' (--all)' : ` (inferred from ${files.length} changed file(s))`));
-    if (!ALL && files.length) console.log('   files: ' + files.slice(0, 8).join(', ') + (files.length > 8 ? ` … +${files.length - 8}` : ''));
+async function main() {
+    console.log(`== gate: core + ${REMAINING_SUITES.length} host suites ==`);
 
     if (!STATIC_ONLY) {
-        const needPayload = [...scopes].some((s) => s !== 'core');
-        if (needPayload) {
-            const missing = [
-                ['native helper', join(PKG, 'native', 'spw-folia-host.exe')],
-                ['web payload', join(PKG, 'web', 'index.html')],
-                ['settings island', join(PKG, 'web', 'settings', 'settings-ui.js')],
-            ].filter(([, p]) => !existsSync(p)).map(([label]) => label);
-            if (missing.length) {
-                console.error(`FAIL  packaged payload missing: ${missing.join(', ')}`);
-                console.error('      run: bash packaging/build-package.sh');
-                process.exit(2);
-            }
+        const missing = [
+            ['native helper', join(PKG, 'native', 'spw-folia-host.exe')],
+            ['web payload', join(PKG, 'web', 'index.html')],
+            ['settings island', join(PKG, 'web', 'settings', 'settings-ui.js')],
+        ].filter(([, p]) => !existsSync(p)).map(([label]) => label);
+        if (missing.length) {
+            console.error(`FAIL  packaged payload missing: ${missing.join(', ')}`);
+            console.error('      run: bash packaging/build-package.sh');
+            process.exit(2);
         }
     }
 
     console.log('\n== core ==');
     runCore();
 
-    for (const scope of ['page', 'plugin', 'layout']) {
-        const suites = SUITES[scope];
-        if (!scopes.has(scope)) {
-            for (const s of suites) skip(s.name, `scope "${scope}" not touched by this change`);
-            continue;
-        }
-        if (STATIC_ONLY) {
-            for (const s of suites) skip(s.name, '--static');
-            continue;
-        }
-        console.log(`\n== ${scope} ==`);
-        for (const s of suites) {
-            const { ok, detail } = runSuite(s.file);
-            record(s.name, ok, detail);
-        }
+    if (STATIC_ONLY) {
+        for (const s of REMAINING_SUITES) skip(s.name, '--static');
+    } else {
+        console.log('\n== real host + real WebView2 ==');
+        const suitesMs = await runSuitesConcurrently('host', REMAINING_SUITES);
+        console.log(`   (${(suitesMs / 1000).toFixed(1)}s wall, ${REMAINING_SUITES.length} suites concurrent)`);
     }
 
     const executed = results.filter((r) => !r.skipped);
@@ -266,9 +263,6 @@ function main() {
     const report = {
         at: new Date().toISOString(),
         staticOnly: STATIC_ONLY,
-        all: ALL,
-        scopes: [...scopes],
-        changedFiles: files,
         results,
         executed: executed.length,
         skipped: results.filter((r) => r.skipped).length,
@@ -285,4 +279,4 @@ function main() {
     process.exit(report.pass ? 0 : 1);
 }
 
-main();
+await main();

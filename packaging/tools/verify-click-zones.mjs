@@ -273,7 +273,9 @@ function runHost({ label, settings, flow }) {
 
         const record = (name, ok, detail) => {
             results.push({ name, ok: !!ok, detail: detail === undefined ? null : detail });
-            console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  -> ' + JSON.stringify(detail)}`);
+            // Sessions now run concurrently, so every line carries its style label — an unlabelled
+            // FAIL from three interleaved streams is unreadable.
+            console.log(`${ok ? 'PASS' : 'FAIL'}  [${label}] ${name}${ok ? '' : '  -> ' + JSON.stringify(detail)}`);
         };
 
         /** The chrome fades out after 2.5 s without pointer activity (protocol §7.5) and a faded
@@ -367,13 +369,40 @@ function runHost({ label, settings, flow }) {
         /** The host can `--open-settings` itself shortly after navigation (first-run flow), and the
          *  injected island also fades its chrome in. Poll until the zones are actually live instead
          *  of guessing a delay: this is the steady state every later assertion assumes. */
+        /**
+         * Wait until BOTH the zone layer and the style's canvas are live.
+         *
+         * The zone layer is React markup and appears on the first commit, but the visualizer's canvas
+         * is mounted asynchronously by the style's own renderer. Measuring elementFromPoint() between
+         * those two moments hits an empty shell (a bare DIV over BODY) and reports a regression that
+         * does not exist — this cost a 1-in-5 flake where 9 checks failed with
+         * `{"hitTag":"DIV","hitClass":"absolute inset-0"}`. Requiring the canvas does not weaken the
+         * flow: if it never appears the run still fails, but for the real reason.
+         */
+        /**
+         * Wait until the page is quiet enough to measure: zone layer live, settings overlay closed,
+         * a canvas present, and the HIT TARGET STABLE across consecutive samples.
+         *
+         * Why stability and not identity: a style's background is a crossfading
+         * `<motion.div className="absolute inset-0">` that sits over the canvas while it mounts
+         * (GeometricBackground.tsx:272 and siblings), so elementFromPoint() briefly reports that
+         * transition layer. Requiring "the hit target is already the canvas" would make A2 (which
+         * asserts exactly that) tautological; requiring only that it has stopped MOVING presupposes
+         * nothing — if the click-zone layer really were intercepting, the hit target would be a
+         * stable `.spw-click-zone` div and A2 would still fail, for the right reason.
+         */
         const settleZones = async () => {
             let last = null;
+            let previousHit = null;
             for (let attempt = 0; attempt < 40; attempt += 1) {
                 await wakeChrome();
                 await sleep(350);
                 last = await snapshot();
-                if (last.zones && last.zonesEnabled === 'true' && last.overlayOpen === 'false') return last;
+                const ready = last.zones && last.zonesEnabled === 'true'
+                    && last.overlayOpen === 'false' && last.canvas;
+                const hitKey = `${last.hitTag}|${last.hitClass}`;
+                if (ready && hitKey === previousHit) return last;
+                previousHit = ready ? hitKey : null;
             }
             return last;
         };
@@ -741,35 +770,58 @@ async function sonnetFlow(ui) {
  */
 async function waitForHanger(evaluate, { attempts = 40, intervalMs = 400 } = {}) {
     let waited = 0;
+    /* The probe also reports the measurements that decide whether the portrait could render at all.
+     * The hanger sits in a wrapper with Tailwind `hidden ... md:flex`, i.e. it only exists at a CSS
+     * viewport >= 768 px, and the host sets WebView2's RasterizationScale to the monitor DPI scale
+     * (~1.8 here) — so the CSS viewport is the window size divided by that (1600x900 -> ~888x500).
+     * A red run then explains itself instead of printing a bare {"found":false}. */
+    const probeOnce = () => evaluate(`
+        const OWNED_CLICK_SELECTOR = [
+            'a','button','input','label','select','summary','textarea','audio','video',
+            '[contenteditable]:not([contenteditable="false"])',
+            '[role="button"]','[role="checkbox"]','[role="dialog"]','[role="listbox"]','[role="menu"]',
+            '[role="menubar"]','[role="menuitem"]','[role="option"]','[role="radio"]','[role="region"]',
+            '[role="slider"]','[role="switch"]','[role="tab"]','[role="tablist"]','[role="textbox"]','[role="toolbar"]',
+            '[data-spw-chrome]','[data-spw-settings-overlay]','[data-spw-font-picker]',
+            '.spw-chrome-btn','.spw-playback','.spw-player-bg','.spw-queue-panel'
+        ].join(',');
+        const el = Array.from(document.querySelectorAll('div'))
+            .find(e => (e.className || '').toString().split(/\\s+/).includes('cursor-pointer'));
+        const diag = {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            mdBreakpoint: window.matchMedia('(min-width: 768px)').matches,
+            canvases: document.querySelectorAll('canvas').length,
+            waitedMs: ${waited},
+        };
+        if (!el) return JSON.stringify(Object.assign({ found: false, present: false, visible: false }, diag));
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        /* "On screen" is NOT "in the document": the portrait wrapper uses Tailwind
+         * hidden / md:flex, so below the md breakpoint the hanger still exists in the DOM but
+         * renders at 0x0 with display:none. A check that only looks for the element would go green
+         * while there is nothing on screen to press. */
+        const visible = style.display !== 'none' && style.visibility !== 'hidden'
+            && r.width > 0 && r.height > 0;
+        return JSON.stringify(Object.assign({
+            found: true,
+            present: true,
+            visible,
+            display: style.display,
+            cursor: style.cursor,
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+            matchesSelector: !!el.closest(OWNED_CLICK_SELECTOR),
+        }, diag));
+    `);
+    let last = { found: false, present: false, visible: false };
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-        const probe = asObject(await evaluate(`
-            const OWNED_CLICK_SELECTOR = [
-                'a','button','input','label','select','summary','textarea','audio','video',
-                '[contenteditable]:not([contenteditable="false"])',
-                '[role="button"]','[role="checkbox"]','[role="dialog"]','[role="listbox"]','[role="menu"]',
-                '[role="menubar"]','[role="menuitem"]','[role="option"]','[role="radio"]','[role="region"]',
-                '[role="slider"]','[role="switch"]','[role="tab"]','[role="tablist"]','[role="textbox"]','[role="toolbar"]',
-                '[data-spw-chrome]','[data-spw-settings-overlay]','[data-spw-font-picker]',
-                '.spw-chrome-btn','.spw-playback','.spw-player-bg','.spw-queue-panel'
-            ].join(',');
-            const el = Array.from(document.querySelectorAll('div'))
-                .find(e => (e.className || '').toString().split(/\\s+/).includes('cursor-pointer'));
-            if (!el) return JSON.stringify({ found: false });
-            const r = el.getBoundingClientRect();
-            return JSON.stringify({
-                found: true,
-                cursor: getComputedStyle(el).cursor,
-                width: Math.round(r.width),
-                height: Math.round(r.height),
-                matchesSelector: !!el.closest(OWNED_CLICK_SELECTOR),
-                waitedMs: ${waited},
-            });
-        `));
-        if (probe.found === true) return probe;
+        last = asObject(await probeOnce());
+        if (last.visible === true) return last;
         waited += intervalMs;
         await sleep(intervalMs);
     }
-    return { found: false };
+    return last;
 }
 
 async function monetFlow(ui) {
@@ -783,9 +835,10 @@ async function monetFlow(ui) {
      * so the layer has to read the cursor affordance; this block proves both halves: the selector
      * really does miss it, and its press really does not reach the zones. */
     const hanger = await waitForHanger(evaluate);
-    record('M1 monet: the role-less portrait hanger is on screen', hanger.found === true, hanger);
+    record('M1 monet: the role-less portrait hanger is actually rendered (not merely in the DOM)',
+        hanger.visible === true, hanger);
     record('M2 monet: the explicit control selector does NOT match it (so the cursor rule is load-bearing)',
-        hanger.found === true && hanger.matchesSelector === false && hanger.cursor === 'pointer', hanger);
+        hanger.visible === true && hanger.matchesSelector === false && hanger.cursor === 'pointer', hanger);
 
     const hangerPress = await act(async () => evaluate(`
         const el = Array.from(document.querySelectorAll('div'))
@@ -850,23 +903,16 @@ async function monetFlow(ui) {
 console.log(`bundle:  ${BUNDLE}`);
 console.log(`island:  ${join(BUNDLE, 'settings', 'settings-ui.js')} (${islandBuilt} bytes, from poc/settings-ui/dist)`);
 
-const machi = await runHost({
-    label: 'machi',
-    settings: { ...baseSettings, styleId: 'machi' },
-    flow: (ui) => machiFlow(ui),
-});
-
-const sonnet = await runHost({
-    label: 'sonnet',
-    settings: { ...baseSettings, styleId: 'sonnet' },
-    flow: (ui) => sonnetFlow(ui),
-});
-
-const monet = await runHost({
-    label: 'monet',
-    settings: { ...baseSettings, styleId: 'monet' },
-    flow: (ui) => monetFlow(ui),
-});
+/* The three sessions are independent: each runHost spawns its own host process with its own
+ * profile directory, and none of them touch shared state. Running them concurrently keeps the
+ * assertions identical while cutting wall time to roughly the slowest single session. */
+const startedAt = Date.now();
+const [machi, sonnet, monet] = await Promise.all([
+    runHost({ label: 'machi', settings: { ...baseSettings, styleId: 'machi' }, flow: (ui) => machiFlow(ui) }),
+    runHost({ label: 'sonnet', settings: { ...baseSettings, styleId: 'sonnet' }, flow: (ui) => sonnetFlow(ui) }),
+    runHost({ label: 'monet', settings: { ...baseSettings, styleId: 'monet' }, flow: (ui) => monetFlow(ui) }),
+]);
+const elapsedS = ((Date.now() - startedAt) / 1000).toFixed(1);
 
 writeFileSync(join(OUT, 'probe-report.json'), JSON.stringify({
     at: new Date().toISOString(),

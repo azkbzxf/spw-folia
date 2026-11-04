@@ -137,15 +137,14 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
 1. 构建输入是新的：宿主、设置岛、Folia 产物都按 §2 重新产出。
 2. `bash packaging/build-package.sh` → 暂存干净、`size-report.json` 未超警戒线、
    `SHA256SUMS.txt` 已重写。
-3. **跑门禁**（自检是发布物的一部分，按发布物验收）：
-   - `node packaging/tools/verify-all.mjs` —— 按本次改动**自动选范围**：`core`（版本三处一致、
-     声明⇄读取双向、JVM 配置失败路径）永远跑，`page` / `plugin` / `layout` 只在对应目录被改时跑。
-     未被选中的项打印为 `SKIP` 并给出原因，**不计入 PASS**。
-   - 发布前跑一次 `--all`（全范围，慢），日常改动跑默认范围即可。
+3. **跑门禁**：
+   - `node packaging/tools/verify-all.mjs` —— `core`（版本三处一致、声明⇄读取双向、无重复键、
+     无孤儿门禁脚本、JVM 配置失败路径）+ 3 个真实宿主套件**并发**跑，约 45 s。
+     未运行的项打印为 `SKIP` 并给出原因，**不计入 PASS**。
    - `--static` 只跑不需要打包产物的部分。
    **健康机上出现 `FAIL` 就是阻断项。**
-4. 发布前另跑一次 `node packaging/tools/verify-layout.mjs` → PASS，`packaging/out/verify-report.json`
-   与截图留作发布证据。
+4. 发布物证据：`packaging/out/verify-all.json` 与 `packaging/out/click-zones/probe-report.json`、
+   `packaging/out/verify-report.json` 及其截图留作发布证据。
 5. 用 `assemble-release.py` 出包（§3），`licenses/` 必须留在包内。
 6. 在真实 SPW 安装里冒烟组装好的 `.spmod`：菜单 → 全屏、首次运行设置、ESC、切歌、暂停/跳转、
    「出现问题」能打开日志文件夹。

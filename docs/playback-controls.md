@@ -183,21 +183,20 @@ Windows / Linux 构建也不相同。`HostMemberResolver` 用两条与名字无�
 | 点击分区 | `[data-spw-click-zone]`（`data-enabled="true\|false"`，`pointer-events:none`）+ `[data-zone="prev"\|"toggle"\|"next"]`（仍在 DOM，仍是合成输入入口，但不再是命中目标） |
 | 测试记录 | `window.__SPW_FOLIA_TEST_CONTROLS__` |
 
-改这些选择器会让 `verify-click-zones.mjs` 与 `verify-playback-bar-switch.mjs` FAIL ——
-它们是门禁，不是建议。
+改这些选择器会让 `verify-click-zones.mjs` FAIL —— 它是门禁，不是建议。
 
 ## 5. 验收
 
 | 脚本 | 覆盖 |
 |---|---|
 | `packaging/tools/verify-click-zones.mjs` | 点击分区 / 幽灵层：DOM 契约、三等分命中、拖动不发指令、控件不被抢、覆盖层失效、画布收得到指针（也覆盖 control/queue 往返的既有断言） |
-| `packaging/tools/verify-playback-bar-switch.mjs` | 「显示播放条」开关（含 E7：关掉后菜单按钮仍可点开，防锁死） |
-| `packaging/tools/verify-live-settings-payload.mjs` | 设置树端到端下发 |
 
-`verify-all.mjs` 按改动范围自动串起来跑；`--all` 跑全部。
+`verify-all.mjs` 一条命令跑完（4 个套件并发，约 45 s）。
 
-> v0.4.18：`verify-playback-controls.mjs`（v0.3.0 的 control/queue 全链路冒烟）、
-> `verify-playback-switches.mjs`（配置页开关链路）、`verify-mouse-back.mjs`（侧键返回）、
-> `verify-json-singleline.mjs`（行协议单行）已删除 —— 这些契约自 v0.3.0/v0.4.13 起未再变动，
-> 而 `verify-click-zones.mjs` 与 `verify-live-settings-payload.mjs` 在真实宿主上覆盖了同一批风险。
-> 需要回看时从 Git 历史取回（例如 `git show v0.4.17:packaging/tools/verify-mouse-back.mjs`）。
+> **v0.4.18 的门禁精简**（按用户要求「早已稳定区域的门禁自动删除」）：
+> `verify-playback-controls.mjs`、`verify-playback-switches.mjs`、`verify-mouse-back.mjs`、
+> `verify-json-singleline.mjs`、`verify-playback-bar-switch.mjs`、`verify-problem-button-switch.mjs`、
+> `verify-live-settings-payload.mjs`、`verify-log-folder.mjs` 均已删除。
+> 最后这个 `verify-log-folder.mjs` 每次运行都会真的拉起一个 `explorer.exe` **打开文件夹窗口**，
+> 且是整套门禁里最慢的一项（46 s）——它守的落点修复自 v0.4.17 起没再动过。
+> 需要回看时从 Git 历史取回：`git show v0.4.18:packaging/tools/<name>`。
