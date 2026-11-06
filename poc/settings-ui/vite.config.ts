@@ -148,7 +148,7 @@ const STYLE_MODES = [
  * 守护：本地样式清单必须与上游源码（work/folia/…）一致。
  *
  * 样式清单散落在 `styles.tsx` / `settings.ts` / `transparencyCompat.ts` / 这份配置 / 缩略图脚本 /
- * Overlay.js / 宣传站里，0.7.22 → 0.7.25 跟进时就漏了两处（`Overlay.js` 还留着不存在的
+ * Overlay.js 里，0.7.22 → 0.7.25 跟进时就漏了两处（`Overlay.js` 还留着不存在的
  * `'window'`，`make-style-grid.mjs` 停在 15 项），而且**都不会报错**，只是静默少一个按钮 / 少一张图。
  * `scripts/check-style-sync.mjs` 以上游源码为唯一事实源做交叉核对；这里把它挂进构建，
  * 于是「上游加了样式但本地没跟」在 `vite build` 阶段就硬失败，而不是等用户发现货架少一格。

@@ -86,9 +86,6 @@ poc/webview/host/repro/*.dll
 # compile output of the repro Java probes (VerifyResolver2 / RenameSim); the .java sources are tracked
 poc/webview/host/repro/out/
 
-# promo-site capture scratch (raw recordings, ffmpeg binary, screenshots)
-/.tmp-capture/
-
 # isolated Gradle home used by the local build (Aliyun-mirror workaround)
 spw-folia/.gradle-home/
 

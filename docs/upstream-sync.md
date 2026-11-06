@@ -121,15 +121,12 @@ cd poc/settings-ui && node scripts/check-style-sync.mjs --check
 | 2 | `poc/settings-ui/scripts/make-thumbs.mjs` 的 `MODES` | ✅ `--write` | 缩略图采集列表 |
 | 3 | `poc/settings-ui/scripts/make-style-grid.mjs` 的 `MODES` | ✅ `--write` | `docs/images/style-grid.png`（README 总览图） |
 | 4 | `poc/webview/host/Overlay.js` 的 `MODES` | ✅ `--write` | 宿主占位 HUD（有设置岛时本来不注入） |
-| 5 | `site/tools/capture-styles.mjs` 的 `ALL_MODES` | ✅ `--write` | 宣传站截图 |
-| 6 | `site/tools/make-gallery.py` 的 `MODES` | ✅ `--write` | 宣传站画廊 |
-| 7 | `poc/settings-ui/src/model/styles.tsx` 的 `STYLE_ENTRIES` | ❌ 人判断 | panel / thumb / beatEffects / ownFontSizeNoticeKey |
-| 8 | `poc/settings-ui/src/model/settings.ts` 的 `StyleMode` 联合 | ❌ 人判断 | 加 `\| '<id>'` |
-| 9 | 同上文件的 `STYLE_TUNING_KEYS` | ❌ 人判断 | 值 = 上游 `<mode>/tuning.ts` 的 `settingsKey` |
-| 10 | 同上文件的 `STYLE_TUNING_DEFAULTS` | ❌ 人判断 | 默认值从 `<mode>/types.ts` import，不要自己编 |
-| 11 | 同上文件的 `STYLE_MODE_SHELF_ORDER` | ❌ 人判断 | 顺序 = 各 entry 的 `order` 升序 |
-| 12 | `poc/settings-ui/src/model/transparencyCompat.ts` 的 `STYLE_COMPAT` | ❌ 人判断 | 透明窗口能否用，见 §3.3 |
-| 13 | `site/main.js` 的 `STYLES` | ❌ 人判断 | 要写 zh/en 名（闸门只校验 id 集合） |
+| 5 | `poc/settings-ui/src/model/styles.tsx` 的 `STYLE_ENTRIES` | ❌ 人判断 | panel / thumb / beatEffects / ownFontSizeNoticeKey |
+| 6 | `poc/settings-ui/src/model/settings.ts` 的 `StyleMode` 联合 | ❌ 人判断 | 加 `\| '<id>'` |
+| 7 | 同上文件的 `STYLE_TUNING_KEYS` | ❌ 人判断 | 值 = 上游 `<mode>/tuning.ts` 的 `settingsKey` |
+| 8 | 同上文件的 `STYLE_TUNING_DEFAULTS` | ❌ 人判断 | 默认值从 `<mode>/types.ts` import，不要自己编 |
+| 9 | 同上文件的 `STYLE_MODE_SHELF_ORDER` | ❌ 人判断 | 顺序 = 各 entry 的 `order` 升序 |
+| 10 | `poc/settings-ui/src/model/transparencyCompat.ts` 的 `STYLE_COMPAT` | ❌ 人判断 | 透明窗口能否用，见 §3.3 |
 
 `--write` 故意只碰**纯 id 列表**；`styles.tsx` / `settings.ts` / `transparencyCompat.ts` 要人判断
 （用哪个 panel、透明分类、默认值从哪来），机器代劳会写出看着对实则错的 entry。所以 `--write`
@@ -303,16 +300,6 @@ cd poc/settings-ui && npm run thumbs -- --force 2>&1 | grep "ink="
 
 拼图脚本是一次性的本地核对工具，不必入库；把 `public/thumbs/<mode>.jpg` 按货架顺序拼成网格、
 每格标上 `<序号>. <mode>` 即可，看完整批删掉。带 Pillow 的 python（本机 DSH 运行时那个）就够用。
-
-### 4.5 站点图从同一批缩略图派生
-
-`site/assets/styles/*.jpg`（960×540 q85）与 `site/assets/styles/large/*.jpg`（1600×900 q82）是
-README 与宣传站用的同一批画面，**定稿后必须同步**，否则宣传站和设置页不一致。直接从
-`public/thumbs` 派生：两者同为 16:10，居中裁切后缩放即可（`Image.LANCZOS`，quality 85 / 82，
-`optimize=True, progressive=True`）。
-
-> 不要用 `site/tools/capture-styles.mjs` 重采一遍：它要 Playwright + 起一个 server，采出来又是
-> 另一套画面，两边永远对不齐。它的 id 列表由 `check-style-sync.mjs` 校验，保留即可。
 
 ---
 

@@ -38,13 +38,43 @@ type MountHost = Window & {
     __SPW_FOLIA_SETTINGS_UI_READY__?: boolean;
 };
 
+/**
+ * The island's stacking level, and the reason it is 100 and not a huge number.
+ *
+ * The island is ONE stacking context that hosts the whole settings window **and** the player chrome.
+ * Folia, meanwhile, portals its floating layers to `<body>` as siblings of the island:
+ * `CustomSelect`'s option menu and `Sheet` at `z-[200]` (`components/shared/CustomSelectMenu.tsx`,
+ * `components/shared/Sheet.tsx`), kit tooltips at `z-[210]`, `PonderStage` at `z-[220]`, the debug
+ * window at `z-[300]`. A sibling only paints above the island when its own z-index is larger than
+ * the island's, so any island above 200 puts **every one of those layers behind the settings
+ * window**: they render, they are in the DOM, and not one pixel of them can be hit.
+ *
+ * That was issue #21: 字幕 → 底部字幕行数 = 三行 → 第二行/第三行 的下拉点了没反应. The menu opened
+ * (`aria-expanded` flipped, the listbox mounted), painted under the island, and its options were
+ * unreachable — `elementFromPoint` over the menu returned the combobox of the row *behind* it, the
+ * next row's trigger. The same held for every other kit Select on every page, which is why the
+ * symptom read as "the dropdown does not switch".
+ *
+ * 100 is chosen from measurement, not taste: Folia's own page content tops out at `z-20`
+ * (`probe-band`: the highest non-island element inside the visualizer page is 20), so 100 still
+ * covers the picture, while all six of Folia's portaled layers (200/205/210/220/300) come out on
+ * top. The chrome's own numbers in `app.css` (2147482990…2147483002) all live INSIDE this island,
+ * so they keep their relative order either way; the `#spw-folia-splash` overlay the host injects
+ * sits at 2147483000 as a body sibling and now covers the island — correct, since it only exists
+ * while the page is still starting.
+ *
+ * Do not raise this "to be safe". Anything above 200 silently re-breaks every dropdown in the
+ * settings window; `verify-select-layers.mjs` fails if it happens.
+ */
+const ISLAND_Z_INDEX = '100';
+
 const resolveContainer = (injected: boolean): HTMLElement => {
     const existing = document.getElementById('spw-settings-ui-root');
     if (existing) return existing;
     const container = injected ? document.createElement('div') : (document.getElementById('root') ?? document.createElement('div'));
     if (injected) {
         container.id = 'spw-settings-ui-root';
-        container.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
+        container.style.cssText = `position:fixed;inset:0;z-index:${ISLAND_Z_INDEX};pointer-events:none;`;
         document.body.appendChild(container);
     }
     return container;

@@ -328,9 +328,8 @@ for (const mode of missing) {
     );
 }
 
-// Centre-crop to 16:10 and downscale. Pillow is the only image dependency in this repo (site/tools
-// uses it too), so the crop step (and the frame ranking) stays in Python instead of pulling a Node
-// image library.
+// Centre-crop to 16:10 and downscale. Pillow is the only image dependency in this repo, so the
+// crop step (and the frame ranking) stays in Python instead of pulling a Node image library.
 //
 // Ranking: each style comes in with several burst candidates; keep the one that shows the most LYRICS.
 // A naive bright-pixel count does not work — several styles (classic/partita/pendolo/cappella/

@@ -42,7 +42,7 @@ three.js `OrbitControls` 驱动，而 `OrbitControls` 正是从画布的 `pointe
 
 ## 2. 宣传站全面重做（已重做）
 
-<https://azkbzxf.github.io/spw-folia/> 从结构、排版到动效重写，内容对齐 v0.4.18：
+宣传站（v0.4.20 起已下线）从结构、排版到动效重写，内容对齐 v0.4.18：
 
 - 内容过时的地方全部改掉：下载链接不再写死版本号（改由 `<html data-release>` 一处驱动）、
   删掉「14 款样式」「100–114 FPS」这类旧口径、补齐 v0.4.15 / v0.4.16 / v0.4.17 之后的新功能；

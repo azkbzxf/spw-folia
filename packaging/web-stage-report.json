@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-06T11:22:06.792Z",
+  "generatedAt": "2026-11-06T12:36:28.657Z",
   "out": "packaging/web",
   "webFiles": 1900,
   "webBytes": 27760654,
@@ -11,7 +11,7 @@
     "placeholder_cover2": "assets/placeholder_cover-2-BuqqkGqf.jpg"
   },
   "settingsFiles": 1984,
-  "settingsBytes": 9860516,
+  "settingsBytes": 9860520,
   "settingsDedupe": {
     "candidates": 32,
     "rewrittenRefs": 66,
@@ -19,7 +19,7 @@
     "savedBytes": 4232414,
     "skipped": 0
   },
-  "totalBytes": 37621170,
+  "totalBytes": 37621174,
   "excluded": {
     "swTrio": [
       "registerSW.js",

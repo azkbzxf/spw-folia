@@ -75,6 +75,10 @@ const skip = (suite, reason) => {
  * (`git show v0.4.18:packaging/tools/<name>`). */
 const REMAINING_SUITES = [
     { name: 'click zones / ghost layer (issue #19)', file: 'verify-click-zones.mjs' },
+    // issue #21: the island's stacking level decides whether Folia's body-portaled menus (the kit's
+    // Select menu, Sheet, tooltips) can be clicked at all. Asserting only "the listbox exists" is
+    // what let that ship green for a whole release, so this drives a real press through the menu.
+    { name: 'kit dropdowns are clickable (issue #21)', file: 'verify-select-layers.mjs' },
     { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
     { name: 'packaged layout smoke', file: 'verify-layout.mjs' },
 ];

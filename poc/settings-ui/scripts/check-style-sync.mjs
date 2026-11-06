@@ -5,7 +5,7 @@
  * ------------
  * 「加一个歌词样式」这件事本来要在本仓库改 6~9 个地方（settings 的联合类型 / 调参默认值 /
  * 调参键 / 货架顺序、styles.tsx 的 entry、透明兼容表、构建闸门的 id 列表、缩略图采集列表、
- * 宿主 HUD、宣传站画廊……）。0.7.22 → 0.7.25 那次跟进就漏了两处（`Overlay.js` 里还留着不存在的
+ * 宿主 HUD……）。0.7.22 → 0.7.25 那次跟进就漏了两处（`Overlay.js` 里还留着不存在的
  * `'window'`，`make-style-grid.mjs` 停在 15 项），而且这些漏项**都不会报错**，只是静默少画一个
  * 按钮 / 少一张图。人肉同步不可靠，所以把「上游有哪些样式」变成可执行的检查。
  *
@@ -251,19 +251,6 @@ const ID_LISTS = [
         file: path.join(REPO, 'poc/webview/host/Overlay.js'),
         re: /var MODES = \[([\s\S]*?)\];/,
         why: '宿主占位 HUD（--no-overlay 可关）：样式按钮列表。',
-    },
-    // 宣传站的两份清单也是纯 id 列表（zh/en 名在 site/main.js 的 STYLES 里，那边不由脚本改）。
-    {
-        label: 'site/tools/capture-styles.mjs ALL_MODES',
-        file: path.join(REPO, 'site/tools/capture-styles.mjs'),
-        re: /const ALL_MODES = \[([\s\S]*?)\];/,
-        why: '宣传站样式截图采集列表。',
-    },
-    {
-        label: 'site/tools/make-gallery.py MODES',
-        file: path.join(REPO, 'site/tools/make-gallery.py'),
-        re: /^MODES = \[([\s\S]*?)\]/m,
-        why: '宣传站画廊图生成列表。',
     },
 ];
 
@@ -584,24 +571,6 @@ const main = () => {
     // 人判断层：只报差异
     checkModelLayer(upstream.rows);
 
-    // site/ 下的宣传站清单：id 集合要跟上游一致；STYLES 还带 zh/en 名，只校验 id（不由脚本改）
-    const siteLists = [
-        { label: 'site/main.js STYLES', file: path.join(REPO, 'site/main.js'), re: /const STYLES = \[([\s\S]*?)\n  \];/ },
-    ];
-    for (const entry of siteLists) {
-        const got = readIdList(entry.file, entry.re);
-        if (!got.present || got.matched === false) continue;
-        const missing = expected.filter((id) => !got.ids.includes(id));
-        const extra = got.ids.filter((id) => !expected.includes(id));
-        if (missing.length === 0 && extra.length === 0) continue;
-        problems.push(
-            `[宣传站清单不同步] ${entry.label}\n`
-            + (missing.length ? `    缺：${fmt(missing)}\n` : '')
-            + (extra.length ? `    多出：${fmt(extra)}\n` : '')
-            + '    宣传站允许有自己的 zh/en 名与排版，但 id 集合应与上游一致。',
-        );
-    }
-
     /* 报告 */
     if (VERBOSE) {
         console.log(`\n上游 ${upstream.ids.length} 个样式（按 order）：`);
@@ -631,7 +600,7 @@ const main = () => {
         + `    ${fmt(expected)}\n`
         + '  已核对：STYLE_ENTRIES（order/labelKey/thumb/beatEffects）、StyleMode、STYLE_MODE_SHELF_ORDER、\n'
         + '          STYLE_TUNING_KEYS、STYLE_COMPAT、STYLE_MODES、make-thumbs MODES、make-style-grid MODES、\n'
-        + '          Overlay.js MODES、site 三处清单。',
+        + '          Overlay.js MODES。',
     );
     if (notes.length > 0) for (const n of notes) console.log(`  · ${n}`);
 };

@@ -101,8 +101,17 @@ pnpm build           # = vite build，产物在 dist/
 - `src/publisher/config.ts` + `deriveTheme.ts` + `useConfigPublisher.ts`：页面侧构建
   `ObsBrowserSourceConfig` 并 `pushConfig`（见 §6）。
 - `src/mount.tsx`：在 `body` 上创建 `#spw-settings-ui-root`
-  （`position:fixed; inset:0; z-index:2147483000; pointer-events:none`），React root 挂进去；
+  （`position:fixed; inset:0; z-index:100; pointer-events:none`），React root 挂进去；
   设置 overlay 打开时才接管 `pointer-events`。
+
+  **`z-index` 只能是 100，不能是「很大」。** 这个容器是一个层叠上下文，而 Folia 把它的浮层
+  （`CustomSelect` 选项菜单与 `Sheet` = `z-[200]`、kit `Tooltip` = `z-[210]`、`PonderStage` =
+  `z-[220]`、调试窗 = `z-[300]`）全部 `createPortal` 到 `document.body`，成为本容器的**兄弟节点**。
+  兄弟之间只有 z-index 大者胜，所以容器一旦高于 200，这些浮层就全部被压在设置窗口**背后** ——
+  渲染了、在 DOM 里、`aria-expanded` 也翻了，就是一个像素都点不到（issue #21：字幕页每个下拉
+  「点了没反应」）。100 的依据：Folia 页面内容的层叠上限是 `z-20`（画布 `z:-1`），100 仍盖得住
+  画面，而 200 以上的浮层全部回到窗口上方。`app.css` 里那组 `214748xxxx` 是**容器内部**的次序，
+  相对关系不受影响。回归由 `packaging/tools/verify-select-layers.mjs` 守住。
 
 ### 3.3 桩模块（`src/stubs/`，按 Folia 源码形状实现、只实现被导入的 API）
 
@@ -334,7 +343,7 @@ IndexedDB，下次开窗口直接贴出来 —— 贴进的是**上游那只 Map
 | `cached` | 当前显示「磁盘恢复图」的格子数；**static 模式恒 0** |
 | `pending` | 还没有图、也还没在造图的**样式格**数（随机格不计）；**static 模式恒 0** |
 
-验收：`node site/tools/check-site.mjs` 里的货架断言 + 手工观察；原独立门禁
+验收：手工观察货架的三态（实时版 → 磁盘恢复图 → 造图中）与切换是否即时；原独立门禁
 `verify-preview-animation-switch.mjs` 已于 v0.4.18 删除（该开关自 v0.4.16 起未变动，
 门禁只留本次改动相关的范围，见 `packaging/tools/verify-all.mjs` 头部）。
 

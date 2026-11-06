@@ -8,7 +8,6 @@ can also be floated straight over your desktop.
 [![Release](https://img.shields.io/github/v/release/azkbzxf/spw-folia)](https://github.com/azkbzxf/spw-folia/releases)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-lightgrey)](#compatibility)
-[![Site](https://img.shields.io/badge/promo%20site-azkbzxf.github.io%2Fspw--folia-ffb545)](https://azkbzxf.github.io/spw-folia/)
 
 [中文](README.md) | **English**
 
@@ -71,10 +70,6 @@ can also be floated straight over your desktop.
 </p>
 <div align="center"><sub>Fullscreen page · Lyric style settings · Transparent playback page · 17 lyric styles</sub></div>
 
-> Want the whole tour at once? The [**promo site**](https://azkbzxf.github.io/spw-folia/) has the
-> scrolling demo, every style at full size, and a recorded walkthrough — all footage rendered by the
-> plugin itself.
-
 ## Install and use
 
 1. **Install the plugin**, either way:
@@ -122,7 +117,7 @@ The full dependency matrix and crash troubleshooting live in
 
 ## Versions
 
-The current version is **v0.4.19** (2026-11-06). The `.spmod` and its SHA-256 checksum for every
+The current version is **v0.4.20** (2026-11-06). The `.spmod` and its SHA-256 checksum for every
 release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases), together with that
 release's notes.
 
@@ -133,7 +128,7 @@ it. **Download only from versions that still exist on the
 [Releases](https://github.com/azkbzxf/spw-folia/releases) page.**
 
 Detailed notes for the current release live in
-[docs/release-notes-v0.4.19.md](docs/release-notes-v0.4.19.md).
+[docs/release-notes-v0.4.20.md](docs/release-notes-v0.4.20.md).
 
 ## Build from source
 
@@ -185,8 +180,6 @@ For maintainers: [architecture](docs/architecture.md) · [protocol](docs/protoco
 - [GitHub repository](https://github.com/azkbzxf/spw-folia) — source, docs,
   [Releases](https://github.com/azkbzxf/spw-folia/releases) and
   [Issues](https://github.com/azkbzxf/spw-folia/issues).
-- [Promo site](https://azkbzxf.github.io/spw-folia/) — scrolling demo, every style at full size and
-  a recorded walkthrough.
 - Chat group: **1075038382**.
 - When reporting a problem, please include your SPW version, the plugin version and the steps to
   reproduce it.
