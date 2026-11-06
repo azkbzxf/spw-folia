@@ -58,8 +58,8 @@
 ## 校验
 
 ```
-sha256: b227c3f2d418675cc380b35f1776d897e221bf7ac592620da42ca28774ee6bd7
-文件大小: 15,737,961 字节
+sha256: 197c4f786e6d0d09c335714dec2c04cb9e474f671f878b44e0b01debb2cf2787
+文件大小: 15,738,242 字节
 ```
 
 ---
@@ -94,7 +94,7 @@ sha256: b227c3f2d418675cc380b35f1776d897e221bf7ac592620da42ca28774ee6bd7
 - **变异测试（门禁有牙的证明）**：把 `shouldShow` 的版本钉死去掉（等价于「每个版本都弹」），
   `never shows for any version other than the notice version` 立即失败；把读键改成与写键不一致，
   `what the write stores is what the read finds` 立即失败。两处都实测过，改回后复绿。
-- 发布门禁 `node packaging/tools/verify-all.mjs` → **10/10 executed checks，36.9 s**（4 套件并发）。
+- 发布门禁 `node packaging/tools/verify-all.mjs` → **10/10 executed checks**（4 套件并发）。
 
 ### ⚠️ 真机冒烟抓到的缺陷（首发构建已废弃）
 
@@ -119,8 +119,37 @@ sha256: b227c3f2d418675cc380b35f1776d897e221bf7ac592620da42ca28774ee6bd7
 **教训**：与宿主 UI 相关的副作用必须在「UI 就绪」之后执行，而「调用没抛异常」**不等于**
 「用户看到了」；一次性提示这类不可重试的动作，尤其不能在副作用确认前就写下「已完成」标记。
 
-**产物**：`spw-folia-0.5.0.spmod`，15,737,961 B / 4,007 项，`Plugin-Version: 0.5.0`，内嵌 Folia 0.7.26，
+**产物**：`spw-folia-0.5.0.spmod`，15,738,242 B / 4,007 项，`Plugin-Version: 0.5.0`，内嵌 Folia 0.7.26，
 17 种样式。上游与宿主均未变动（宿主 exe 178,688 B）。
 
 **自我约束**：这条通知是 v0.3.2（issue #9）「启动不弹成功提示」规则的**唯一例外**，且仅限本版本。
 0.5.1 起请勿把 `NOTICE_VERSION` 顺手改成当前版本号。
+
+---
+
+## 附二：发布前的两处修复（原 v0.5.1，已并入本版）
+
+这两处都是在发布前真机验证中发现的，最终交付的 0.5.0 已包含它们，用户不会经历中间状态。
+
+### 1. 通知在界面就绪前发出，被宿主静默丢弃
+
+插件 `start()` 比 SPW 主界面就绪早约 0.7 s。此时调用 `WorkshopApi.ui.toast` **不抛异常、不排队、
+不补发**，被宿主静默丢弃；而标记已写，通知就永久作废。
+
+**修复**：起 daemon 线程轮询 `Window.getWindows()`，等首个 `isDisplayable && isShowing` 的窗口，
+再 `SwingUtilities.invokeLater` 弹出；上限 10 s，**超时不弹且不写标记**（下次可补）。
+
+### 2. 标记读取走宿主缓存，导致每次重启都重弹
+
+标记已正确写入 `config.json`，但 `ConfigHelper.get()` 返回**进程内快照**，可能未反映磁盘内容，
+读到 `null` 与「从未提示」不可区分 → 每次重启重弹。
+
+**修复**：`readNoticedVersion` 改为直接解析磁盘配置文件（`getConfigPath()` + 原始 JSON 文本），
+与 `FoliaConfigSync.readConfigText` 同一纪律；`writeNoticedVersion` 在 `save()` 后**回读校验**。
+
+**为什么原测试没抓到**：初版测试用 map 支撑的假 helper，而生产读取走文件路径 —— 测的是一条生产
+不存在的路径。现在假 helper 改为持有真实临时文件，并刻意保留**故意陈旧**的内存视图，
+专门覆盖「文件有值 / 内存没有」这一真实形态；把读取改回内存视图，4 条测试立刻失败。
+
+**教训**（见 `docs/lessons.md` §4.2 / §4.3）：一次性功能的验收**必须包含第二次启动**；
+且「调用没抛异常」不等于「用户看到了」。
