@@ -213,6 +213,23 @@
 - **压缩菜单（`compact`）会在页面滚动时自动收起**，自动化探针必须先 `scrollIntoView` 并等滚动
   停稳，再点开菜单；顺序反了会「打开即关闭」，误判成 bug。
 
+### 4.2 插件的 UI 副作用必须等宿主界面就绪（v0.5.0）
+
+- **插件 `start()` 比 SPW 主界面早约 0.7 s。** 真机日志：插件 `22:43:53.099` 启动、
+  `22:43:53.803` 调 `WorkshopApi.ui.toast`，而 SPW 自己的 `App start` 到 `22:43:54.236` 才写出。
+- **界面未就绪时 `WorkshopApi.ui.toast` 是静默丢弃：不抛异常、不排队、不补发。**
+  「调用没报错」因此**不能**作为「用户已经看到」的证据 —— 这是本仓库第一次遇到「日志写成功、
+  用户却什么都没看到」的类型。
+- **正确做法**：起 daemon 线程轮询 `java.awt.Window.getWindows()`，等到出现第一个
+  `isDisplayable && isShowing` 的窗口，再 `SwingUtilities.invokeLater` 执行 UI 副作用；
+  必须带超时上限，超时就**不执行**（而不是在错误时机执行）。
+- **一次性提示特别危险**：若在副作用确认之前就写下「已完成」标记，一次静默丢弃就把该提示
+  **永久作废**，且单测与发布门禁都发现不了（它们只驱动打包页面，不驱动插件启动时序）。
+  顺序永远是「先确认副作用真的发生，再落标记」；宁可在失败时下次重试。
+- 代码位置：`FoliaPlugin.awaitUiThenShowNotice`（`NOTICE_UI_WAIT_MS` / `NOTICE_UI_POLL_MS`），
+  真机复验日志 `update notice: UI ready after 2182ms / 2246ms`。
+
+
 ---
 
 ## 5. 构建与打包

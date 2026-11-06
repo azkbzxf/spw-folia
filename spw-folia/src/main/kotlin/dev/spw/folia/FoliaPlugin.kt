@@ -201,7 +201,86 @@ class FoliaPlugin(
         runCatching { trayMenu.install() }
             .onFailure { log("WARNING: tray menu item disabled: ${it::class.java.name}: ${it.message}") }
         installHookForHostBuild()
+        maybeShowUpdateNotice()
         log("start done")
+    }
+
+    /**
+     * v0.5.0: 一次性更新通知。
+     *
+     * 位置在两道 gate **之后** —— 版本不支持、或缺 class-transform 权限时 `start()` 已经 return，
+     * 插件根本不可用；那种情况下弹「已更新至 0.5.0」是误导，而且这两条路径各有自己的错误提示。
+     *
+     * 只弹一次，靠 [FoliaUpdateNotice.shouldShow]（该版本 + 未提示过）与持久化标记保证。判定逻辑
+     * 本身在 `FoliaUpdateNoticeTest` 里覆盖，这里只负责「读标记 → 判定 → 弹 → 弹成功才写标记」。
+     *
+     * 任何异常都只记日志：一条通知不值得影响插件启动。
+     */
+    private fun maybeShowUpdateNotice() {
+        runCatching {
+            val manager = runCatching { WorkshopApi.manager.createConfigManager() }.getOrNull()
+            val helper = manager?.let { runCatching { it.getConfig() }.getOrNull() }
+            val noticed = FoliaUpdateNotice.readNoticedVersion(helper)
+            if (!FoliaUpdateNotice.shouldShow(PLUGIN_VERSION, noticed)) {
+                log("update notice: skipped (version=$PLUGIN_VERSION noticed=$noticed)")
+                return
+            }
+            // v0.5.0 hotfix: 必须等界面起来再弹。真机实测（SPW 1.19.3）插件在 22:43:53.803 调
+            // toast，而 SPW 自己的 `App start` 日志到 22:43:54.236 才写 —— 界面尚未构建时调用
+            // `WorkshopApi.ui.toast` 既不抛异常也不显示，是被**静默丢弃**的。首发时标记因此被写进
+            // 磁盘，用户却一次都没看到，等于把这条通知永久作废。所以：等主窗口真的显示之后再弹，
+            // 且只有真的发出去了才写标记。
+            awaitUiThenShowNotice(helper)
+        }.onFailure { log("update notice failed: ${it::class.java.name}: ${it.message}") }
+    }
+
+    /**
+     * Waits for SPW's first window to become displayable, then shows the notice on the AWT thread.
+     *
+     * Runs on a daemon thread so plugin start-up is never blocked. Polling `Window.getWindows()` is
+     * the only signal available from a plugin: the workshop API exposes no "UI ready" callback, and a
+     * fixed sleep would be a guess (cold start is slower than a warm one by more than 2x).
+     *
+     * The whole thing is bounded by [NOTICE_UI_WAIT_MS]. If no window ever appears (headless test
+     * hosts, a crash before first paint), the notice is **not** shown and the marker stays unwritten,
+     * so a later start can still deliver it.
+     */
+    private fun awaitUiThenShowNotice(helper: com.xuncorp.spw.workshop.api.config.ConfigHelper?) {
+        val worker = Thread({
+            val deadline = System.currentTimeMillis() + NOTICE_UI_WAIT_MS
+            while (System.currentTimeMillis() < deadline) {
+                val ready = runCatching {
+                    java.awt.Window.getWindows().any { it.isDisplayable && it.isShowing }
+                }.getOrDefault(false)
+                if (ready) {
+                    log("update notice: UI ready after ${NOTICE_UI_WAIT_MS - (deadline - System.currentTimeMillis())}ms wait")
+                    SwingUtilities.invokeLater { showUpdateNoticeNow(helper) }
+                    return@Thread
+                }
+                Thread.sleep(NOTICE_UI_POLL_MS)
+            }
+            log("update notice: UI never became visible within ${NOTICE_UI_WAIT_MS}ms; not shown, will retry next start")
+        }, "spw-folia-update-notice")
+        worker.isDaemon = true
+        worker.start()
+    }
+
+    /** Shows the notice (already determined to be due) and records it only if it actually went out. */
+    private fun showUpdateNoticeNow(helper: com.xuncorp.spw.workshop.api.config.ConfigHelper?) {
+        runCatching {
+            var accepted = false
+            runCatching {
+                WorkshopApi.ui.toast(FoliaUpdateNotice.message(PLUGIN_VERSION), WorkshopApi.Ui.ToastType.Success)
+                accepted = true
+            }.onFailure {
+                log("update notice: toast threw ${it::class.java.name}: ${it.message}")
+            }
+            if (!accepted) return@runCatching
+            val wrote = FoliaUpdateNotice.writeNoticedVersion(helper, PLUGIN_VERSION)
+            log(
+                "update notice: shown for $PLUGIN_VERSION (marker ${if (wrote) "saved" else "NOT saved; will show again next start"})"
+            )
+        }.onFailure { log("update notice: show failed ${it::class.java.name}: ${it.message}") }
     }
 
     /**
@@ -746,10 +825,24 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.4.20"
+        const val PLUGIN_VERSION = "0.5.0"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
+
+        /**
+         * v0.5.0: how long the one-shot update notice waits for SPW's first window to appear.
+         *
+         * Measured on this machine (1.19.3, cold start): the plugin's `start()` runs ~0.7 s BEFORE the
+         * host logs `App start`, and a toast issued in that window is silently dropped — not queued,
+         * not thrown. 10 s covers a cold start with a busy disk by a wide margin, and if it is ever
+         * not enough the notice is simply not shown and the marker stays unwritten (retried next
+         * start) instead of being burnt.
+         */
+        private const val NOTICE_UI_WAIT_MS = 10_000L
+
+        /** Poll interval for [awaitUiThenShowNotice]; 50 ms is free and keeps the notice prompt. */
+        private const val NOTICE_UI_POLL_MS = 50L
 
         /** Hook registration retries while the plugin's "started" transition settles. */
         private const val HOOK_RETRY_COUNT = 20
