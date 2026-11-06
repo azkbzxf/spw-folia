@@ -145,6 +145,13 @@ class FoliaUpdateNoticeTest {
 
     // ------------------------------------------------------------ 5. storage round trip ----
 
+    @org.junit.Rule
+    @JvmField
+    val tmp: org.junit.rules.TemporaryFolder = org.junit.rules.TemporaryFolder()
+
+    private fun store(saveResult: Boolean = true, throwOnPath: Boolean = false) =
+        FileConfig(tmp.newFolder(), saveResult = saveResult, throwOnPath = throwOnPath)
+
     /**
      * The read and write halves must agree on the same key and value type. This is the failure the
      * pure-decision tests above CANNOT see: a write to `updateNoticeShownVersion` and a read from a
@@ -152,7 +159,7 @@ class FoliaUpdateNoticeTest {
      */
     @Test
     fun `what the write stores is what the read finds`() {
-        val store = InMemoryConfig()
+        val store = store()
         val nothingSeen = FoliaUpdateNotice.readNoticedVersion(store)
         assertNull("an untouched store must read as 'never shown'", nothingSeen)
 
@@ -165,12 +172,53 @@ class FoliaUpdateNoticeTest {
     }
 
     /**
+     * **The bug that shipped in the first 0.5.0 build.** The marker was on disk, but the read went
+     * through the host's `ConfigHelper.get`, which answered from a stale in-memory view — so every
+     * restart showed the notice again.
+     *
+     * The fake below deliberately carries a stale view that lacks the key; the read must ignore it
+     * and parse the FILE. This test fails if `readNoticedVersion` ever goes back to `config.get(...)`.
+     */
+    @Test
+    fun `a stale in-memory helper view cannot resurrect the notice`() {
+        val store = store()
+        // The file already records "0.5.0" (a previous run wrote it) ...
+        store.seedFile("""{"updateNoticeShownVersion":"0.5.0"}""")
+        // ... while the helper's cached view knows nothing about it. This is what the host returned
+        // on the real machine: `get(key, null)` -> null despite the value being on disk.
+        store.seedStaleView("settingsJson", "{}")
+
+        assertEquals(
+            "the disk is the source of truth; a stale cache must not re-show the notice",
+            "0.5.0",
+            FoliaUpdateNotice.readNoticedVersion(store),
+        )
+        assertFalse(
+            "this is the exact restart path that showed the notice twice",
+            FoliaUpdateNotice.shouldShow("0.5.0", FoliaUpdateNotice.readNoticedVersion(store)),
+        )
+    }
+
+    /** The marker must survive being written into a file that already holds other keys. */
+    @Test
+    fun `writing the marker preserves unrelated keys`() {
+        val store = store()
+        store.seedFile("""{"settingsJson":"{\"styleId\":\"sonnet\"}","textureDefaultMigrated":true}""")
+
+        assertTrue(FoliaUpdateNotice.writeNoticedVersion(store, "0.5.0"))
+        val text = java.io.File(store.getConfigPath().toString()).readText()
+        assertTrue("the settings tree must not be destroyed", text.contains("settingsJson"))
+        assertTrue("other markers must survive", text.contains("textureDefaultMigrated"))
+        assertEquals("0.5.0", FoliaUpdateNotice.readNoticedVersion(store))
+    }
+
+    /**
      * `save()` returning false means the marker never reached disk. The read must then behave as if
      * nothing was stored — otherwise the notice would be suppressed for a user who was never told.
      */
     @Test
     fun `a failed save leaves the notice enabled`() {
-        val store = InMemoryConfig(saveResult = false)
+        val store = store(saveResult = false)
         assertFalse("a save that did not happen must be reported as such", FoliaUpdateNotice.writeNoticedVersion(store, "0.5.0"))
         assertTrue(
             "the next start must try again rather than silently swallowing the notice",
@@ -181,7 +229,7 @@ class FoliaUpdateNoticeTest {
     /** A throwing config layer must degrade to "not seen" and never break plugin start-up. */
     @Test
     fun `a broken config layer degrades to not seen`() {
-        val store = InMemoryConfig(throwOnGet = true)
+        val store = store(throwOnPath = true)
         assertNull(FoliaUpdateNotice.readNoticedVersion(store))
         assertTrue(FoliaUpdateNotice.shouldShow("0.5.0", FoliaUpdateNotice.readNoticedVersion(store)))
     }
@@ -198,35 +246,79 @@ class FoliaUpdateNoticeTest {
     }
 
     /**
-     * Minimal [ConfigHelper] stand-in: a map plus the failure switches the real callers have to
-     * survive. Only the three methods this feature touches are meaningful.
+     * Minimal [ConfigHelper] stand-in backed by a **real JSON file**.
+     *
+     * The first version of this fake kept the value in a map, and that is exactly why it missed the
+     * defect that shipped in the first 0.5.0 build: the production read path goes through
+     * `getConfigPath()` + the raw file text (see [FoliaUpdateNotice.readNoticedVersion]), so a
+     * map-backed fake tested a code path that no longer existed. The fake therefore has to own a
+     * file, and `get()` deliberately models the host's **stale in-memory view** so the tests can
+     * prove the read does not trust it.
      */
-    private class InMemoryConfig(
+    private class FileConfig(
+        private val dir: java.io.File,
         private val saveResult: Boolean = true,
-        private val throwOnGet: Boolean = false,
+        private val throwOnPath: Boolean = false,
     ) : ConfigHelper {
-        val values: MutableMap<String, Any> = mutableMapOf()
+        private val file = java.io.File(dir, "config.json")
+
+        /** What a cached helper would answer — kept stale on purpose, never used for assertions. */
+        private val staleView: MutableMap<String, Any> = mutableMapOf()
 
         override fun <T> get(key: String, defaultValue: T): T {
-            if (throwOnGet) throw IllegalStateException("config layer unavailable")
             @Suppress("UNCHECKED_CAST")
-            return (values[key] as? T) ?: defaultValue
+            return (staleView[key] as? T) ?: defaultValue
         }
 
         override fun set(key: String, value: Any) {
-            values[key] = value
+            staleView[key] = value
         }
 
         override fun save(): Boolean {
-            // A failed save must not leave the value readable: that is exactly the lie the caller
-            // would act on, so model the real behaviour (nothing reached disk).
-            if (!saveResult) values.clear()
-            return saveResult
+            if (!saveResult) return false
+            // Merge into whatever is already on disk, like the host does for a multi-key file.
+            val existing = if (file.isFile) file.readText(Charsets.UTF_8).trim() else "{}"
+            var out = existing.ifBlank { "{}" }
+            for ((k, v) in staleView) {
+                out = upsertMember(out, k, v)
+            }
+            file.writeText(out, Charsets.UTF_8)
+            staleView.clear()
+            return true
+        }
+
+        /** Minimal root-level member upsert; enough for the two value kinds this feature stores. */
+        private fun upsertMember(json: String, key: String, value: Any): String {
+            val encoded = if (value is String) {
+                "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+            } else {
+                value.toString()
+            }
+            // Drop the previous root-level member of the same name (string/bool/number/null).
+            val pattern = Regex(
+                "\"${Regex.escape(key)}\"\\s*:\\s*(?:\"(?:[^\"\\\\]|\\\\.)*\"|true|false|null|-?[0-9.eE+]+)\\s*,?"
+            )
+            val stripped = pattern.replace(json, "").trim().trimEnd(',').trim()
+            val body = stripped.removePrefix("{").removeSuffix("}").trim().trimEnd(',')
+            val merged = if (body.isEmpty()) "\"$key\":$encoded" else body + ",\n  \"$key\":$encoded"
+            return "{$merged}"
         }
 
         override fun reload(): Boolean = true
 
-        override fun getConfigPath(): java.nio.file.Path =
-            java.io.File("in-memory-config.json").toPath()
+        override fun getConfigPath(): java.nio.file.Path {
+            if (throwOnPath) throw IllegalStateException("config layer unavailable")
+            return file.toPath()
+        }
+
+        /** Seeds the file directly, bypassing [save] — used to model "a previous run already wrote it". */
+        fun seedFile(text: String) {
+            file.writeText(text, Charsets.UTF_8)
+        }
+
+        /** Corrupts the helper with a stale in-memory value that the file does not have. */
+        fun seedStaleView(key: String, value: Any) {
+            staleView[key] = value
+        }
     }
 }

@@ -61,33 +61,51 @@ internal object FoliaUpdateNotice {
     // ------------------------------------------------------------------ storage ----
 
     /**
-     * Reads the persisted marker. Returns null when absent **or unreadable**, and the
-     * `ClassCastException` trap documented in [FoliaConfigGroups] applies here too: the stored value
-     * must be taken as `Any?` so the host's cast cannot be inserted at the call site.
+     * Reads the persisted marker from **disk**, not from the host's cached helper.
      *
-     * Never throws — a broken config layer must not be able to break plugin start-up.
+     * ## Why disk (v0.5.0 hotfix, found on a real machine)
+     *
+     * The first implementation used `ConfigHelper.get(key, default)`. A restart with
+     * `{"updateNoticeShownVersion":"0.5.0"}` already on disk **still showed the notice**: the host's
+     * `createConfigManager().getConfig()` hands back a helper whose in-memory view can predate the
+     * file (the same defect [FoliaConfigSync] was rewritten around in v0.4.12 — see its class doc:
+     * "`getConfig()` 返回缓存"). A `get` that misses returns the default, which is indistinguishable
+     * from "never shown".
+     *
+     * The file is the only reliable source, so this reads it the same way [FoliaConfigSync] does.
+     * `ConfigHelper.getConfigPath()` still comes from the helper — it is the one thing that must be
+     * asked of the host — but the VALUE is parsed from the raw JSON text.
+     *
+     * Never throws: a broken config layer must not be able to break plugin start-up.
      */
     fun readNoticedVersion(helper: ConfigHelper?): String? {
         val config = helper ?: return null
         return runCatching {
-            @Suppress("UNCHECKED_CAST")
-            val raw: Any? = config.get<Any?>(KEY_NOTICED_VERSION, null)
-            (raw as? String)?.takeIf { it.isNotBlank() }
+            val file = config.getConfigPath().toFile()
+            if (!file.isFile) return null
+            val text = file.readText(Charsets.UTF_8)
+            if (text.isBlank()) return null
+            // A flat root-level string member; Json.stringField is the same parser the line protocol
+            // uses (it also validates escapes rather than returning a plausible-but-wrong value).
+            Json.stringField(text, KEY_NOTICED_VERSION)?.takeIf { it.isNotBlank() }
         }.getOrNull()
     }
 
     /**
-     * Writes the marker. Returns whether it reached disk.
+     * Writes the marker through the host helper (which owns the file) and **verifies it landed**.
      *
-     * The caller only shows the notice once, so the write has to be attempted **after** the toast
-     * succeeded; a `false` here means the next start will show it again, which is the lesser evil
-     * compared with a notice that silently never appears.
+     * The read-back is not paranoia: the whole point of this feature is "exactly once", and a
+     * `save()` that returns true while the value is not actually readable is precisely the failure
+     * that shipped in the first 0.5.0 build. Verification goes through [readNoticedVersion], so it
+     * checks the same path the next start-up will use.
      */
     fun writeNoticedVersion(helper: ConfigHelper?, version: String): Boolean {
         val config = helper ?: return false
         return runCatching {
             config.set(KEY_NOTICED_VERSION, version)
-            config.save()
+            if (!config.save()) return false
+            // Confirm through the DISK path; a mismatch means the next start would show it again.
+            readNoticedVersion(config) == version
         }.getOrDefault(false)
     }
 }
