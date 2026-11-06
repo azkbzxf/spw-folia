@@ -258,6 +258,7 @@
   "subtitle": {
     "hideTranslationSubtitle": false,
     "subtitleContentMode": "translation",
+    "subtitleOverlayLayout": "translation",
     "subtitleOverlayOpacity": 0.6,
     "subtitleOverlayBackground": true,
     "subtitleUpcomingLyricsBlur": true,

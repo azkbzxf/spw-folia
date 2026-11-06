@@ -23,7 +23,8 @@
 | `web/`（Folia 产物） | 上游 Folia + 本仓库的暂存脚本 | 见 §2 |
 | 打包与装配 | `packaging/` | `build-package.sh` + `assemble-release.py`（见 [`release.md`](release.md)） |
 
-上游 Folia 源码：<https://github.com/chthollyphile/folia-major>，版本 **0.7.25**（tag `v0.7.25`）。
+上游 Folia 源码：<https://github.com/chthollyphile/folia-major>，版本 **0.7.26**（tag `v0.7.26`，
+commit `cc6226e464050a456a2913e062374f23d3844cc5`）。
 我们没有修改 Folia 源码，因此 Folia 部分的对应源码就等于上游该 tag 加上我们的构建配方。
 
 ### 1.2 源码提供（SOURCE-OFFER）
@@ -31,14 +32,17 @@
 包内 `licenses/SOURCE-OFFER.md` 是面向分发接收者的书面说明，必须随包发出，不得删改。
 如果你分发的是二进制，而接收者从上述位置拿不到源码，你有义务提供对应源码（AGPL-3.0 §6 / §13）。
 
-> **当前待修**：`packaging/licenses-src/NOTICE.md` 与 `SOURCE-OFFER.md` 仍写
-> "folia-major 0.7.22 / commit `1f6d0f46…`"，而内嵌的已是 **0.7.25**。这是许可证文件里的事实错误，
-> 下一次发版前必须把上游 tag/commit 改对，再跑 `bash packaging/build-package.sh` 同步 `packaging/licenses/`。
-> 改真源（`packaging/licenses-src/`），不要直接改生成目录 `packaging/licenses/`。
+> **这条坑踩过一次，记在这里**：`packaging/licenses-src/NOTICE.md` 与 `SOURCE-OFFER.md` 曾长期写着
+> "folia-major 0.7.22 / commit `1f6d0f46…`"，而当时内嵌的已经是 0.7.25 —— 换了上游树却没同步这两份
+> 手写声明，许可证文件里就留下了事实错误（还有 `THIRD-PARTY.md` 的版本列与样式数说明）。
+> **v0.4.19 已把它们订正到 0.7.26 / `cc6226e4…`**，现在这三份声明与实际内嵌版本一致。
+> 教训是：**换上游树时必须同时改这三份手写声明**，它们不会跟着 `package.json` 自动变；
+> 而 `packaging/licenses/` 是生成目录，改真源（`packaging/licenses-src/`）再跑
+> `bash packaging/build-package.sh` 同步，不要直接改生成物。
 
 ## 2. `web/` 的来源与改动
 
-`web/` 是 Folia 0.7.25 的**生产构建产物**（OBS 浏览器源入口），原样分发：
+`web/` 是 Folia 0.7.26 的**生产构建产物**（OBS 浏览器源入口），原样分发：
 
 - **唯一改动**是 `index.html` 删除了 service-worker 注册标签与 manifest 链接——插件不分发
   service worker，留着会让旧的 SW 劫持 `/preview.html`。

@@ -17,6 +17,7 @@ import LumiereSettingsPanel from '@/components/visualizer/lumiere/LumiereSetting
 import HanabiSettingsPanel from '@/components/visualizer/hanabi/HanabiSettingsPanel';
 import MachiSettingsPanel from '@/components/visualizer/machi/MachiSettingsPanel';
 import NebbiaSettingsPanel from '@/components/visualizer/nebbia/NebbiaSettingsPanel';
+import CadenzaSettingsPanel from '@/components/visualizer/cadenza/CadenzaSettingsPanel';
 import PendoloSettingsPanel from '@/components/visualizer/pendolo/PendoloSettingsPanel';
 import { MonetSettingsPanel } from '@/components/visualizer/monet/MonetSettingsPanel';
 import { BEAT_EFFECT_IDS, type BeatEffectDef } from '@/components/../services/beatFx/beatEffects';
@@ -168,6 +169,22 @@ export const STYLE_ENTRIES: StyleEntry[] = [
                     { key: 'bump', nameKey: 'options.beatEffectPart_nebbiaBump' },
                 ],
             },
+            // 0.7.26 舞潮踏拍: the aquarium's own beat reaction, off Beat This!' beats (`source: 'beats'`).
+            // One effect, four parts — the jellyfish pulse, the seaweed sway, the row of big bubbles,
+            // the spotlight's pool — each with its own strength slider, so the `parts` keys are part of
+            // the declaration. Copied verbatim from nebbia/entry.tsx (id, i18n keys, source, parts).
+            {
+                id: BEAT_EFFECT_IDS.nebbiaAquaBeat,
+                nameKey: 'options.beatEffect_nebbiaAquaBeat',
+                descKey: 'options.beatEffect_nebbiaAquaBeatDesc',
+                source: 'beats',
+                parts: [
+                    { key: 'jelly', nameKey: 'options.beatEffectPart_nebbiaJelly' },
+                    { key: 'weed', nameKey: 'options.beatEffectPart_nebbiaWeed' },
+                    { key: 'bubble', nameKey: 'options.beatEffectPart_nebbiaBubble' },
+                    { key: 'spot', nameKey: 'options.beatEffectPart_nebbiaSpot' },
+                ],
+            },
         ],
     },
     {
@@ -184,6 +201,10 @@ export const STYLE_ENTRIES: StyleEntry[] = [
         labelKey: 'ui.visualizerCadenze',
         labelFallback: '心象',
         thumb: stylePreviewUrl('cadenza'),
+        // 0.7.26 (#929): 心象 got a settings panel for the first time — a render-only group (the
+        // 渲染 group's 分辨率 row; its text canvas is 2D, so no antialias row). Until this release
+        // cadenza and still were the two styles with no panel at all; now only 静止 has none.
+        renderSettingsPanel: panel(CadenzaSettingsPanel),
     },
     {
         mode: 'partita',

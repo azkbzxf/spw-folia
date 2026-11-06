@@ -3,7 +3,7 @@
 本文只讲**现在怎么打包、怎么发布**：发布物由什么组成、构建顺序、组装命令、体积门限、发版检查表、
 打包布局验收。它不记录"某个版本怎么一步步做出来"——那属于 Git 历史与 GitHub Releases。
 
-当前版本 **v0.4.18**（内嵌 Folia 0.7.25，17 种样式）。产物体积、条数与哈希见文末台账。
+当前版本 **v0.4.19**（内嵌 Folia 0.7.26，17 种样式）。产物体积、条数与哈希见文末台账。
 
 ---
 
@@ -51,15 +51,19 @@ packaging/                      # 暂存树，最终成为 .spmod 的 payload
 
 **不要**把 `packaging/tools/`、`packaging/out/`、`packaging/testdata/` 或任何报告打进 `.spmod`。
 
-当前 **v0.4.18** 的 payload（解压后）：
+当前 **v0.4.19** 的 payload（解压后）：
 
 | 区域 | 文件数 | 字节 |
 | --- | --- | --- |
-| `web/`（完整 Folia 产物 + 设置岛 + 2 份脚本审计副本） | 3,891 | 33,904,033 |
+| `web/`（完整 Folia 产物 + 设置岛 + 2 份脚本审计副本） | 3,890 | 34,803,925 |
 | `native/`（exe 178,688 B + config + 3 个 dll） | 5 | 1,116,126 |
-| `licenses/` | 7 | 49,757 |
-| `classes/`（Gradle 构建的插件类与元数据） | 104 | 829,445 |
-| **合计** | **4,007** | **35,899,361**（压缩后 15,464,000 B） |
+| `licenses/` | 7 | 49,822 |
+| `classes/`（Gradle 构建的插件类与元数据） | 104 | 829,489 |
+| **合计** | **4,006** | **36,799,362**（压缩后 15,733,345 B） |
+
+> 上游从 0.7.25 换到 0.7.26 后 `web/` 少了一个文件、总量略增：CSS 从 249,012 B 降到 227,655 B，
+> 而雾笺新增的水族箱 / 玻璃相关代码与素材更大。`classes/` 的字节随 Kotlin 源码微调而变
+> （版本号字符串也占字节）。压缩后 15,733,345 B 仍在 16 MB 硬门限内。
 
 `web/` 必须是**完整**的 Folia 产物：Folia 按样式动态 `import()` 渲染器 chunk
 （`assets/VisualizerTempera-*.js` …），只拷冷启动闭包会让非默认样式黑屏
@@ -148,7 +152,7 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
 5. 用 `assemble-release.py` 出包（§3），`licenses/` 必须留在包内。
 6. 在真实 SPW 安装里冒烟组装好的 `.spmod`：菜单 → 全屏、首次运行设置、ESC、切歌、暂停/跳转、
    「出现问题」能打开日志文件夹。
-7. 记录到 release notes：插件版本、宿主 exe 的 sha256、Folia 版本（0.7.25）、
+7. 记录到 release notes：插件版本、宿主 exe 的 sha256、Folia 版本（0.7.26）、
    WebView2 SDK/NuGet 版本（1.0.4314.35）与实测 Runtime 版本、设置岛构建。
 8. 三件资产上传（`.spmod` + `.spmod.json` + `SHA256SUMS.txt`），再
    `gh release download` 回读复算 sha256，与本地逐字节一致才算闭环。
@@ -203,16 +207,17 @@ Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（
 组件清单、三类归属（真实分发 / 行为参考 / 本项目原创）与源码提供声明见
 [`docs/licensing.md`](licensing.md) 与 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
 
-> **待补齐**：`packaging/licenses-src/NOTICE.md` 与 `SOURCE-OFFER.md` 目前仍写
-> "Folia 0.7.22 / commit `1f6d0f46…`"，而实际内嵌的是 **0.7.25**。下一次发版前应把上游 tag 与
-> commit 改成 0.7.25，并重新跑 `build-package.sh` 让 `licenses/` 同步。
+> **已订正（v0.4.19）**：`packaging/licenses-src/NOTICE.md` 与 `SOURCE-OFFER.md` 曾写
+> "Folia 0.7.22 / commit `1f6d0f46…`"，而当时内嵌的是 0.7.25 —— 换了上游树却没同步手写声明。
+> 现在这两份与 `THIRD-PARTY.md` 都已改成 **0.7.26 / `cc6226e4…`**，并重新跑过 `build-package.sh`
+> 让 `licenses/` 同步。**换上游版本时这三份声明要一起改**，细节见 [`licensing.md`](licensing.md) §4。
 
 ## 附录：发布产物台账
 
 只保留**仍可下载**的版本，以及当前版本与已下架版本的行。早期版本（v0.1.0–v0.4.5）的 Release 已下线，
 其字节数与哈希见 Git 历史；`local only` 的版本从未上传，改动并入后续发布。
 
-**当前发布版本是 v0.4.18。**
+**当前发布版本是 v0.4.19**（下面台账里 v0.4.19 那一行的数字在发布时补，见方框里的填法）。
 
 | 版本 | `.spmod` 字节 | 条目 | sha256 | 发布状态 |
 | --- | --- | --- | --- | --- |
@@ -222,7 +227,8 @@ Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（
 | v0.4.15 | 15,443,035 | 3,983 | `9eb6763c7ad49707ccdb4f24b57cfd4e64a79a00ba3a837871c343b4fe26e5d9` | 2026-11-03 发布 |
 | v0.4.16 | 15,462,458 | 4,007 | `4d3cde0fb53d6282b6edb5806180afb055293e5dcdf6e671ddf9fafae03bc25d` | 2026-11-03 发布 |
 | v0.4.17 | 15,464,000 | 4,007 | `9ff9f66ebf9ff511c92a1ddede57a962be2266e36ec760c25a5af4b5afe48696` | 2026-11-04 发布 |
-| **v0.4.18** | **15,464,554** | **4,007** | `19816c84b3252ffc77e78d32f5897aa6f02ca091609fe8dd5abe8493421354b2` | **2026-11-04 发布（当前）** |
+| v0.4.18 | 15,464,554 | 4,007 | `19816c84b3252ffc77e78d32f5897aa6f02ca091609fe8dd5abe8493421354b2` | 2026-11-04 发布（内嵌 Folia 0.7.25） |
+| **v0.4.19** | **15,733,345** | **4,006** | `057c5836f8693d8dca9ddcd54868c2d8025cb4d7a91ed678f89420300f798583` | **当前（内嵌 Folia 0.7.26，17 种样式）** |
 
 台账里"缺行"的版本说明，免得读起来像缺页：
 
@@ -240,9 +246,10 @@ Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（
 校验一个下载到的产物：
 
 ```bash
-sha256sum spw-folia-0.4.17.spmod        # 对比上表与 Release 附带的 SHA256SUMS.txt
+sha256sum spw-folia-0.4.19.spmod        # 对比上表与 Release 附带的 SHA256SUMS.txt
 node packaging/tools/verify-layout.mjs  # 干净解包上的打包布局验收
 ```
 
 各版本的详细更新内容在 GitHub Releases（正文即 [`docs/release-notes-v0.4.18.md`](release-notes-v0.4.18.md)
-这类文件），失败路径的技术细节在 `docs/lessons.md` 与 `docs/postmortem-v0.4.13.md`。
+这类文件；当前版本对应 [`docs/release-notes-v0.4.19.md`](release-notes-v0.4.19.md)），
+失败路径的技术细节在 `docs/lessons.md` 与 `docs/postmortem-v0.4.13.md`。

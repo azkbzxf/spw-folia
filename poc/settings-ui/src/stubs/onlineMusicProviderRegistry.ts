@@ -46,6 +46,10 @@ export const keepProviderSongAudio = async (_song: SongResult, _url: string): Pr
 
 export const canPlayOnlineMusicSong = (_song: SongResult): boolean => false;
 
+/** 0.7.26 (`omni.ts` imports it): the provider would sound the song in a player of its own, so the
+ *  app only hands out a link. No provider is registered here, so nothing can. */
+export const canPlaySongExternally = (_song: SongResult): boolean => false;
+
 export const requireOnlineMusicProviderForSong = (song: SongResult): OnlineMusicProvider => {
     throw new Error(`[spw-folia] no online music provider for song ${String(song?.id)} in the injected page`);
 };

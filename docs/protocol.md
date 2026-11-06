@@ -215,6 +215,12 @@ unknown 绝不表述成「缺失」。
 - config 构建由页面内 **settings publisher** 完成：
   `inputs(settings, lyrics, state, track, coverColors, theme)` → `ObsBrowserSourceConfig`
   （字段同 Folia `src/types/obsBrowserSource.ts`，见 [`docs/folia-spec/runtime-contracts.md`](folia-spec/runtime-contracts.md)）。
+- **字幕行组合 `subtitleOverlayLayout` 走 config**（v0.4.19 / 上游 0.7.26）：它是设置树
+  `subtitle.subtitleOverlayLayout` 的值，publisher 原样写进 config 的同名字段（缺省用上游
+  `DEFAULT_SUBTITLE_OVERLAY_LAYOUT`）。形状是上游 `SubtitleOverlayLayout`（`'current' | 'translation' |
+  'romanization' | 'next'` 用 `+` 拼接，如 `'current+translation'`）。它**只在页面与宿主之间流动**：
+  插件既不读也不写这个字段，config 由页面构建、宿主只转发。改它会让 `configSignature` 变化并正好推一次
+  新 config。与它相邻的 `subtitleContentMode` 是**旧字段**，本页只发 `'translation'`。
 - 主题由页面从封面图像 canvas 取色推导（暗/亮、主色、次色、背景色）；无封面用默认暗色主题。
 - 节流：settings/lyrics/theme 变化时重算 config（≤10Hz）；`state` 不进 config（走 clock 事件）。
 

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-release="0.4.18">
+<html lang="zh-CN" data-release="0.4.19">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>spw-folia — 把 Folia 的歌词可视化带进 Salt Player for Windows</title>
-<meta name="description" content="spw-folia 是 Salt Player for Windows 的 Folia 歌词可视化插件：内嵌上游 Folia 0.7.25 的真实渲染器，17 种歌词样式跟着正在播放的音乐实时绘制，也可以把歌词透明地叠在桌面上。纯本地、不联网、AGPL-3.0。" />
+<meta name="description" content="spw-folia 是 Salt Player for Windows 的 Folia 歌词可视化插件：内嵌上游 Folia 0.7.26 的真实渲染器，17 种歌词样式跟着正在播放的音乐实时绘制，也可以把歌词透明地叠在桌面上。纯本地、不联网、AGPL-3.0。" />
 <meta name="theme-color" content="#050509" />
 <meta property="og:title" content="spw-folia — 把 Folia 的歌词可视化带进 Salt Player for Windows" />
 <meta property="og:description" content="内嵌上游 Folia 的真实渲染器，17 种歌词样式，底部播放条与点画面分区、透明叠加到桌面、四态自检。纯本地运行。" />
@@ -79,7 +79,7 @@
         <li>AGPL-3.0</li>
         <li>Windows 10 / 11 x64</li>
         <li>SPW ≥ 1.19.0</li>
-        <li>内嵌 Folia 0.7.25</li>
+        <li>内嵌 Folia 0.7.26</li>
         <li>不联网</li>
       </ul>
     </div>
@@ -93,7 +93,7 @@
       <p class="kicker"><span>01</span>真身</p>
       <h2 class="chapter__title" id="real-title">你看到的<br /><em>是真正的 Folia</em></h2>
       <p class="chapter__lede">
-        插件内嵌上游 <b>Folia 0.7.25</b> 的 web 产物：转场、辉光、逐字时间轴、动态背景，
+        插件内嵌上游 <b>Folia 0.7.26</b> 的 web 产物：转场、辉光、逐字时间轴、动态背景，
         全都是 Folia 自己的渲染器在画。宿主进程只做一件事之外的杂活 —— 开窗口、合成透明、
         采样音频、搬运播放状态。
       </p>
@@ -501,6 +501,19 @@
             <span class="log__when">本次发布</span>
           </div>
           <ul>
+            <li>跟进上游 <b>Folia 0.7.26</b>：多种歌词样式重做了观感（町景的辉光、雾笺的窗外与玻璃），各样式新增「<b>分辨率 / 抗锯齿</b>」一行，默认跟随全局挡位。</li>
+            <li>「<b>心象</b>」第一次有了自己的设置面板。</li>
+            <li>字幕新增「<b>副字幕行数 / 内容</b>」：每行显示当前歌词、下一句还是译文，一行到三行可选。</li>
+            <li>「雾笺」新增窗外场景（<b>水族馆</b>）与凝露 / 积雪玻璃，以及随拍的海月水母。</li>
+            <li>修复 <code>--force</code> 重采样式小图的脚本（v0.4.13 起一直失败）。</li>
+          </ul>
+        </li>
+        <li class="log__item reveal">
+          <div class="log__head">
+            <span class="log__v">v0.4.18</span>
+            <span class="log__when">issue #19</span>
+          </div>
+          <ul>
             <li>「町景」的三维场景可以直接拖动旋转，与「点画面中央暂停 / 左右切歌」共存：拖动不再被当成点击。</li>
             <li>本宣传站全面重做 —— 你正在看的这一页。</li>
           </ul>
@@ -582,7 +595,7 @@
     <p>
       可视化器、设置界面与 web 产物来自
       <a href="https://github.com/chthollyphile/folia-major" target="_blank" rel="noopener">Folia</a>
-      （作者 chthollyphile，AGPL-3.0，本插件内嵌 0.7.25）；宿主为
+      （作者 chthollyphile，AGPL-3.0，本插件内嵌 0.7.26）；宿主为
       <a href="https://saltplayer.com/" target="_blank" rel="noopener">Salt Player for Windows</a>
       的创意工坊插件，API 作者 Moriafly。本页截图与视频均由插件真实渲染后用无头浏览器录制，
       没有任何后期特效；页面本身不联网、不加载任何外部字体或脚本。

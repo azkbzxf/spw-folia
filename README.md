@@ -101,7 +101,7 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。
 
 ## 版本
 
-当前版本 **v0.4.18**（2026-11-04）。每个版本的 `.spmod` 与 SHA-256 校验值都在
+当前版本 **v0.4.19**（2026-11-06）。每个版本的 `.spmod` 与 SHA-256 校验值都在
 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)，变更说明随各自的 Release 发布。
 
 v0.4.6 之后的一段时间有过一批只在本地构建、从未发布的版本（v0.4.7 ~ v0.4.12），
@@ -109,7 +109,7 @@ v0.4.6 之后的一段时间有过一批只在本地构建、从未发布的版�
 v0.4.13 发布后当天因一个严重缺陷被**下架**，由 v0.4.14 修复替代。
 **下载时请只认 [Releases](https://github.com/azkbzxf/spw-folia/releases) 页面上仍然存在的版本。**
 
-各版本的详细变更见 [docs/release-notes-v0.4.18.md](docs/release-notes-v0.4.18.md) 与
+各版本的详细变更见 [docs/release-notes-v0.4.19.md](docs/release-notes-v0.4.19.md) 与
 Releases 页面。
 
 ## 从源码构建
@@ -167,7 +167,7 @@ python packaging/tools/assemble-release.py ^
 ## 致谢
 
 - [Folia](https://github.com/chthollyphile/folia-major)，作者 chthollyphile（AGPL-3.0）——
-  可视化器、设置界面与 web 产物都来自 Folia 的工作（v0.7.25）。
+  可视化器、设置界面与 web 产物都来自 Folia 的工作（v0.7.26）。
 - [Salt Player for Windows](https://saltplayer.com/) 创意工坊插件 API，作者 Moriafly。
 - [spw-island（Dynamic Lyrics Island for SPW）](https://github.com/gaboron/spw-island) ——
   仅作为行为参考（GPL-3.0），未复制任何代码。

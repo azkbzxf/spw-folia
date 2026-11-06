@@ -122,7 +122,7 @@ The full dependency matrix and crash troubleshooting live in
 
 ## Versions
 
-The current version is **v0.4.18** (2026-11-04). The `.spmod` and its SHA-256 checksum for every
+The current version is **v0.4.19** (2026-11-06). The `.spmod` and its SHA-256 checksum for every
 release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases), together with that
 release's notes.
 
@@ -133,7 +133,7 @@ it. **Download only from versions that still exist on the
 [Releases](https://github.com/azkbzxf/spw-folia/releases) page.**
 
 Detailed notes for the current release live in
-[docs/release-notes-v0.4.18.md](docs/release-notes-v0.4.18.md).
+[docs/release-notes-v0.4.19.md](docs/release-notes-v0.4.19.md).
 
 ## Build from source
 
@@ -194,7 +194,7 @@ For maintainers: [architecture](docs/architecture.md) · [protocol](docs/protoco
 ## Credits
 
 - [Folia](https://github.com/chthollyphile/folia-major) by chthollyphile (AGPL-3.0) — the
-  visualizer, the settings UI and the web output all come from Folia's work (v0.7.25).
+  visualizer, the settings UI and the web output all come from Folia's work (v0.7.26).
 - [Salt Player for Windows](https://saltplayer.com/) workshop plugin API, by Moriafly.
 - [spw-island (Dynamic Lyrics Island for SPW)](https://github.com/gaboron/spw-island) — used as a
   behavioural reference only (GPL-3.0); no code was copied.

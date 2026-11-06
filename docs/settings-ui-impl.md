@@ -1,13 +1,13 @@
 # 注入式设置 UI 与实时预览
 
 设置窗口不是清洁室重写：它直接复用 Folia 自己的 React 组件（`StudioWindow` / kit /
-`VisPlaygroundSettingsPanel` / 17 个样式设置面板 / 背景卡片 / zh-CN 文案），Vite 用别名 `@/` 指向
+`VisPlaygroundSettingsPanel` / 16 个样式设置面板 / 背景卡片 / zh-CN 文案），Vite 用别名 `@/` 指向
 Folia 源码，本工程只加一层适配（store、bridge、publisher、Stage 预览、样式 registry 壳）。
 
 本文覆盖两块密不可分的内容：**设置岛本身的构建与契约**（§1–§8）与**左侧大预览的 iframe 机制**
 （§9）。两者同属一个 bundle、共用同一条 config 数据流。
 
-上游 Folia **0.7.25**（AGPL-3.0），源码在 `work/folia/folia-major-main`。
+上游 Folia **0.7.26**（AGPL-3.0），源码在 `work/folia/folia-major-main`。
 
 ## 1. 架构
 
@@ -78,7 +78,8 @@ pnpm build           # = vite build，产物在 dist/
 | 行组件与格式化 `percent()`/`times()`、SliderRow 拖动提交语义 | `src/components/visualizer/panelRows.tsx` |
 | 智能动感模式卡片 | `src/components/visualizer/SmartBeatSettingsCard.tsx` |
 | 动感效果组 | `src/components/visualizer/BeatEffectsGroup.tsx` + `src/services/beatFx/beatEffects.ts` |
-| 样式设置面板 | `settings.tsx` 内各 entry 的 `renderSettingsPanel` + `sonnet/`、`tempera/`、`lumiere/`、`hanabi/`、`machi/`、`nebbia/`、`monet/`、`pendolo/`（cadenza/still 无面板 → 空态「这个样式没有参数」）。**现行 17 样式里 15 个带面板** |
+| 样式设置面板 | `settings.tsx` 内各 entry 的 `renderSettingsPanel` + `sonnet/`、`tempera/`、`lumiere/`、`hanabi/`、`machi/`、`nebbia/`、`monet/`、`pendolo/`、`cadenza/`（`still` 无面板 → 空态「这个样式没有参数」）。**现行 17 样式里 16 个带面板**（0.7.26 起心象也有了自己的渲染面板） |
+| 歌词画布的「渲染」两行（#929） | `src/components/visualizer/renderQuality/LyricRenderQualityRows.tsx`；各面板自己把它放进一个 `options.lyricRenderSection` 组。**本轮不加裁剪**：它读的全局挡位由本页 store 提供（§3.3） |
 | 背景设置卡片 | `src/components/visualizer/backgrounds/{common,latent,monet,nomand,sora}/*SettingsCard.tsx` |
 | 全部默认值（tuning、smartBeat、背景 tuning、阈值） | `src/types.ts` 的 `DEFAULT_*_TUNING` / `DEFAULT_SMART_BEAT_SETTINGS` 等 |
 | 中文文案 | `src/i18n/locales/zh-CN.ts`（纯数据，直接进 i18next resources） |
@@ -107,10 +108,10 @@ pnpm build           # = vite build，产物在 dist/
 
 | 桩 | 被谁导入 | 行为 |
 |---|---|---|
-| `useVisualizerSettingsStore` | SmartBeatSettingsCard / BeatEffectsGroup | 转发到本地 store（`smartBeat`、`handleSetSmartBeat`），两个原卡片零改动可用 |
+| `useVisualizerSettingsStore` | SmartBeatSettingsCard / BeatEffectsGroup / 各样式面板的 `LyricRenderQualityRows` | 转发到本地 store（`smartBeat`、`handleSetSmartBeat`、`lyricRenderQuality`、`handleSetLyricRenderQuality`），原卡片零改动可用 |
 | `modelAvailability` | BeatEffectsGroup | `modelsPresent()` 返回全 false；订阅 no-op（webview 里没有模型文件，等价于 Folia 缺模型时的降级表现） |
 | `useSmartBeatAvailability` | SmartBeatSettingsCard | 返回 `'ready'`（与 Folia 桌面版开着模型的形态一致；网页内实际不跑模型，见 §7） |
-| `usePlayerChromeSettingsStore` | VisPlaygroundSettingsPanel | `{enablePlayerPageNativeBlur:false, playerChromeVisibilityMode:'auto'}` |
+| `usePlayerChromeSettingsStore` | VisPlaygroundSettingsPanel / 雾笺面板 | `enablePlayerPageNativeBlur:false`、`playerChromeVisibilityMode:'auto'`，外加**跟随本页 store 双向镜像的 `transparentPlayerBackground`**——0.7.26 的雾笺面板用它判断「播放页是不是透明的」（真值是色键窗口，由 `model/settings.ts` 拥有），硬编码 `false` 会让面板上的说明文字与实际相反 |
 | `useVisualizerAssetStore` / `useStatusMessageStore` | monet / cappella / tempera 面板 | 空资产包、无消息（上传能力降级） |
 | `backgrounds/registry` | 背景 tab | 6 个内置背景 entry 壳，`renderSettingsPanel` 直接渲染 Folia 真卡片 |
 | `preview/BackgroundPicture` | 背景 tab | Folia glyph fallback（深色卡片 + 模式字形） |
@@ -146,7 +147,8 @@ pnpm build           # = vite build，产物在 dist/
   "appearance": { "fontStyle": "sans", "fontScale": 1, "fontWeight": null, "visualizerOpacity": 1, "customFontFamily": null },
   "subtitle": {
     "hideTranslationSubtitle": false,
-    "subtitleContentMode": "translation",   // translation|romanization|both|none
+    "subtitleContentMode": "translation",   // translation|romanization|both|none（本页只发 translation）
+    "subtitleOverlayLayout": "translation", // 副字幕行组合；见下
     "subtitleOverlayOpacity": 0.6,
     "subtitleOverlayBackground": true,
     "subtitleUpcomingLyricsBlur": true,
@@ -159,9 +161,32 @@ pnpm build           # = vite build，产物在 dist/
   },
   "lyricMotion": 0.8,                  // 0.5–1.2（树里已有；本窗口暂无控件）
   "textureResolution": 1.5,            // 0.5–4.0，0.25 步进（样式面板内另有 per-style 同名值）
+  "lyricRenderQuality": { "scale": 1, "antialias": "auto" },   // #929 全局挡位；见下
   "showPlaybackBar": true              // v0.4.17：页面拥有的字段，见 §4.1.3
 }
 ```
+
+两个 0.7.26 起的字段值得单独说：
+
+- **`subtitle.subtitleOverlayLayout`** —— 副字幕「几行 + 每行内容」。类型是上游
+  `SubtitleOverlayLayout`（`'translation'` / `'current+translation'` / `'current+next+translation'` …
+  由 `'current' | 'translation' | 'romanization' | 'next'` 用 `+` 拼成），默认
+  `DEFAULT_SUBTITLE_OVERLAY_LAYOUT = 'translation'`。读入要过三道关：上游
+  `parseSubtitleOverlayLayout` 只认合法组合，`sanitizeSubtitleOverlayLayout` 把残留的 `romanization`
+  行换成 `translation` / `next`（插件不发罗马音），`resolveSubtitleOverlayLayout` 再把旧树（没有这个键）
+  折算成默认值或 `none` → `'current+next'`。必须校验的理由：面板里的
+  `getSubtitleOverlayRows(layout)` 直接 `layout.split('+')`，非法值进去就抛，而设置岛没有
+  ErrorBoundary —— 一次抛错就是整个岛白屏。
+  它**随 `ObsBrowserSourceConfig` 下发**（publisher 里 `subtitle.subtitleOverlayLayout ?? 默认值`），
+  因此进 `configSignature`，改行组合会正好推一次新 config。
+- **`lyricRenderQuality`** —— #929 的**全局**挡位，`{scale: 0.5|0.75|1|1.5|2, antialias: 'auto'|'on'|'off'}`，
+  默认 `{1, 'auto'}`。**本窗口没有它的控件**：上游把它放在「动画与性能」页（`GraphicsPage.tsx` 的
+  `PERFORMANCE` 组），那一页本插件不注入。它存在的唯一理由是让各样式面板的 `LyricRenderQualityRows`
+  有东西可读——那两行的说明文字直接取全局当前值（`formatLyricRenderScale(global.scale)`、
+  `LYRIC_ANTIALIAS_LABEL_KEYS[global.antialias]`），store 里缺这个字段就会 `TypeError` 白屏。
+  它**不随 config 下发**：上游 `ObsBrowserSourceConfig` 没有这个字段，播放页读的是各样式 tuning 里的
+  覆盖值；没有控件也就没有可发布的用户选择。本轮保留 setter（`handleSetLyricRenderQuality`，与上游同名
+  同归一化）是为了将来真加控件时不改调用方。
 
 范围与语义（面板内实际控件）：
 
@@ -344,8 +369,13 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
 - `styleDraft = { tuning: styleTunings[styleId], change: setStyleTuning, reset: resetStyleTuning }`，
   与 Folia `useTuningDrafts` 的 `StyleDraft` 接口一致；拖动滑杆时 `onSliderPointerDown/Commit` 交给
   面板自己的提交逻辑（`panelRows.SliderRow` 只在 release 时提交）。
-- 每个样式的默认值全部来自 Folia `src/types.ts`，见 [`docs/folia-spec/tunings.md`](folia-spec/tunings.md)；
-  `model/settings.ts:STYLE_TUNING_DEFAULTS` 直接引用同一批常量。
+- 每个样式的默认值全部来自 Folia `src/types.ts`（花火/町景/雾笺的在自己的 `<mode>/types.ts`），见
+  [`docs/folia-spec/tunings.md`](folia-spec/tunings.md)；`model/settings.ts:STYLE_TUNING_DEFAULTS`
+  直接引用同一批常量——**上游给 tuning 加字段时这里不用改**，defaults-first 合并会把老树缺的键补齐。
+- **嵌套字段是浅合并的例外区**：`mergeTuning.ts` 的合并只到第一层，扁平字段（如 0.7.26 新增的
+  `render`）没问题，嵌套对象（`machi.quality`）整块以树里的值为准。若上游给了读时迁移
+  （`machi/machiTuning.ts` 的 `normalizeMachiQuality` 靠 `quality.revision` 判别老存档），
+  **迁移由上游负责，本页不要再写一份**。
 
 ## 6. 配置发布器（publisher）
 
@@ -366,7 +396,7 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
   - 外观：`lyricsFontScale`/`subtitleFontScale`（clamp 0.85–1.4）、`visualizerOpacity`/
     `subtitleOverlayOpacity`（clamp 0.2–1）、`staticMode:false`、`hideTranslationSubtitle`、
     `showSubtitleTranslation = !hide && contentMode!=='none'`、`subtitleContentMode`、
-    `subtitleOverlayBackground` 等。
+    `subtitleOverlayLayout`（0.7.26：设置树原值，缺省上游默认）、`subtitleOverlayBackground` 等。
   - `updatedAt`：每次推送加时间戳；**去重签名**用去掉 `updatedAt` 的 JSON，签名不变不推。
 - 歌词：插件给的每行 `{startMs,endMs,main,sub?,cells?}` → Folia
   `Line{words,startTime,endTime,fullText,translation}`；没有逐字时间时按字符均分回退
@@ -389,15 +419,26 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
    `systemFonts`（AWT 枚举，最多 400 个家族，不持久化）里选，不走 no-op 桩。仍然降级的是 tempera
    画布图片、monet 封面/肖像、cappella 自定义表情/头像 —— 按钮存在但为 no-op。
 4. **Folium mod 扩展卡片**不渲染（无 mod）；`背景类型 → 嵌入/空` 的动态图片列表为空。
+   上游 tuning 里那套 `modKeys` / `modPatch` 白名单（`folium.visualizer.setTuning` 的读写范围）
+   同样与本页无关：`folium` 桩是空 registry，**不要为了「跟上游」去补这些声明**。
 5. **背景缩略图**是 Folia 无图时的 glyph fallback。
 6. **纹理分辨率默认显示 1.50x**（Folia 默认 1.5）。
-7. 注入层全局 CSS（kit.css/Tailwind）会作用到整个页面，但每次打开前只在 head 注入一次
-   `<style data-spw-settings-ui-css>`，与 Folia 页面自身的 Tailwind 共存（选择器均为 kit 前缀
-   `st-` / CSS 变量，实测无冲突）。
-8. 字体：`Folia Noto Serif SC` 仍由 Folia 页面自己的 `@font-face` 提供；本 bundle 不额外拉字体，
-   离线时回退系统衬线栈。
+7. **「动画与性能」页不注入**：全局 `lyricRenderQuality` 挡位因此没有控件，但字段必须留在 store 里
+   （各样式面板的「渲染」两行要读它，见 §4）。它的值恒为默认 `{1, 'auto'}` —— 也就是说样式面板上
+   「跟随全局」当前等价于「1×、用样式自己的默认抗锯齿」。
+8. **副字幕行数的「罗马音」选项在构建期剥掉**：插件只发主文本与译文（`main` / `sub`），罗马音行
+   永远取不到文本，留一个恒为空的选项就是死控件。所以 `SubtitleOverlayRowsSetting` 的两条选项列表
+   （单行 / 跟随行）各加一条 marker 校验的 `SETTINGS_SURGERY`，滤掉 `romanization`；再在 store 侧用
+   `sanitizeSubtitleOverlayLayout` 兜住上游的行为——`withSubtitleOverlayRowCount` 在从一行加到三行时
+   **会自动插入**罗马音行，只藏选项不够。副字幕「内容模式」里的罗马音 / 罗马音+翻译两个选项仍然
+   整条剥掉，见 [`docs/known-inert-settings.md`](known-inert-settings.md) §2。
 9. **AGPL-3.0**：本 bundle 编译了 Folia 的 React 组件（AGPL 代码），分发时必须随附相应源码/构建脚本
    与许可证声明（见 [`docs/licensing.md`](licensing.md)），且不得以专有条款再授权。
+10. 注入层全局 CSS（kit.css/Tailwind）会作用到整个页面，但每次打开前只在 head 注入一次
+    `<style data-spw-settings-ui-css>`，与 Folia 页面自身的 Tailwind 共存（选择器均为 kit 前缀
+    `st-` / CSS 变量，实测无冲突）。
+11. 字体：`Folia Noto Serif SC` 仍由 Folia 页面自己的 `@font-face` 提供；本 bundle 不额外拉字体，
+    离线时回退系统衬线栈。
 
 ## 8. chrome 契约（⚙ / ESC / 指针）
 

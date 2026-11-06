@@ -4,8 +4,8 @@ Bundled in the plugin distribution:
 
 | component | version | license | where | notes |
 | --- | --- | --- | --- | --- |
-| Folia web build (`folia-major`) | 0.7.25 | AGPL-3.0 | `web/**` | unmodified production build except removed PWA tags in `index.html` |
-| Folia visualizer styles (17 registered styles) | 0.7.25 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface; 0.7.22 had 15 (added 花火/hanabi), 0.7.25 adds 町景 (machi) and 雾笺 (nebbia) |
+| Folia web build (`folia-major`) | 0.7.26 | AGPL-3.0 | `web/**` | unmodified production build except removed PWA tags in `index.html` |
+| Folia visualizer styles (17 registered styles) | 0.7.26 | AGPL-3.0 | `web/assets/Visualizer*.js` | rendered through Folia's own `/obs` browser-source surface; 0.7.22 had 15 (added 花火/hanabi), 0.7.25 added 町景 (machi) and 雾笺 (nebbia), 0.7.26 keeps the same 17 and reworks what several of them draw |
 | AnimCJK stroke medians for 雾笺 (nebbia) | commit `99dba56` | Arphic Public License | `web/nebbia-strokes.json`, license texts in `web/licenses/nebbia-strokes/` | generated at build time by Folia's `dev/nebbia/nebbiaStrokesPlugin.mjs`; derivative of AnimCJK graphics data (see `web/licenses/nebbia-strokes/NOTICE.txt`). Without this file nebbia falls back to font skeleton tracing |
 | spw-folia settings UI | this repo | AGPL-3.0 | `web/settings/**` | React island; reuses Folia components |
 | spw-folia native host | this repo | AGPL-3.0 | `lib/spw-folia-host.exe` | C#, .NET Framework 4.8 |

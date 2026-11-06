@@ -21,8 +21,23 @@ import {
     DEFAULT_SORA_BACKGROUND_TUNING,
     DEFAULT_TEMPERA_TUNING,
     DEFAULT_TILT_TUNING,
+    type LyricRenderQuality,
     type SmartBeatSettings,
+    type SubtitleOverlayLayout,
 } from '@/types';
+/* 0.7.25: the bottom subtitle's row layout. The default and the validator both live upstream
+ * (`parseSubtitleOverlayLayout` is what a stored or imported value must go through), so the literal
+ * 'translation' is never retyped here. */
+import {
+    DEFAULT_SUBTITLE_OVERLAY_LAYOUT,
+    getSubtitleOverlayRows,
+    parseSubtitleOverlayLayout,
+    subtitleOverlayLayoutFromContentMode,
+} from '@/utils/lyrics/subtitleOverlayLayout';
+/* #929: the global lyric-canvas render tier lives in Folia's own settings store; this window has no
+ * control for it (upstream's is on 动画与性能, which we do not inject), so it is mirrored here at its
+ * default and handed to the reused panels through the store stub. */
+import { DEFAULT_LYRIC_RENDER_QUALITY, normalizeLyricRenderQuality } from '@/utils/lyricRenderQuality';
 import { getStyleTransparencyCompat } from './transparencyCompat';
 import { mergeTuningMap } from './mergeTuning';
 import { systemPrefersLight } from './theme';
@@ -31,6 +46,9 @@ import { systemPrefersLight } from './theme';
  * 0.7.25 町景 / 雾笺 follow the same convention: both keep their defaults next to the style. */
 import { DEFAULT_HANABI_TUNING } from '@/components/visualizer/hanabi/types';
 import { DEFAULT_MACHI_TUNING } from '@/components/visualizer/machi/types';
+/* 0.7.26 町景: `quality` gained `revision` + the 跟随全局 preset values, and the migration lives in the
+ * style's own `normalizeMachiQuality` — imported rather than reimplemented (see normalizeStyleTunings). */
+import { normalizeMachiTuning } from '@/components/visualizer/machi/machiTuning';
 import { DEFAULT_NEBBIA_TUNING } from '@/components/visualizer/nebbia/types';
 
 export type StyleMode =
@@ -175,6 +193,11 @@ export interface UploadedFontDescriptor {
 export interface SubtitleSettings {
     hideTranslationSubtitle: boolean;
     subtitleContentMode: 'translation' | 'romanization' | 'both' | 'none';
+    /** 0.7.25 副字幕行数/内容: the bottom subtitle's row layout ("current", "current+translation",
+     *  "current+next+romanization", …). Upstream's own type; `parseSubtitleOverlayLayout` there is what
+     *  validates a stored/id-synced value, and `DEFAULT_SUBTITLE_OVERLAY_LAYOUT` ('translation') is the
+     *  default this store seeds — the literal is not retyped here on purpose. */
+    subtitleOverlayLayout: SubtitleOverlayLayout;
     subtitleOverlayOpacity: number;
     subtitleOverlayBackground: boolean;
     subtitleUpcomingLyricsBlur: boolean;
@@ -199,6 +222,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
 export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
     hideTranslationSubtitle: false,
     subtitleContentMode: 'translation',
+    subtitleOverlayLayout: DEFAULT_SUBTITLE_OVERLAY_LAYOUT,
     subtitleOverlayOpacity: 0.6,
     subtitleOverlayBackground: true,
     subtitleUpcomingLyricsBlur: true,
@@ -254,11 +278,23 @@ interface SettingsState {
     /** Another style from the pool for the song that is playing (never the current one). */
     rerollVisualizerMode: () => void;
 
-    /** Folia storage keys mirrored for round-trip fidelity (no control in this window yet). */
+    /** Folia's storage keys mirrored for round-trip fidelity (no control in this window yet). */
     lyricMotion: number;
     setLyricMotion: (value: number) => void;
     textureResolution: number;
     setTextureResolution: (value: number) => void;
+
+    /** #929: the GLOBAL lyric-canvas render tier (分辨率 / 抗锯齿), read by the reused panels'
+     *  `LyricRenderQualityRows` through `stubs/useVisualizerSettingsStore` — that stub aliases Folia's
+     *  store to this one, and the rows call `formatLyricRenderScale(global.scale)`, which throws on
+     *  `undefined`. Upstream keeps the tier in 「动画与性能」(GraphicsPage); this window does not inject
+     *  that page, so there is no control here — the value stays at the upstream default and each
+     *  style's own `render` override (in its tuning bag) is what the panel lets the user change.
+     *  Not persisted (no UI writes it, so there is nothing to round-trip) and NOT published in the
+     *  config: `ObsBrowserSourceConfig` has no such field, and the player side reads the per-style
+     *  `render` from `visualizerTunings`, which is already published. */
+    lyricRenderQuality: LyricRenderQuality;
+    handleSetLyricRenderQuality: (patch: Partial<LyricRenderQuality>) => void;
 
     smartBeat: SmartBeatSettings;
     handleSetSmartBeat: (patch: { enabled?: boolean; effects?: Record<string, BeatEffectPatch> }) => void;
@@ -373,6 +409,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     textureResolution: DEFAULT_TEXTURE_RESOLUTION,
     setTextureResolution: textureResolution => set({ textureResolution }),
 
+    // #929: same shape/default as Folia's `useVisualizerSettingsStore.lyricRenderQuality`
+    // (DEFAULT_LYRIC_RENDER_QUALITY = { scale: 1, antialias: 'auto' }). The setter is named after
+    // Folia's (`handleSetLyricRenderQuality`) and normalises exactly like it does, so any future
+    // control in this window behaves the same way; today nothing in this window calls it.
+    lyricRenderQuality: { ...DEFAULT_LYRIC_RENDER_QUALITY },
+    handleSetLyricRenderQuality: patch =>
+        set(state => {
+            const next = normalizeLyricRenderQuality({ ...state.lyricRenderQuality, ...patch });
+            const current = state.lyricRenderQuality;
+            if (next.scale === current.scale && next.antialias === current.antialias) return {};
+            return { lyricRenderQuality: next };
+        }),
+
     // The reference window (screenshot 1) has 智能动感模式 on, so the injected window starts the same
     // way. Folia's own stored default is `false` (src/types.ts DEFAULT_SMART_BEAT_SETTINGS); this is a
     // deliberate presentation choice, documented in docs/settings-ui-impl.md.
@@ -468,9 +517,44 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     removeUploadedFont: id => set(state => ({ uploadedFonts: state.uploadedFonts.filter(font => font.id !== id) })),
 
     subtitle: { ...DEFAULT_SUBTITLE_SETTINGS },
-    setSubtitle: patch => set(state => ({ subtitle: { ...state.subtitle, ...patch } })),
+    // 0.7.25 副字幕行数/内容: `setSubtitle` is the ONE way a layout enters the store, so the dead-row
+    // sanitation lives here as well as in `applySnapshot`. It has to: upstream's rows setting turns
+    // 单行 `'translation'` into `'current+translation+romanization'` when the user picks 三行
+    // (`withSubtitleOverlayRowCount` fills the third row with romanization by itself), so without this
+    // the 三行 button would do nothing at all in this window.
+    setSubtitle: patch => set(state => ({
+        subtitle: {
+            ...state.subtitle,
+            ...patch,
+            ...(patch.subtitleOverlayLayout === undefined
+                ? {}
+                : { subtitleOverlayLayout: sanitizeSubtitleOverlayLayout(patch.subtitleOverlayLayout) }),
+        },
+    })),
     resetSubtitle: () => set({ subtitle: { ...DEFAULT_SUBTITLE_SETTINGS } }),
 }));
+
+/**
+ * 0.7.26: style-specific normalisation applied AFTER the defaults-first merge.
+ *
+ * Only 町景 needs it, and it is not optional: its `quality` is a nested object (every other tuning value
+ * is a flat scalar or an array), so `mergeTuning`'s shallow rule keeps the stored `quality` whole — a
+ * tree persisted before 0.7.26 keeps `renderScale: 1` / `antialias: 'smaa'` and no `revision`, which
+ * upstream only migrates inside `normalizeMachiTuning` (legacy 100%/SMAA → 跟随全局). The panel and the
+ * renderer both read that bag, and the machi panel computes the 「跟随全局」 preset from it, so the bag
+ * this page publishes must already be normalised or the preset row shows 「自定义」 forever for existing
+ * users.
+ *
+ * Every other style keeps the raw merged bag: running their `resolve()` here would be a second source
+ * of truth for clamping, and `mergeTuning` is deliberately the only persistence-layer transform
+ * (docs/settings-ui-impl.md §4.2).
+ */
+export const normalizeStyleTunings = (
+    merged: Record<StyleMode, Record<string, unknown>>,
+): Record<StyleMode, Record<string, unknown>> => ({
+    ...merged,
+    machi: normalizeMachiTuning(merged.machi) as unknown as Record<string, unknown>,
+});
 
 /** The `VisualizerTuningSettings` bag handed to style panels: every tuning under its settings key. */
 export const selectTuningSettings = (state: SettingsState): Record<string, unknown> => {
@@ -565,6 +649,69 @@ export const resolveShowPlaybackBar = (snapshot: Partial<SettingsSnapshot> | nul
     return readLegacyShowPlaybackBar(snapshot) ?? DEFAULT_SHOW_PLAYBACK_BAR;
 };
 
+/**
+ * 0.7.25 副字幕行数/内容 — the rows this page can actually fill.
+ *
+ * The plugin sends each line's `main` text and its `sub` translation and **nothing else**: there is no
+ * romanization in the payload at all (Kotlin's `FoliaPlaybackExtension` writes `"main"` / `"sub"` only),
+ * which is also why 副字幕内容 has been pinned to 翻译 since v0.1.3. In the player overlay a
+ * `romanization` row resolves to `resolveLyricAlternateText(line, 'romanization')` → `null` and is
+ * dropped, so the user would set a row and never see anything in it — a dead control, which this
+ * project does not ship (docs/known-inert-settings.md: 「无法生效的控件不再展示」).
+ *
+ * Two things are therefore done, and they have to be done together:
+ *  1. `vite.config.ts` strips the 罗马音 choices out of the rows setting (marker-checked SETTINGS_SURGERY),
+ *     so the pickers cannot offer a row that can never fill.
+ *  2. This function rewrites a layout that still names such a row into the closest working one, because
+ *     upstream's own `withSubtitleOverlayRowCount` **adds** `romanization` by itself when going from one
+ *     row to three (`'translation'` → `'current+translation+romanization'`) and a stored tree may
+ *     predate this build. Without (2) the 三行 button would look dead (the store would snap back to two
+ *     rows) and row 3 would show an option the picker no longer lists.
+ *
+ * Mapping: a follow-row `romanization` becomes `next` — a row that does work, and the third row of
+ * `current+translation+next` is exactly what a two-row layout is meant to grow into (two `next` rows
+ * are legal and show the next two lines, per `resolveVisualizerSubtitleOverlayContent`). A single-row
+ * `romanization` becomes `translation`. Duplicate non-`next` rows left over by the substitution are
+ * dropped. The row count is preserved wherever the result is still a valid layout.
+ *
+ * Exported so a gate script can drive this rule directly.
+ */
+export const sanitizeSubtitleOverlayLayout = (layout: SubtitleOverlayLayout): SubtitleOverlayLayout => {
+    const rows = getSubtitleOverlayRows(layout);
+    if (!rows.includes('romanization')) return layout;
+    const mapped = rows.map(row => (row === 'romanization' ? (rows.length === 1 ? 'translation' : 'next') : row));
+    const deduped = mapped.filter((row, index) => row === 'next' || mapped.indexOf(row) === index);
+    if (deduped.length === 0) return DEFAULT_SUBTITLE_OVERLAY_LAYOUT;
+    return parseSubtitleOverlayLayout(deduped.join('+')) ?? DEFAULT_SUBTITLE_OVERLAY_LAYOUT;
+};
+
+/**
+ * The 副字幕行数/内容 layout a tree should hydrate to.
+ *
+ * A tree this build persisted carries `subtitle.subtitleOverlayLayout` — `parseSubtitleOverlayLayout`
+ * (upstream's own validator) decides whether it is one, and anything else is ignored rather than
+ * trusted. A tree persisted before the field existed (v0.4.18 and older) has only
+ * `subtitle.subtitleContentMode`; for a legacy `none` (whose overlay previewed the coming lyrics) the
+ * first read derives `current+next`, matching what Folia's own `readStoredSubtitleOverlayLayout`
+ * migrates a content mode into. Every other legacy mode keeps the default: `romanization` / `both` are
+ * normalised to 翻译 by App.tsx at load anyway, and deriving rows from them would resurrect exactly the
+ * dead romanization rows [sanitizeSubtitleOverlayLayout] removes.
+ * Exported so a gate script can drive the migration rule directly.
+ */
+export const resolveSubtitleOverlayLayout = (
+    snapshot: Partial<SettingsSnapshot> | null | undefined,
+    fallback: SubtitleOverlayLayout = DEFAULT_SUBTITLE_OVERLAY_LAYOUT,
+): SubtitleOverlayLayout => {
+    if (!snapshot || typeof snapshot !== 'object') return fallback;
+    const subtitle = (snapshot as { subtitle?: unknown }).subtitle;
+    if (!subtitle || typeof subtitle !== 'object') return fallback;
+    const stored = parseSubtitleOverlayLayout((subtitle as Record<string, unknown>).subtitleOverlayLayout);
+    if (stored) return sanitizeSubtitleOverlayLayout(stored);
+    const contentMode = (subtitle as Record<string, unknown>).subtitleContentMode;
+    if (contentMode === 'none') return subtitleOverlayLayoutFromContentMode('none');
+    return fallback;
+};
+
 /** Hydrates the store from a snapshot the plugin persisted (unknown/missing keys keep defaults). */
 export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undefined): void => {
     if (!snapshot || typeof snapshot !== 'object') return;
@@ -591,14 +738,31 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
             // 0.7.25 added `depthOfField` / `depthPan` / `glyphDepth` and every older tree lacked them).
             // Merging per style also keeps the stored `layerImages` array intact, because mergeTuning
             // replaces a whole array instead of spreading it.
-            styleTunings: mergeTuningMap(STYLE_TUNING_DEFAULTS, snapshot.styleTunings, state.styleTunings),
+            //
+            // 0.7.26 machi: `quality` is the ONE nested object in a tuning bag (`{renderScale,
+            // antialias, shadows, reflections, glow, adaptive, revision}`), and the shallow merge keeps
+            // whatever the tree stored — so a v0.4.18 tree (whose `quality` has no `revision` and still
+            // says `renderScale: 1` / `antialias: 'smaa'`, the pre-跟随全局 defaults) would otherwise
+            // reach the renderer un-migrated. Upstream's own `normalizeMachiTuning` is the authority for
+            // that shape: it fills `revision`, reads the legacy 100%/SMAA pair as 跟随全局 and clamps
+            // every field, so run it over the merged bag. It is pure (types + range helpers only), which
+            // is why the store can import it; the renderer then receives the same bag Folia would build.
+            styleTunings: normalizeStyleTunings(mergeTuningMap(STYLE_TUNING_DEFAULTS, snapshot.styleTunings, state.styleTunings)),
             backgroundMode: clean(snapshot.backgroundMode, state.backgroundMode),
             // The same rule for the background tunings; upstream owns their defaults too.
             backgroundTunings: mergeTuningMap(BACKGROUND_TUNING_DEFAULTS, snapshot.backgroundTunings, state.backgroundTunings),
             commonBackground: { ...state.commonBackground, ...clean(snapshot.commonBackground, {} as CommonBackgroundSettings) },
             appearance: { ...state.appearance, ...clean(snapshot.appearance, {} as AppearanceSettings) },
             uploadedFonts: Array.isArray(snapshot.uploadedFonts) ? snapshot.uploadedFonts : state.uploadedFonts,
-            subtitle: { ...state.subtitle, ...clean(snapshot.subtitle, {} as SubtitleSettings) },
+            // 0.7.25 副字幕行数/内容: spread the stored subtitle first, then pin the layout through
+            // `resolveSubtitleOverlayLayout` — an unparseable stored value (or one from a build that
+            // never had the field) must not reach the panel, whose `getSubtitleOverlayRows(layout)`
+            // splits on '+' with no default and would throw.
+            subtitle: {
+                ...state.subtitle,
+                ...clean(snapshot.subtitle, {} as SubtitleSettings),
+                subtitleOverlayLayout: resolveSubtitleOverlayLayout(snapshot, state.subtitle.subtitleOverlayLayout),
+            },
             lyricMotion: clean(snapshot.lyricMotion, state.lyricMotion),
             textureResolution: clean(snapshot.textureResolution, state.textureResolution),
             transparentPlayerBackground: transparentBlocked

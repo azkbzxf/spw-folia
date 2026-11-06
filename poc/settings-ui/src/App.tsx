@@ -9,7 +9,11 @@ import type { FontChoice } from '@/components/visualizer/window/FontTiles';
 import type { StyleDraft } from '@/components/visualizer/window/useTuningDrafts';
 import type { VisPlaygroundEditSection } from '@/components/visualizer/window/VisPlaygroundPreviewHotspots';
 import type { SubtitleContentMode, Theme, VisualizerMode } from '@/types';
+/* 0.7.25 副字幕行数/内容: the store owns the layout; this is only the last-resort fallback for the
+ * reused panel's required prop. Upstream's constant, not a retyped literal. */
+import { DEFAULT_SUBTITLE_OVERLAY_LAYOUT } from '@/utils/lyrics/subtitleOverlayLayout';
 import {
+    DEFAULT_SHOW_PLAYBACK_BAR,
     selectBackgroundActions,
     selectBackgroundConfig,
     selectTuningSettings,
@@ -534,6 +538,13 @@ const App: React.FC<AppProps> = ({ injected }) => {
                     onToggleShowSubtitleTranslation={shown => state.setSubtitle({ subtitleContentMode: shown ? 'translation' : 'none' })}
                     subtitleContentMode={state.subtitle.subtitleContentMode as SubtitleContentMode}
                     onSubtitleContentModeChange={subtitleContentMode => state.setSubtitle({ subtitleContentMode })}
+                    /* 0.7.25 副字幕行数/内容: a REQUIRED prop of the reused panel. Its rows setting
+                     * calls `getSubtitleOverlayRows(layout)` → `layout.split('+')` with no default, so
+                     * this must always be a parsed layout — `resolveSubtitleOverlayLayout` (the store's
+                     * hydrator) is what guarantees that, and `DEFAULT_SUBTITLE_OVERLAY_LAYOUT` is the
+                     * fallback should the store ever be read before `applySnapshot` has run. */
+                    subtitleOverlayLayout={state.subtitle.subtitleOverlayLayout ?? DEFAULT_SUBTITLE_OVERLAY_LAYOUT}
+                    onSubtitleOverlayLayoutChange={subtitleOverlayLayout => state.setSubtitle({ subtitleOverlayLayout })}
                     subtitleOverlayOpacity={state.subtitle.subtitleOverlayOpacity}
                     onSubtitleOverlayOpacityChange={subtitleOverlayOpacity => state.setSubtitle({ subtitleOverlayOpacity })}
                     subtitleOverlayBackground={state.subtitle.subtitleOverlayBackground}

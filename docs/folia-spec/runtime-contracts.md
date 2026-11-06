@@ -3,7 +3,7 @@
 插件的播放画面由 **Folia 自己的 `VisualizerRenderer`** 画，宿主只喂输入。本文是那套输入与生命周期的权威
 说明：任何要改渲染数据、字幕、音频或样式切换的人，先读这里。
 
-- 上游源码：`work/folia/folia-major-main`（Folia **0.7.25**）；下文路径均相对它。
+- 上游源码：`work/folia/folia-major-main`（Folia **0.7.26**）；下文路径均相对它。
 - 插件侧落点：`poc/webview/host/Shim.js`（把宿主消息变成页面事件）、
   `poc/settings-ui/src/publisher/config.ts`（`config` 构建）、`poc/settings-ui/src/bridge.ts`（页面桥）。
 - 样式与背景清单：[`style-map.md`](style-map.md)；tuning 默认值：[`tunings.md`](tunings.md)。
@@ -71,8 +71,8 @@
 | `isPlayerChromeHidden` | `boolean?` | | 播放器 chrome 是否隐藏（影响字幕底距） |
 | `hideTranslationSubtitle` | `boolean?` | | 隐藏底部字幕层 |
 | `showSubtitleTranslation` | `boolean?` | | 是否显示译文（配合 `subtitleContentMode`） |
-| `subtitleContentMode` | `'translation' \| 'romanization' \| 'both' \| 'none'?` | | 副字幕内容 |
-| `subtitleOverlayLayout` | `SubtitleOverlayLayout?` | | 字幕行组合，缺省 `DEFAULT_SUBTITLE_OVERLAY_LAYOUT = 'translation'` |
+| `subtitleContentMode` | `'translation' \| 'romanization' \| 'both' \| 'none'?` | | 副字幕内容（旧字段，本页只发 `'translation'`） |
+| `subtitleOverlayLayout` | `SubtitleOverlayLayout?` | | 字幕行组合，本页按设置树的 `subtitle.subtitleOverlayLayout` 下发；缺省 `DEFAULT_SUBTITLE_OVERLAY_LAYOUT = 'translation'` |
 | `paused` | `boolean?` | | 暂停（时钟不再推进） |
 | `onBack` | `() => void?` | | 返回按钮回调（仅当样式壳自己画返回键） |
 | `isPanelOpen` | `boolean?` | | 播放面板打开（影响返回键/热区） |
@@ -295,9 +295,13 @@ minDecibels / maxDecibels 用浏览器默认（-100 / -30 dBFS）
 - `!showText || hideTranslationSubtitle` → 整层不渲染。
 - 取行：`line = activeLine ?? recentCompletedLine`（行间空档继续显示上一句）。
 - 行内容由 `subtitleOverlayLayout` 决定（`utils/lyrics/subtitleOverlayLayout.ts`，默认
-  `DEFAULT_SUBTITLE_OVERLAY_LAYOUT = 'translation'`）：它是「行源」的组合，例如 `'translation'` 只有译文行，
-  多行布局用 `翻译'/'译文'/'下一句` 这类 follow 行拼出来。**插件不下发这个字段**，config 里没有它，
-  因此始终用默认 `'translation'`（单行译文）。
+  `DEFAULT_SUBTITLE_OVERLAY_LAYOUT = 'translation'`）：它是「行源」的组合，取值只有
+  `current` / `translation` / `romanization` / `next` 四种，单行时是前三种之一，多行必须以 `current`
+  开头、其后每行从 `next` / `translation` / `romanization` 里选（`parseSubtitleOverlayLayout` 是唯一
+  判定）。例如 `'translation'` 只有译文行，`'current+translation'` 是「原文 + 译文」两行。
+  本页把设置树的 `subtitle.subtitleOverlayLayout` 原样放进 config；缺省时用默认单行译文。
+  **注意插件只发主/副文本，不发罗马音**：`romanization` 行取不到文本，本页因此在构建期把该选项
+  滤掉、并在 store 侧把树里残留的罗马音行换掉（见 [`../known-inert-settings.md`](../known-inert-settings.md) §2）。
 - 每个行源取文本：`current` → `line.fullText.trim()`，其余走 `resolveLyricAlternateText`；`hasReadableText`
   要求 `/[\p{L}\p{N}]/u` 命中（纯标点行不显示）；非 `current` 行若与本行 `current` 文本相同则去重（拉丁歌词的
   「译文」常等于原文）。

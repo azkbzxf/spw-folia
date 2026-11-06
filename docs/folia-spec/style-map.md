@@ -4,7 +4,7 @@
 用 `import.meta.glob('./*/entry.tsx')` 发现成员，按每个 `entry.tsx` 的 `order` 升序排成设置页的样式货架。
 本文是这张清单的权威对照表，以及样式注册、背景、字体、随包素材的维护要点。
 
-- 上游源码：`work/folia/folia-major-main`（Folia **0.7.25**，AGPL-3.0，只读副本）
+- 上游源码：`work/folia/folia-major-main`（Folia **0.7.26**，AGPL-3.0，只读副本）
 - 插件侧清单：`poc/settings-ui/src/model/styles.tsx`（样式壳）与 `src/model/settings.ts` 的 `STYLE_MODE_SHELF_ORDER`
 - 同步闸门：`poc/settings-ui/scripts/check-style-sync.mjs`（挂在 `vite build` 上，上游加样式时构建会拦）
 
@@ -17,9 +17,9 @@
 | 3 | 绘光 | `lumiere` | 25 | pixi.js（WebGL） | `lumiere_tuning` | 分词、自算字号 |
 | 4 | 花火 | `hanabi` | 26 | pixi.js（WebGL） | `hanabi_tuning` | 自算字号、两个动感效果（节拍） |
 | 5 | 町景 | `machi` | 27 | three.js | `machi_tuning` | 自算字号、**不画共享背景**、三个动感效果（节拍/鼓点） |
-| 6 | 雾笺 | `nebbia` | 29 | 自写 WebGL2 + Canvas2D | `nebbia_tuning` | 分词、**不画共享背景**、动感效果（人声/鼓 stem）、着色器预热 |
+| 6 | 雾笺 | `nebbia` | 29 | 自写 WebGL2 + Canvas2D | `nebbia_tuning` | 分词、**窗外可选共享背景**（0.7.26 起，见 §1 补充）、两个动感效果（人声/鼓 stem、节拍）、着色器预热 |
 | 7 | 流光 | `classic` | 30 | DOM + framer-motion | `classic_tuning` | 分词、`GlowWord` 逐词发光 |
-| 8 | 心象 | `cadenza` | 40 | DOM + Canvas2D + pretext | `cadenza_tuning` | 无设置面板 |
+| 8 | 心象 | `cadenza` | 40 | DOM + Canvas2D + pretext | `cadenza_tuning` | 只有「渲染」设置面板（0.7.26 新增，分辨率一行，无抗锯齿） |
 | 9 | 云阶 | `partita` | 50 | DOM + framer-motion + pretext（列/chunk 布局，字复用 `GlowWord`） | `partita_tuning` | 分词 |
 | 10 | 浮名 | `fume` | 60 | Canvas2D + pretext | `fume_tuning` | **覆盖背景**（关掉几何图形）、`previewStartOffset` 18.4 |
 | 11 | 倾诉 | `tilt` | 70 | DOM + framer-motion + pretext | `tilt_tuning` | — |
@@ -57,8 +57,8 @@
 | `previewSeed` `previewStartOffset` | 小图/大预览画哪一帧 |
 | `glyph` `command` | 24×24 线性图标；命令面板条目（id `visualizer-<mode>`） |
 | `render` | **必须** `React.lazy(() => import('./Visualizer'))` 包装。registry 用 eager glob 发现 entry，entry 若静态 import 渲染器，任何碰设置的模块都会连带拉进全部渲染器（含 three.js） |
-| `background` | `false` = 不画共享背景（静止、町景、雾笺）；函数 = 覆盖背景配置（浮名） |
-| `renderSettingsPanel` `renderQuickControls` | 设置页的样式面板 / 播放面板的快捷参数；心象、静止没有面板 |
+| `background` | `false` = 不画共享背景（现在只有静止、町景）；**函数** = 按运行时条件覆盖背景配置（雾笺 0.7.26 起走这条路：窗外选「共用背景」或播放页透明时才画共用背景，自己画街景时标成透明；浮名则是关掉几何图形） |
+| `renderSettingsPanel` `renderQuickControls` | 设置页的样式面板 / 播放面板的快捷参数；**只有「静止」没有面板**（心象 0.7.26 起有了） |
 | `seeksOnLineClick` | 点歌词行跳转（莫奈、时计） |
 | `followsSongHandoff` | 画 automix 混音交接（只有莫奈） |
 | `ownFontSizeNoticeKey` `usesWordSegmentation` | 见上节 |
@@ -86,6 +86,7 @@
 | `machi.drumRipple` | 鼓点涟漪 | drums | 町景 | 可用 |
 | `machi.screenFlash` | 大屏闪拍 | drums | 町景 | 可用 |
 | `nebbia.drizzleRide` | 疏雨轻车 | stems | 雾笺 | 可用（两段强度：雨点 / 颠簸） |
+| `nebbia.aquaBeat` | 舞潮踏拍 | beats | 雾笺 | 可用（0.7.26 新增，四段：水母 / 水草 / 气泡 / 聚光灯；只在窗外选水族箱时计数） |
 | `pendolo.drumhead` | 仿真鼓面 | drums | 时计 | 可用 |
 | `diorama.ripple` | 水镜涟漪 | beats | 镜台 | 可用 |
 | `pendolo.gearBeats` | 齿轮随拍 | beats | 时计 | 已停用（`retired`，代码保留，界面不显示） |

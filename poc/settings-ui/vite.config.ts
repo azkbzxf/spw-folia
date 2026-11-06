@@ -251,6 +251,29 @@ const SMART_BEAT_REVEAL = '{/* spw-folia v0.1.3: 智能动感模式开关已移�
 
 const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
     {
+        // 0.7.26: the 副字幕行数/内容 rows setting offers 罗马音 as a row content, and this page can never
+        // fill it — the plugin's lyric payload carries `main` + `sub` (translation) and no romanization
+        // at all (FoliaPlaybackExtension.kt writes "main"/"sub" only; the same reason 副字幕内容 has been
+        // pinned to 翻译 since v0.1.3). Shipping a row that always stays empty is exactly the dead
+        // control docs/known-inert-settings.md forbids, so the two option lists lose that entry and keep
+        // everything else. The store completes the job (`sanitizeSubtitleOverlayLayout` in
+        // model/settings.ts): upstream's `withSubtitleOverlayRowCount` ADDS `romanization` when the user
+        // goes from one row to three, so hiding the option alone would leave 三行 dead.
+        suffix: '/components/visualizer/window/SubtitleOverlayRowsSetting.tsx',
+        edits: [
+            {
+                what: 'romanization single-row option',
+                find: '    const singleOptions = SUBTITLE_OVERLAY_SINGLE_ROWS.map(value => ({ value, label: t(SOURCE_KEYS[value]) }));',
+                replace: "    const singleOptions = SUBTITLE_OVERLAY_SINGLE_ROWS.filter(value => value !== 'romanization').map(value => ({ value, label: t(SOURCE_KEYS[value]) }));",
+            },
+            {
+                what: 'romanization follow-row option',
+                find: '    const followOptions = SUBTITLE_OVERLAY_FOLLOW_ROWS.map(value => ({ value, label: t(SOURCE_KEYS[value]) }));',
+                replace: "    const followOptions = SUBTITLE_OVERLAY_FOLLOW_ROWS.filter(value => value !== 'romanization').map(value => ({ value, label: t(SOURCE_KEYS[value]) }));",
+            },
+        ],
+    },
+    {
         suffix: '/components/visualizer/window/VisPlaygroundSettingsPanel.tsx',
         edits: [
             // 0.7.22 moved the card into a fifth 全局 tab; the tab itself goes too (surgery below),
@@ -293,40 +316,14 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
             // v0.4.0: the 当前字体 row is KEPT. In 0.7.22 it is the only place the panel surfaces the
             // chosen family and a 选择自定义字体 button, and the shell now opens its own picker when
             // `onFontStyleChange('custom')` fires — the reveal is exactly the hook for that.
-            // 0.7.25 added the 副字幕行数/内容 control (SubtitleOverlayRowsSetting) to the 字幕 page and
-            // with it a **required** `subtitleOverlayLayout` prop. This window has no such setting to
-            // show: its SubtitleSettings carries `subtitleContentMode` only, App.tsx cannot pass the new
-            // prop, and the control's `getSubtitleOverlayRows(layout)` calls `layout.split('+')` with no
-            // default — opening the 字幕 tab would throw and blank the whole island (there is no error
-            // boundary). The player side is fine: `VisualizerSubtitleOverlay` defaults the prop to
-            // DEFAULT_SUBTITLE_OVERLAY_LAYOUT ('translation'), which is what this page already publishes
-            // via `subtitleContentMode`, so the control is removed here (B-class: plumbing this window
-            // does not have) and the panel goes back to being stateless about the layout.
-            {
-                what: 'subtitle overlay rows element',
-                find: '                                <SubtitleOverlayRowsSetting\n                                    t={t}\n                                    layout={subtitleOverlayLayout}\n                                    onChange={onSubtitleOverlayLayoutChange}\n                                />\n',
-                replace: '',
-            },
-            {
-                what: 'subtitle overlay rows import',
-                find: /^import SubtitleOverlayRowsSetting from '[^']*';\r?\n/m,
-                replace: '',
-            },
-            {
-                what: 'subtitle overlay layout props',
-                find: '    subtitleOverlayLayout: SubtitleOverlayLayout;\n    onSubtitleOverlayLayoutChange?: (layout: SubtitleOverlayLayout) => void;\n',
-                replace: '',
-            },
-            {
-                what: 'subtitle overlay layout destructure',
-                find: '        subtitleOverlayLayout,\n        onSubtitleOverlayLayoutChange,\n',
-                replace: '',
-            },
-            {
-                what: 'subtitle overlay layout type import',
-                find: 'import { type Theme, type SubtitleContentMode, type SubtitleOverlayLayout, type VisualizerBackgroundMode, type VisualizerMode } from \'../../../types\';',
-                replace: 'import { type Theme, type SubtitleContentMode, type VisualizerBackgroundMode, type VisualizerMode } from \'../../../types\';',
-            },
+            // v0.4.19 (Folia 0.7.26): the 副字幕行数/内容 control (SubtitleOverlayRowsSetting) that
+            // v0.4.18 stripped is BACK — this window now owns `subtitle.subtitleOverlayLayout`
+            // (model/settings.ts), passes the required prop from App.tsx and publishes it, so the
+            // panel renders the control again. The five surgery entries that removed the element, its
+            // import, the prop declaration, the destructure and the type import are gone on purpose;
+            // do not re-add them. The panel file itself is unchanged between 0.7.25 and 0.7.26, so
+            // the eleven remaining edits below are the ones that were always here.
+            //
             {
                 what: 'harmony subtitle group',
                 find: "                            <Group def={HARMONY_GROUP}>\n                                <ToggleRow\n                                    label={t('options.showHarmonySubtitle')}\n                                    note={t('options.showHarmonySubtitleDesc')}\n                                    checked={showHarmonySubtitle}\n                                    disabled={!onToggleShowHarmonySubtitle}\n                                    onChange={next => onToggleShowHarmonySubtitle?.(next)}\n                                />\n                                <Reveal when={showHarmonySubtitle}>\n                                    <ToggleRow\n                                        sub\n                                        label={t('options.harmonySubtitleBackground')}\n                                        note={t('options.harmonySubtitleBackgroundDesc')}\n                                        checked={harmonySubtitleBackground}\n                                        disabled={!onToggleHarmonySubtitleBackground}\n                                        onChange={next => onToggleHarmonySubtitleBackground?.(next)}\n                                    />\n                                </Reveal>\n                            </Group>\n",

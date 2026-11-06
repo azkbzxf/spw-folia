@@ -4,8 +4,8 @@
 17 种歌词样式、背景、字幕与转场全部是上游原码；插件的活是给这套渲染器喂数据、并在同一页面里注入自己的
 chrome 与设置界面。这套文档说明**它现在是什么样、怎么用、改的时候看哪里**。
 
-事实基线：Folia **0.7.25**（`work/folia/folia-major-main`，AGPL-3.0，只读副本）、**17 种样式**、
-插件 v0.4.17、SPW 兼容 ≥ 1.19.0。
+事实基线：Folia **0.7.26**（`work/folia/folia-major-main`，AGPL-3.0，只读副本）、**17 种样式**、
+插件 v0.4.19、SPW 兼容 ≥ 1.19.0。
 
 ## 文档
 
@@ -54,7 +54,7 @@ chrome 与设置界面。这套文档说明**它现在是什么样、怎么用�
 
 | 位置 | 是什么 |
 |---|---|
-| `work/folia/folia-major-main/` | 上游 Folia 0.7.25 只读副本（AGPL-3.0）；`src/components/visualizer/` 是样式层 |
+| `work/folia/folia-major-main/` | 上游 Folia 0.7.26 只读副本（AGPL-3.0）；`src/components/visualizer/` 是样式层 |
 | `poc/webview/dist/dist/` | 上游构建产物（宿主就是加载它）；由 `packaging/tools/stage-web.mjs` 校验并暂存 |
 | `poc/webview/host/` | 宿主 exe 源码：`HostForm.cs`、`Program.cs`、`Shim.js`、`PreviewShim.js`、`audio/` |
 | `poc/settings-ui/` | 注入的设置岛：`src/App.tsx`、`src/model/`、`src/publisher/`、`src/chrome/`、`vite.config.ts`（含裁剪与闸门） |

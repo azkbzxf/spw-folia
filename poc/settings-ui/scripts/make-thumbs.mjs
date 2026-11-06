@@ -194,8 +194,6 @@ console.log(`[make-thumbs] pinned lyric lines: ${lineShots.map(l => `${l.id}@${l
 
 /** One host run per style. The host is kept alive and told exactly where the playhead is. */
 async function capture(mode) {
-    const shot = path.join(RAW_DIR, `${mode}.png`);
-    try { fs.rmSync(shot, { force: true }); } catch { /* ignore */ }
     const target = shotPositionFor(mode);
 
     const child = spawn(EXE, [
@@ -300,20 +298,33 @@ async function capture(mode) {
         child.on('exit', () => { clearTimeout(timer); resolve(); });
     });
 
-    if (!fs.existsSync(shot) || fs.statSync(shot).size < MIN_PNG_BYTES) {
+    // v0.4.19 (task-4): validate the REAL captures, not a leftover path. The candidate refactor
+    // (4b6378b) made every shot `RAW_DIR/<mode>.L<line>.<n>.png` but left a `RAW_DIR/<mode>.png`
+    // "shot" local behind; this check then threw "no usable screenshot" AFTER a perfectly good
+    // capture, and the log line below stat'ed the same dead path. It stayed hidden because the
+    // default run only fills MISSING thumbs and public/thumbs/ predated the refactor. `waitForPng`
+    // already guarantees size, but re-checking here keeps the contract local and explicit.
+    const usable = candidates.filter(file => {
+        try {
+            return fs.existsSync(file) && fs.statSync(file).size >= MIN_PNG_BYTES;
+        } catch {
+            return false;
+        }
+    });
+    if (usable.length === 0) {
         throw new Error(`no usable screenshot for ${mode}\n${log.slice(-1600)}`);
     }
     // `candidates` is handed back so the chooser below can pick the frame with the most lyric ink.
-    return { shot, target, candidates };
+    return { target, candidates: usable };
 }
 
 const shots = [];
 for (const mode of missing) {
-    const { shot, target, candidates } = await capture(mode);
-    shots.push({ mode, shot, target, candidates });
+    const { target, candidates } = await capture(mode);
+    shots.push({ mode, target, candidates });
     console.log(
         `[make-thumbs] captured ${mode} @ ${target.posMs}ms "${target.text}"`
-        + ` -> ${path.relative(REPO, shot)} (${fs.statSync(shot).size} B, ${candidates.length} candidate(s))`,
+        + ` -> ${candidates.length} candidate(s) in ${path.relative(REPO, RAW_DIR)}, first ${fs.statSync(candidates[0]).size} B`,
     );
 }
 
@@ -354,7 +365,10 @@ def lyric_ink(path):
     return sum(fat.histogram()[1:]) / total
 
 for job in jobs:
-    candidates = job['candidates'] or [job['shot']]
+    # candidates is always non-empty: capture() throws unless at least one real frame survived
+    # validation. (A "job['candidates'] or [job['shot']]" fallback used to sit here; the shot path no
+    # longer exists, so that branch could never fire and is gone.)
+    candidates = job['candidates']
     scores = [(lyric_ink(c), c) for c in candidates]
     scores.sort(reverse=True)
     best_score, best = scores[0]
@@ -383,9 +397,8 @@ const python = pythonCandidates.find(candidate => {
     return probe.status === 0;
 });
 if (!python) throw new Error('no Python with Pillow found; set PYTHON=<path to python with Pillow>');
-const jobs = shots.map(({ mode, shot, candidates }) => ({
-    shot,
-    candidates: candidates ?? [shot],
+const jobs = shots.map(({ mode, candidates }) => ({
+    candidates,
     out: path.join(OUT_DIR, `${mode}.jpg`),
 }));
 const result = spawnSync(python, ['-c', py, JSON.stringify(jobs)], { encoding: 'utf8' });

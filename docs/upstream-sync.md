@@ -1,8 +1,11 @@
 # 上游 Folia 同步
 
 本仓库内嵌的是上游 [`chthollyphile/folia-major`](https://github.com/chthollyphile/folia-major)
-的生产 OBS 产物，当前对齐 **0.7.25**（见 `work/folia/folia-major-main/package.json`），
-**17 种歌词样式**。插件版本 **v0.4.17**，支持 SPW **≥ 1.19.0**。
+的生产 OBS 产物，当前对齐 **0.7.26**（见 `work/folia/folia-major-main/package.json`，
+tag `v0.7.26`，commit `cc6226e4`），**17 种歌词样式**。插件版本 **v0.4.19**，支持 SPW **≥ 1.19.0**。
+
+上一棵树（0.7.25）留在 `work/folia/folia-major-0725` 作对照，只读。要回答「这次上游到底改了什么」，
+直接 `diff -rq` 两棵树，别凭印象。
 
 上游发新版时按本文走。样式清单是否与上游一致由
 `poc/settings-ui/scripts/check-style-sync.mjs` 说了算：它已挂在 `vite build` 上
@@ -35,7 +38,7 @@ npx tsc --noEmit -p tsconfig.json 2>&1 | grep -c "error TS"
 不要在里面对上游做定制——定制逻辑集中在 `Shim.js` / `Overlay.js` / `poc/settings-ui`）。
 
 ```bash
-REF=v0.7.25
+REF=v0.7.26
 # 保留依赖目录：整棵树换掉后 node_modules 要重新搞，而它是从 poc/settings-ui 迁过来的
 mv work/folia/folia-major-main/node_modules /tmp/folia-nm
 rm -rf work/folia/folia-major-main
@@ -77,7 +80,7 @@ NODE_OPTIONS="--use-system-ca" npx vite build
 # 主 CSS 是 dist/assets/src-<hash>.css；其余是各入口的小 CSS，查它没意义
 CSS=$(ls -S work/folia/folia-major-main/dist/assets/*.css | head -1)
 echo "$CSS"                                   # 应为 …/assets/src-<hash>.css
-wc -c "$CSS"                                  # 必须 > 200 KB（0.7.25 实测约 249 KB）
+wc -c "$CSS"                                  # 必须 > 200 KB（0.7.26 实测 227,655 B ≈ 222 KB）
 grep -c '\.h-full{height:100%}' "$CSS"        # 必须 ≥ 1
 grep -c '@tailwind' "$CSS"                    # 必须 = 0
 ```
@@ -134,7 +137,7 @@ cd poc/settings-ui && node scripts/check-style-sync.mjs --check
 
 ### 3.1 加 `STYLE_ENTRIES` entry：照抄上游，不要自己编
 
-模板（以 0.7.25 的 `machi` 为例，字段全部来自上游 `machi/entry.tsx`）：
+模板（以 `machi` 为例，字段全部来自上游 `machi/entry.tsx`）：
 
 ```ts
 {
@@ -153,11 +156,57 @@ cd poc/settings-ui && node scripts/check-style-sync.mjs --check
 - 面板取上游 `<mode>/<Mode>SettingsPanel`。多数是 default export，但 `settingsPanels.tsx` 里那批
   （Classic / Partita / Fume / Tilt / Claddagh / Cappella / Diorama）与 `MonetSettingsPanel` 是
   具名导出——**先看上游那个文件怎么导出的**。
+- **上游没有 `renderSettingsPanel` 的样式就别写**：本地 entry 上留空，设置页会显示「这个样式没有参数」。
+  0.7.26 里只有 `still` 是这样（心象在 0.7.26 才第一次有面板）。
 - `beatEffects` 的 id 来自 `@/services/beatFx/beatEffects` 的 `BEAT_EFFECT_IDS`；上游没有的 id
-  不要编。`source` 是 `'beats' | 'drums' | 'stems'`，`parts` 可选。
+  不要编。`source` 是 `'beats' | 'drums' | 'stems'`，`parts` 可选。**一个样式的 `beatEffects` 是数组，
+  上游加一条就要跟着加一条**（0.7.26 的雾笺从一条变两条，漏加是 `check-style-sync --check` 唯一能
+  抓到的差异类型之一），`parts` 里每个 key 与 nameKey 也要逐字照抄。
 - 闸门**故意不校验 `labelFallback`**（上游写英文、本页要显示中文）。别为了「让闸门过」把中文名
   改回英文；也**不要从 `labelKey` 反推样式 id**（`cadenza` 的 key 是 `ui.visualizerCadenze`，
   上游拼写如此）。id 一律以 entry 的 `mode:` 字面量为准。
+
+### 3.1.1 tuning 键变了怎么办
+
+上游给某个样式的 tuning 加字段是常事（0.7.25 给凝彩加三个景深键、0.7.26 给 8 个样式加 `render`、
+给经典/云阶加 `avoidOverlap`、给町景加 `simulatedBeat` 并把 `quality` 改成带 `revision` 的嵌套对象）。
+本页**不需要手抄字段清单**：`model/settings.ts` 的 `STYLE_TUNING_DEFAULTS` 直接 import 上游的
+`DEFAULT_*_TUNING`，`model/mergeTuning.ts` 又是 defaults-first 的合并，所以老树缺的键会自动补上。
+
+两处仍然要人看：
+
+- **嵌套对象**：`mergeTuning` 是 **shallow** 合并，扁平字段（`render`）没问题，嵌套字段
+  （`machi.quality`）会整块采用树里的值。若上游同时给了读时迁移（`machi/machiTuning.ts` 的
+  `normalizeMachiQuality` 看 `quality.revision` 判别老存档），**迁移是上游的活，不要在本页再写一遍**
+  ——写第二遍会让同一个值被迁移两次。
+- **面板上真的新增了控件吗**：只有面板渲染出来的字段才是用户能改的；上游在 tuning 里加字段不等于
+  面板有那一行（0.7.26 的「渲染」组挂在 10 个样式的面板上，但不是每个有 `render` 的样式都有控件，
+  见 §3.1.2）。
+
+### 3.1.2 「渲染」组（分辨率 / 抗锯齿）挂在哪
+
+0.7.26 的 #929 给歌词画布加了分辨率倍数与抗锯齿，分两层：
+
+- **全局挡位** `lyricRenderQuality`（`{scale, antialias}`，默认 `{1, 'auto'}`）住在上游
+  `useVisualizerSettingsStore`，控件在「动画与性能」页（`GraphicsPage.tsx` 的 `PERFORMANCE` 组）
+  ——**这一页本插件不注入**。
+- **每个样式一份覆盖** `render: {scale: 'global'|<倍数>, antialias: 'global'|'on'|'off'}`，写在样式
+  tuning 里，由 `LyricRenderQualityRows` 渲染成「分辨率」「抗锯齿」两行。
+
+哪些样式有这份覆盖、面板怎么显示，是两件事（都以上游源码为准）：
+
+| 有 `render` 覆盖的 tuning | 面板渲染该组 | 面板只有分辨率一行 |
+|---|---|---|
+| `cadenza` `diorama` `fume` `hanabi` `lumiere` `monet` `nebbia` `pendolo` `sonnet` `tempera`（10 个） | `cadenza` `diorama` `fume` `hanabi` `lumiere` `monet` `nebbia` `pendolo` `sonnet` `tempera`（10 个） | `cadenza` `fume` `monet` `nebbia`（`antialias={false}`，2D canvas） |
+
+町景走的是自己那套 `quality`（`renderScale` / `antialias` 可取 `'global'`，见
+`machi/types.ts` 的 `MACHI_FOLLOW_GLOBAL`），**不经 `LyricRenderQualityRows`**，所以数「有 render
+键的样式」时它不算在内。
+
+凡是 `LyricRenderQualityRows` 渲染出来的行，都从 store 读全局挡位的当前值来写说明文字
+（`formatLyricRenderScale(global.scale)` / `LYRIC_ANTIALIAS_LABEL_KEYS[global.antialias]`）。
+**store 里缺 `lyricRenderQuality` 字段会让这两行抛错**——这就是 0.7.26 换树后必须给本地 store
+补上该字段（含默认值 `{scale: 1, antialias: 'auto'}` 与 setter）的原因，与 §5 的必填 prop 是同一类坑。
 
 ### 3.2 货架顺序写错 = 整个设置页白屏
 
@@ -181,6 +230,13 @@ cd poc/settings-ui && node scripts/check-style-sync.mjs --check
 若上游 `entry.tsx` 里是 `background: false`（自己画整屏），基本就是 `unsupported`：整屏场景的
 氛围/雾/辉光/反射天然半透明，色键下必然糊成一片，而且没有哪个 tuning 键能「去掉场景」。
 **没实测就在注释里写明「未实测」**，不要写成已测量。
+
+`background` 也可以是一个**函数**（0.7.26 的雾笺就是这么写的：按 tuning 的「窗外」与页面透明状态
+决定画不画共用背景）。这种情况下判据要看「最坏的运行态」而不是声明形状：雾笺的窗外街景照样是整屏
+场景，所以仍是 `unsupported`；但如果哪个样式靠这个函数能在某个设置下退回「只在共用背景上画字」，
+那它可能是 `tuned`——去读那个函数，不要只看它是不是 `false`。
+`background.ts` 的 `STYLE_COMPAT` 注释里如果写着「`background: false`」作为依据，函数化之后那句话
+就过期了，顺手改掉。
 
 ---
 
@@ -262,19 +318,27 @@ README 与宣传站用的同一批画面，**定稿后必须同步**，否则宣
 
 ## 5. 构建后必须把每个 tab 点一遍
 
-上游加一个**必填 prop** 是这类白屏的标准成因：0.7.25 给 `VisPlaygroundSettingsPanel` 加了
-`subtitleOverlayLayout`，而本页 store 没有该字段、`App.tsx` 传不进去；组件内部
-`getSubtitleOverlayRows(layout)` 直接 `layout.split('+')`，**没有默认值** → `TypeError`。
-设置岛**没有 ErrorBoundary**，点「字幕」tab 时整个岛直接白屏。
+上游给复用组件加一个**必填 prop** 是这类白屏的标准成因：0.7.25 给
+`VisPlaygroundSettingsPanel` 加了 `subtitleOverlayLayout`，而上游组件内部
+`getSubtitleOverlayRows(layout)` 直接 `layout.split('+')`、**没有默认值**——本页只要漏传这个
+prop，点「字幕」tab 就是一个 `TypeError`。设置岛**没有 ErrorBoundary**，整个岛当场白屏。
 
-自动化替代（临时脚本放 `poc/settings-ui/scripts/`，用完删）：起 `npx vite dev --port 18090`，
+这条现在是由「传进去」而不是「剥掉」来满足的：本页 store 持有 `subtitle.subtitleOverlayLayout`
+（默认 `DEFAULT_SUBTITLE_OVERLAY_LAYOUT`），`App.tsx` 把它和 `onSubtitleOverlayLayoutChange`
+一起传进面板，并随 `ObsBrowserSourceConfig` 下发。**下次上游再加必填 prop 时照这个方向做**：
+把状态补进 store、接上回调、发布出去；只有「本页确实无法提供数据源」的控件才走
+`SETTINGS_SURGERY` 剥离（判据见 [`docs/known-inert-settings.md`](known-inert-settings.md)）。
+
+自动化替代（临时脚本放 `.scratch/`，用完删）：起 `npx vite dev --port 18090`，
 打开 `http://localhost:18090/dev.html`，依次点「歌词动画 / 背景 / 字体 / 字幕」四个
 `[role="tab"]`，每次点击后断言 `.st-window` 仍存在——不存在就是白屏（多半是必填 prop 缺失）。
-每个 tab 里再点开几个样式的设置面板，覆盖到新样式自己的 panel。
+每个 tab 里再点开几个样式的设置面板，覆盖到新样式自己的 panel（心象、雾笺、町景各开一次：
+心象只该有「渲染」一组，雾笺该有「窗外 / 玻璃 / 景物 / 渲染」等组，町景该有它的质量三档）。
 
 `vite.config.ts` 的 `SETTINGS_SURGERY` 用 marker 定位要摘掉的上游控件。**marker 失配会直接
 throw 并指名是哪个 marker**——那是在告诉你「上游改了这段源码，去看新源码重写 marker」，
-不是要你放宽检查。
+不是要你放宽检查。反过来，**上游给某个控件改了措辞或结构、而本页其实已经能支持它时，
+删掉那条 surgery 而不是改 marker 去继续剥**。
 
 ---
 
@@ -292,7 +356,7 @@ throw 并指名是哪个 marker**——那是在告诉你「上游改了这段�
 cd poc/settings-ui
 node scripts/check-style-sync.mjs --check                    # 样式清单与上游一致
 npx vite build                                              # thumbs / surgery marker / CSS 都在这过
-npx tsc --noEmit -p tsconfig.json 2>&1 | grep -c "error TS" # 不高于基线（当前 297，全是既有噪声）
+npx tsc --noEmit -p tsconfig.json 2>&1 | grep -c "error TS" # 不高于基线（0.7.26 树上基线 311）
 
 cd <repo>
 node packaging/tools/stage-web.mjs                          # staging（含 splash / thumbs / CSS 硬闸）
@@ -305,9 +369,10 @@ node packaging/tools/verify-all.mjs                         # 打包后总门禁
 
 ## 8. 已知的既有噪声（不是你的锅）
 
-- `npx tsc --noEmit` 会报约 **297** 个错误，**全部**来自 `work/` 里的上游源码（Electron/Node
-  类型缺失、`@/` 别名解析）与本页既有代码。基线会变，**动手前先自己跑一次记下数字，只要不新增
-  就行**。不要顺手去「修」那些 `@/...` 的 Cannot find module。
+- `npx tsc --noEmit` 会报约 **311** 个错误，**全部**来自 `work/` 里的上游源码（Electron/Node
+  类型缺失、`@/` 别名解析）与本页既有代码。基线会变（换上游树就会变：0.7.25 上是 297，换到
+  0.7.26 是 311），**动手前先自己跑一次记下数字，只要不新增就行**。不要顺手去「修」那些
+  `@/...` 的 Cannot find module。
 - `vite build` 会警告部分 chunk > 500 kB（上游 OBS bundle 的既有形态）。
 
 ---
@@ -315,10 +380,20 @@ node packaging/tools/verify-all.mjs                         # 打包后总门禁
 ## 9. 常见误判
 
 - **「闸门报错说明我改坏了」**：不一定。`check-style-sync --check` 报错只是说「本地副本与上游不
-  一致」，可能是上游刚加了样式你还没跟。先读它「上游有、本地缺」那一行。
+  一致」，可能是上游刚加了样式你还没跟。先读它「上游有、本地缺」那一行。**它只比对
+  `STYLE_ENTRIES` 的 order / labelKey / thumb / beatEffects、`StyleMode`、`STYLE_MODE_SHELF_ORDER`**，
+  面板选型、`labelFallback`、透明分类都不在校验范围里——闸门绿了不等于这几项对。
 - **「`--write` 为什么只改了几个文件」**：故意的，见 §3 的表。
 - **「`cadenza` 的 labelKey 少个 z，顺手修一下」**：是上游拼写如此，**不要改**，也不要从 labelKey
   反推样式 id。
+- **「上游加了 `modKeys` / `modPatch`，本页要不要跟」**：不要。那是 Folium mod 的读写白名单
+  （`folium.visualizer.setTuning`），本页不渲染 mod，`folium` 桩是空 registry；上游 0.7.26 给
+  15 个 tuning 都加了这一块，与本页无关，**不要去补**。
+- **「上游 tuning 多了 `render` / `quality.revision`，本页要不要写迁移」**：不用写代码，但要确认
+  两件事：`STYLE_TUNING_DEFAULTS` 是从上游 import 的（自动跟上），以及 `mergeTuning.ts` 的
+  shallow 合并对**嵌套**字段不会做深合并——`render` 是扁平对象，没问题；`machi.quality` 是嵌套
+  对象，老树里的 `quality` 会整块胜出，`revision` / 跟随全局由上游自己的
+  `normalizeMachiQuality` 迁移读出来（见 §3.1 的注）。
 
 ---
 
@@ -422,12 +497,13 @@ CP="spw-folia/build/classes/kotlin/main;spw-folia/build/classes/java/main;$KS"
 
 | 位置 | 期望 |
 | --- | --- |
-| `work/folia/folia-major-main/package.json` 的 `version` | 目标上游版本（当前 `0.7.25`） |
-| `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` 的 `PLUGIN_VERSION` | 插件版本（当前 `0.4.17`） |
+| `work/folia/folia-major-main/package.json` 的 `version` | 目标上游版本（当前 `0.7.26`） |
+| `spw-folia/src/main/kotlin/dev/spw/folia/FoliaPlugin.kt` 的 `PLUGIN_VERSION` | 插件版本（当前 `0.4.19`） |
 | `spw-folia/build.gradle.kts` 的 `version` 与 `PluginVersion` | 同上，三处必须一致（`verify-all.mjs` 会查） |
 | `poc/settings-ui/src/model/settings.ts` 的 `STYLE_MODE_SHELF_ORDER` | 17 项，顺序 = 上游 `order` 升序 |
-| `packaging/licenses/THIRD-PARTY.md` + `packaging/licenses-src/THIRD-PARTY.md` | 上游版本号与样式数 |
-| `docs/architecture.md` 开头的版本句 | 同上 |
+| `packaging/licenses-src/NOTICE.md` / `SOURCE-OFFER.md` / `THIRD-PARTY.md` 的上游 tag、commit、样式数 | 见 [`docs/licensing.md`](licensing.md) §4；改真源再 `bash packaging/build-package.sh` 同步 `packaging/licenses/` |
+| 仓库根 `THIRD_PARTY_NOTICES.md` 的版本列 | 同上 |
+| `docs/architecture.md` 开头的版本句、`docs/folia-spec/README.md` 的「事实基线」行 | 同上 |
 
 样式数可以用一条命令复核：`node poc/settings-ui/scripts/check-style-sync.mjs --check` 会打印
 「上游 N 个样式」并逐项比对本地清单。

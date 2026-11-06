@@ -77,6 +77,10 @@ poc/hook/tmp-verify/
 
 # local verification scratch (screenshots, logs, probes output)
 /tmp-inspect/
+# Per-project scratch next to the settings UI: the root rule above is anchored (/.scratch/), so
+# without this line an ad-hoc probe script dropped in poc/settings-ui/.scratch/ would be untracked
+# and could ride along in a `git add -A` into a release. Only the two tracked probes there are kept.
+/poc/settings-ui/.scratch/
 poc/webview/host/repro/*.exe
 poc/webview/host/repro/*.dll
 # compile output of the repro Java probes (VerifyResolver2 / RenameSim); the .java sources are tracked

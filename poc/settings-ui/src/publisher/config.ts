@@ -4,6 +4,8 @@
 import type { Line, LyricData, Theme, Word } from '@/types';
 import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 import type { VisualizerTuningBundle } from '@/components/visualizer/tuningRegistry';
+import { DEFAULT_SUBTITLE_OVERLAY_LAYOUT } from '@/utils/lyrics/subtitleOverlayLayout';
+import { normalizeMachiTuning } from '@/components/visualizer/machi/machiTuning';
 import {
     type BackgroundMode,
     type SettingsSnapshot,
@@ -185,6 +187,12 @@ export const buildTuningBundle = (
         const defaults = STYLE_TUNING_DEFAULTS[mode as StyleMode];
         bundle[mode] = defaults ? { ...defaults, ...tuning } : tuning;
     }
+    // 0.7.26 町景: the spread above fills every MISSING top-level key, but `quality` is nested, so a bag
+    // whose `quality` predates 0.7.26 (no `revision`, renderScale 1 + SMAA) would reach the renderer
+    // un-migrated — the shallow layer cannot see inside it. `normalizeMachiTuning` is upstream's own
+    // migration (legacy 100%/SMAA → 跟随全局, every field clamped), so the last line of defence applies it
+    // too. `still` has no bag; a tree with no machi entry keeps the default bag it just got.
+    if (bundle.machi) bundle.machi = normalizeMachiTuning(bundle.machi) as unknown as Record<string, unknown>;
     if (options?.transparent === true) {
         const styleMode = settings.styleId as StyleMode;
         const override = transparentStyleTuning(styleMode, { isDaylight: options.isDaylight === true });
@@ -266,6 +274,14 @@ export const buildConfig = ({ settings, track, theme, subtitleTheme, isDaylight,
         hideTranslationSubtitle: subtitle.hideTranslationSubtitle,
         showSubtitleTranslation: !subtitle.hideTranslationSubtitle && subtitleContentMode !== 'none',
         subtitleContentMode,
+        /* 0.7.25 副字幕行数/内容: the player page's `VisualizerSubtitleOverlay` defaults this to
+         * DEFAULT_SUBTITLE_OVERLAY_LAYOUT when the field is absent, but it must NOT be absent here —
+         * the whole point of the control is that the chosen rows reach the page, and the overlay reads
+         * this prop and not 副字幕内容 (`subtitleContentMode`) for what the bottom subtitle shows.
+         * Always sent, and always a parsed layout (`applySnapshot` guarantees the store value is one).
+         * It rides the normal payload, so `configSignature` covers it: changing the rows changes the
+         * signature and pushes exactly one new config. */
+        subtitleOverlayLayout: subtitle.subtitleOverlayLayout ?? DEFAULT_SUBTITLE_OVERLAY_LAYOUT,
         seed: seed ?? track?.id ?? CONFIG_SEED_FALLBACK,
         updatedAt: Date.now(),
     };

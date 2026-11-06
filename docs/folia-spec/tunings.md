@@ -15,6 +15,10 @@
 16 个样式有 `tuning.ts`（静止没有），**全部**遵循 `defineVisualizerTuning`，声明 `settingsKey`、
 `settingsSetterKey`、`settingsResetterKey`、`storage.key` 与 `defaults`：
 
+> 0.7.26 还给其中 15 个 tuning 声明了 `modKeys`（Folium mod 通过 `folium.visualizer.setTuning`
+> 读写时的字段白名单与取值守卫）。**本插件不渲染 mod、`folium` 桩是空 registry，这块用不到**，
+> 新增样式时不必照抄。
+
 | 样式 | settingsKey | 设置面板 | 动感效果 |
 |------|-------------|----------|----------|
 | sonnet 商籁 | `sonnetTuning` | `sonnet/SonnetSettingsPanel.tsx` | `sonnet.lensTear` 推镜裂光 |
@@ -22,9 +26,9 @@
 | lumiere 绘光 | `lumiereTuning` | `lumiere/LumiereSettingsPanel.tsx` | — |
 | hanabi 花火 | `hanabiTuning` | `hanabi/HanabiSettingsPanel.tsx` | `hanabi.beatBursts`、`hanabi.beatPulse` |
 | machi 町景 | `machiTuning` | `machi/MachiSettingsPanel.tsx` | `machi.neonPulse`、`machi.drumRipple`、`machi.screenFlash` |
-| nebbia 雾笺 | `nebbiaTuning` | `nebbia/NebbiaSettingsPanel.tsx` | `nebbia.drizzleRide`（两段强度） |
+| nebbia 雾笺 | `nebbiaTuning` | `nebbia/NebbiaSettingsPanel.tsx` | `nebbia.drizzleRide`（两段强度）、`nebbia.aquaBeat`（0.7.26 新增，四段） |
 | classic 流光 | `classicTuning` | `settingsPanels.tsx` 的 `ClassicSettingsPanel` | — |
-| cadenza 心象 | `cadenzaTuning` | **无面板**（显示「这个样式没有参数」） | — |
+| cadenza 心象 | `cadenzaTuning` | `cadenza/CadenzaSettingsPanel.tsx`（0.7.26 起，只有「渲染」一组） | — |
 | partita 云阶 | `partitaTuning` | `settingsPanels.tsx` 的 `PartitaSettingsPanel` | — |
 | fume 浮名 | `fumeTuning` | `settingsPanels.tsx` 的 `FumeSettingsPanel` | — |
 | tilt 倾诉 | `tiltTuning` | `settingsPanels.tsx` 的 `TiltSettingsPanel` | — |
@@ -49,9 +53,13 @@
 
 ## 2. 各样式默认值
 
+以下每个字面量都是上游 `DEFAULT_<MODE>_TUNING` 的**原文**；`render` 单独见 §2.1，不在这里重复。
+换上游版本后照 `src/types.ts` / `<mode>/types.ts` 重抄，不要凭记忆补。
+
 ### Classic —— `ClassicTuning`
 ```ts
 enableWordRotation: true, breathingFloatMultiplier: 1, useLegacyLayout: false, wordSpacing: 0.7,
+avoidOverlap: false,
 ```
 
 ### Cadenza —— `CadenzaTuning`
@@ -62,6 +70,7 @@ fontScale: 1.12, widthRatio: 0.72, motionAmount: 1, glowIntensity: 1, beamIntens
 ### Partita —— `PartitaTuning`
 ```ts
 showGuideLines: true, useSemanticLayout: true, staggerMin: 20, staggerMax: 100,
+avoidOverlap: false,
 ```
 
 ### Fume —— `FumeTuning`
@@ -156,26 +165,80 @@ launches: true, overlayFrame: true, textOnly: false, sky: 0.85, collage: 1, rend
 scene: 'auto', timeOfDay: 'auto', weather: 'auto', camera: 'default',
 views: { konbini: DEFAULT_MACHI_VIEW, station: DEFAULT_MACHI_VIEW, kowloon: DEFAULT_MACHI_VIEW },
 motion: false, motionSpeed: 1, aperture: 8, dof: 1, dofRange: 1, tiltShift: 0.3,
-focus: 'center', focusOffset: 0,
-quality: { renderScale: 1, antialias: 'smaa', shadows: 'high', reflections: 'high', glow: true, adaptive: true },
+focus: 'center', focusOffset: 0, simulatedBeat: true,
+quality: DEFAULT_MACHI_QUALITY,
 ```
 
 `views` 的每项默认是 `DEFAULT_MACHI_VIEW = { azimuth: 0, elevation: 0, zoom: 1, panX: 0, panZ: 0 }`；
-`quality` 的默认是 `{ ...MACHI_QUALITY_PRESETS.high, adaptive: true }`
+`quality` 的默认是 `{ ...MACHI_QUALITY_PRESETS.high, adaptive: true, revision: MACHI_QUALITY_REVISION }`。
+
+**町景的分辨率/抗锯齿不在 `render` 里**，走自己的 `quality`（0.7.26 起 `renderScale` / `antialias`
+都可以取 `'global'`，三档预设是）：
+
+```ts
+high:     { renderScale: 'global', antialias: 'global', shadows: 'high', reflections: 'high', glow: true },
+balanced: { renderScale: 'global', antialias: 'fxaa',   shadows: 'low',  reflections: 'low',  glow: true },
+low:      { renderScale: 0.75,     antialias: 'off',    shadows: 'off',  reflections: 'off',  glow: false },
+```
+
+`quality.revision`（`MACHI_QUALITY_REVISION = 2`）只用来判别「这棵树早于『跟随全局』」：老存档里
+分辨率 100% / SMAA 是当时的默认值（没人动过也会存下来），读的时候由 `machiTuning.ts` 的
+`normalizeMachiQuality` 换成 `'global'`。**这是上游的读时迁移，本页不要另写一份**。
 
 ### Nebbia —— `NebbiaTuning`（`nebbia/types.ts`）
 ```ts
-appear: ['write', 'fade'], fade: ['fog'], layouts: [...NEBBIA_LAYOUTS], credits: true,
-jitter: 0.6, warp: 0.6, mist: 0.75, hold: 1.2, refog: 4, strokeWidth: 0.09, writeSpeed: 1,
-doodle: 0.3, busSpeed: 1, neon: 1, spot: 0.5, spotX: 0.8, rainHit: 1, rainBig: 1, bump: 1,
-resolution: 1,
+appear: ['write', 'fade'], fade: ['fog'], layouts: [...NEBBIA_LAYOUTS],
+behind: 'night', glass: 'rain', scenery: [...NEBBIA_SCENERY], rain: 'slant',
+credits: true, jitter: 0.6, warp: 0.6, mist: 0.75, hold: 1.2, refog: 4,
+strokeWidth: 0.09, writeSpeed: 1, doodle: 0.3, busSpeed: 1,
+neon: 1, spot: 0.5, spotX: 0.8, rainHit: 1, rainBig: 1, bump: 1,
+jellies: 16, jellySize: 1, bubbles: 0.6,
+dew: 1, dewSize: 1, dewGlint: 1,
+snow: 1, snowSize: 1, snowMelt: 1,
 ```
+
+`behind` / `glass`（窗外景与玻璃质感）、`jellies` / `jellySize` / `bubbles`（水母与气泡）、
+`dew*` 与 `snow*` 这几组是 0.7.26 新增的：雾笺在这一版把「窗外」变成可选景，并加了水族箱方向的一整组
+玻璃/雾面参数（因此也多了一条 `nebbia.aquaBeat` 动感效果，见 [`style-map.md`](style-map.md) §2）。
 
 ### Still —— 无 tuning
 `still` 没有 `tuning.ts`（上游目录里只有 `entry.tsx` 和 `VisualizerStill.tsx`），设置页显示「这个样式没有参数」。
 插件侧的 `STYLE_TUNING_DEFAULTS.still` / `STYLE_TUNING_KEYS.still` 仍给出 `{}` 与 `'stillTuning'`，因为它们是
 `Record<StyleMode, …>`；这对渲染没有影响 —— 上游没有对应的 tuning 注册项，`applyVisualizerTuning` 找不到
 `apply` 时原样把共享 props 交下去。
+
+### 2.1 `render`：分辨率与抗锯齿的每样式覆盖（#929）
+
+0.7.26 给下表这 10 个样式的 tuning 加了必填的 `render: LyricRenderOverride`，默认一律
+
+```ts
+render: { scale: 'global', antialias: 'global' },
+```
+
+`'global'` 表示「跟随全局挡位」，实际生效值由 `utils/lyricRenderQuality.ts` 的
+`resolveLyricRenderQuality(global, override)` 合出来：覆盖里写了具体值就用它，否则用全局挡位
+（`lyricRenderQuality`，默认 `{ scale: 1, antialias: 'auto' }`）。`antialias` 的取值是
+`'global' | 'on' | 'off'`——`'auto'` **只存在于全局挡位**，样式覆盖里没有它。
+
+| 样式 | tuning 里 `render` | 面板渲染该组 | 面板带抗锯齿行 |
+|---|---|---|---|
+| cadenza | ✅ | ✅ | ❌（2D canvas，只有分辨率） |
+| diorama | ✅ | ✅ | ✅ |
+| fume | ✅ | ✅ | ❌（2D canvas） |
+| hanabi | ✅ | ✅ | ✅ |
+| lumiere | ✅ | ✅ | ✅ |
+| monet | ✅ | ✅ | ❌（2D canvas） |
+| nebbia | ✅ | ✅ | ❌（2D canvas） |
+| pendolo | ✅ | ✅ | ✅ |
+| sonnet | ✅ | ✅ | ✅ |
+| tempera | ✅ | ✅ | ✅ |
+| 其余 7 个（cappella / claddagh / classic / machi / partita / still / tilt） | — | — | — |
+
+`render` 是**必填**字段（不是可选）：面板拿它当 `tuning.render ?? DEFAULT_LYRIC_RENDER_OVERRIDE` 的
+左值，渲染器直接用。所以「老树里没有它」必须靠合并补上——`mergeTuning.ts` 的 defaults-first 合并
+恰好做这件事，`render` 是扁平对象、shallow 合并即可整体替换，不需要深合并。
+
+**町景（machi）不在这张表里**也不走 `render`：它的分辨率/抗锯齿在自己的 `quality` 预设里，见上一节。
 
 ## 3. 背景 tuning 默认值
 

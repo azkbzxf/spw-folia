@@ -49,7 +49,7 @@
 ## 3. 右栏四个 tab
 
 `VisPlaygroundSettingsPanel` 提供 tab 与内容，本插件的 `SettingsSection` 是
-`'visualizer' | 'background' | 'common' | 'subtitle'`，默认 `'visualizer'`。上游 0.7.25 还有一个「全局」tab
+`'visualizer' | 'background' | 'common' | 'subtitle'`，默认 `'visualizer'`。上游还有一个「全局」tab
 （智能动感模式），**已被构建期裁剪**，见 §3.1。
 
 tab 顺序与文案（`zh-CN.ts`）：**歌词动画** / **背景** / **字体** / **字幕**；右端是「默认」按钮。
@@ -63,11 +63,20 @@ tab 顺序与文案（`zh-CN.ts`）：**歌词动画** / **背景** / **字体**
 |---|---|
 | 「全局」tab + 智能动感模式卡 + 动感效果组 | 注入页没有节拍分析模型，宿主也不发节拍事件 |
 | 和声字幕组 | 插件不提供 TTML 和声数据 |
-| 副字幕内容里的「罗马音」「罗马音 + 翻译」 | 插件只发译文 |
-| 副字幕行数/内容控件（0.7.25 新增，需要 `subtitleOverlayLayout`） | 本页没有这个设置，且其 `getSubtitleOverlayRows` 无默认值会抛错并白屏 |
+| 副字幕内容里的「罗马音」「罗马音 + 翻译」 | 插件只发主文本与译文，罗马音行取不到文本 |
+| 副字幕行数控件里每行的「罗马音」选项 | 同上；store 侧还要兜住上游「加到三行会自动插罗马音行」的行为 |
 | 「预览文本」行（神文之诗 / 野芝麻） | 大预览改成播放页镜像后没有意义 |
 | 凝彩图层图片组、莫奈人像上传、群唱自定义头像/表情上传 | 没有本地文件服务与资产存储 |
 | 背景类型里的 `url`（嵌入） | 插件不提供自定义背景图 |
+
+**不在裁剪清单里的两件事**（容易误以为要剥）：
+
+- **副字幕行数/内容**（0.7.25 起）曾经被剥过：面板把它当必填 prop，本页没有对应设置，缺了直接白屏。
+  v0.4.19 起**补回来**：设置树有 `subtitle.subtitleOverlayLayout`，`App.tsx` 传 prop 与回调，
+  publisher 随 config 下发。见 §3.5。
+- **各样式面板的「渲染」组**（0.7.26 的 #929）：读的是 store 里的 `lyricRenderQuality`，
+  本页给了同名同默认值的字段，所以两行能正常渲染。全局挡位本身没有控件（上游那行在
+  「动画与性能」页，本插件不注入该页），值恒为默认。
 
 字体 tab 的「自定义字体」**保留**（v0.4.0 起是真的可用：导入字体包或选系统字体）。
 
@@ -75,12 +84,18 @@ tab 顺序与文案（`zh-CN.ts`）：**歌词动画** / **背景** / **字体**
 
 `key={visualizerMode}` 包裹，顺序：
 
-1. 当前样式的 `renderSettingsPanel(...)`（16 个样式有面板，心象与静止没有）；
+1. 当前样式的 `renderSettingsPanel(...)`（16 个样式有面板，只有「静止」没有）；
 2. 都没有时显示「这个样式没有参数」。
 
 面板收到的 props 是 `VisualizerSettingsPanelProps`：`{t, isDaylight, theme, controlCardBg, rangeInputClass,
 tuning, onTuningChange, settings, onSliderPointerDown, onSliderCommit}`。拖动滑块时只改草稿，松手才落盘。
 各样式字段与默认值见 [`tunings.md`](tunings.md)。
+
+**各样式面板里的「渲染」组**（0.7.26 的 #929）不在上表的通用参数里，它属于样式自己的 tuning：
+面板把 `LyricRenderQualityRows` 放进一个 `options.lyricRenderSection` 组，读写该样式 tuning 的
+`render` 字段（`{scale: 'global'|<倍数>, antialias: 'global'|'on'|'off'}`），「跟随全局」时取
+store 的 `lyricRenderQuality`。**2D canvas 的样式只给分辨率一行**（`antialias={false}`）。
+哪些样式有这份覆盖见 [`../upstream-sync.md`](../upstream-sync.md) §3.1.2。
 
 ### 3.3 背景 tab
 
@@ -111,6 +126,7 @@ visualizerOpacity}` 与 `uploadedFonts[]`。字体文件本身不进设置树（
 |---|---|---|
 | 隐藏底部字幕层 | 开关 | false |
 | 副字幕内容 | 选择（翻译 / 不显示） | 翻译 |
+| **副字幕行数/内容** | 分段（1 / 2 / 3 行）+ 每行的内容选择 | 1 行，内容 = 翻译 |
 | 字幕透明度 | 滑块 0.2–1 | 0.6 |
 | 字幕背景 | 开关 | true |
 | 非翻译歌词添加模糊效果 | 开关 | true |
@@ -118,7 +134,15 @@ visualizerOpacity}` 与 `uploadedFonts[]`。字体文件本身不进设置树（
 | 字幕字体 / 自动字重 / 字重 | 选择 + 滑块 | 继承时隐藏；字重默认自动（`null`） |
 | 字幕缩放 | 滑块 0.85–1.4 | 1 |
 
-字幕渲染侧的契约（字号公式、次级行 0.88、字号唯一来源）见 [`runtime-contracts.md`](runtime-contracts.md) §8。
+**副字幕行数/内容**存的是上游 `SubtitleOverlayLayout`（字段 `subtitle.subtitleOverlayLayout`，
+默认 `'translation'`）：单行时可选「当前句 / 翻译」；两行及以上的第一行固定是当前句，后面每行在
+「下一句 / 翻译」里选。取值由上游 `parseSubtitleOverlayLayout` 校验，非法值不会进 store（面板的
+`getSubtitleOverlayRows(layout)` 会直接 `split('+')`，没有默认值）。
+**没有「罗马音」选项**：插件只发 `main` / `sub`，罗马音行永远是空的，所以两条选项列表在构建期滤掉了它；
+老树里存着罗马音行组合的，读入时由 `sanitizeSubtitleOverlayLayout` 换成译文/下一句。
+
+字幕渲染侧的契约（字号公式、次级行 0.88、字号唯一来源、行组合怎么取文本）见
+[`runtime-contracts.md`](runtime-contracts.md) §8。
 
 ## 4. 「默认」按钮
 
@@ -130,7 +154,7 @@ visualizerOpacity}` 与 `uploadedFonts[]`。字体文件本身不进设置树（
 | 歌词动画（随机池打开） | 还有样式没被勾上 | 全选 17 种样式 |
 | 背景 | 当前背景声明了 `resetSettings` | 重置背景 tuning |
 | 字体 | 恒可 | 字号→1、字重→自动、整体透明度→1、字体→无衬线、清掉自定义字体 |
-| 字幕 | 恒可 | 字幕透明度→0.6、缩放→1、隐藏→false、内容→翻译、行组合→默认、背景→true、模糊→true、继承字体→true |
+| 字幕 | 恒可 | 字幕透明度→0.6、缩放→1、隐藏→false、内容→翻译、行组合→`'translation'`、背景→true、模糊→true、继承字体→true |
 
 重置前会先丢弃该 tab 上正在拖动的草稿（`gate.forget(...)` / `withoutDraft`），否则松手后的提交会把刚写回的默认值
 再覆盖掉一次。
