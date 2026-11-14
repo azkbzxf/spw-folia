@@ -974,8 +974,18 @@ namespace SpwFolia
                     inputCatcher.ApplyWholeWindowRegion();
                     return;
                 }
-                int clientW = inputCatcher.ClientSize.Width;
-                int clientH = inputCatcher.ClientSize.Height;
+                // PR #25 (Neko520nya) found this one: the catcher's own ClientSize is not a reliable
+                // geometry source. It is a borderless form whose Bounds we assign from this form, so
+                // in steady state the two agree — but while its handle is being created (and on the
+                // very first apply, which happens before the page has reported anything) it can read
+                // back zero or a stale size, and every page rectangle then got clipped away. The host
+                // Form's ClientSize is the rectangle WebView2 is actually laid out into and is always
+                // valid, so it is the single source for BOTH the clip rectangle and the CSS -> window
+                // scale. Falls back to Bounds when the client area is not resolved yet.
+                Size regionSize = ClientSize;
+                if (regionSize.Width <= 0 || regionSize.Height <= 0) regionSize = Bounds.Size;
+                int clientW = regionSize.Width;
+                int clientH = regionSize.Height;
                 if (clientW <= 0 || clientH <= 0)
                 {
                     inputCatcher.ApplyEmptyRegion();
@@ -983,6 +993,14 @@ namespace SpwFolia
                 }
                 // issue #24: s = clientW / hitViewportWidth (one DPI ratio for both axes; the page
                 // reports CSS pixels so the ratio is the same in x and y). Unknown viewport -> 1.
+                //
+                // Why a ratio at all, and why it is not "double scaling" (PR #25's premise): the page
+                // reports getBoundingClientRect() in CSS px, i.e. the same space as window.innerWidth.
+                // Measured on this machine at DSF 1.802: innerWidth=1776 while the window is 3200 px
+                // wide, and the gear reports x=1712 with x+w=1752 <= 1776 — unambiguously CSS px, and
+                // 2496 (the number PR #25 quotes as "window px") exceeds innerWidth, so it cannot be a
+                // value the page produced. vw/vh and the rects always arrive in the SAME `hitbox`
+                // message, so the pair is self-consistent even across the webview-scale transition.
                 bool viewportOk = hitViewportWidth > 0 && hitViewportHeight > 0;
                 double scale = 0;
                 double scaleY = 0;
@@ -994,7 +1012,7 @@ namespace SpwFolia
                 }
                 if (!viewportOk) { scale = 1; scaleY = 1; }
 
-                Rectangle clip = new Rectangle(Point.Empty, inputCatcher.ClientSize);
+                Rectangle clip = new Rectangle(Point.Empty, regionSize);
                 List<Rectangle> rects = new List<Rectangle>();
                 bool pageRects = false;
                 if (viewportOk && hitRegionsCss.Count > 0)
@@ -1015,11 +1033,18 @@ namespace SpwFolia
                 AddCornerRegion(rects, clip, clientW - 64 * scale, 24 * scale, scale);
                 AddCornerRegion(rects, clip, clientW - 72 * scale, clientH - 96 * scale, scale);
                 inputCatcher.ApplyHitRegion(rects);
-                string sig = rects.Count + "/" + (pageRects ? "page" : "corner") + "/" + clientW + "x" + clientH;
+                // PR #25's diagnostic shape, kept: the clip rectangle and the scale are the two inputs
+                // that decide whether a page rectangle lands inside the window, so a report can settle
+                // "the page never reported" vs "we mapped it wrong" without another round trip.
+                string sig = rects.Count + "/" + (pageRects ? "page" : "corner") + "/" + clientW + "x" + clientH
+                    + "/" + JsonUtil.Num(scale);
                 if (sig != lastHitboxApplySig)
                 {
                     lastHitboxApplySig = sig;
-                    log.Log("info", "hitbox apply rects=" + rects.Count + (pageRects ? "" : " fallback=corner"));
+                    log.Log("info", "hitbox apply rects=" + rects.Count + (pageRects ? "" : " fallback=corner")
+                        + " clip=" + clientW + "x" + clientH + " scale=" + JsonUtil.Num(scale)
+                        + " page=" + hitRegionsCss.Count + " viewport=" + JsonUtil.Num(hitViewportWidth)
+                        + "x" + JsonUtil.Num(hitViewportHeight));
                 }
             }
             catch (Exception ex) { log.Error("transparency-mouse", ex); }
