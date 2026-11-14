@@ -144,7 +144,7 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
    `SHA256SUMS.txt` 已重写。
 3. **跑门禁**：
    - `node packaging/tools/verify-all.mjs` —— `core`（版本三处一致、声明⇄读取双向、无重复键、
-     无孤儿门禁脚本、JVM 配置失败路径）+ 4 个真实宿主套件**并发**跑，约 50 s。
+     无孤儿门禁脚本、JVM 配置失败路径）+ 5 个真实宿主套件**并发**跑，约 80 s。
      未运行的项打印为 `SKIP` 并给出原因，**不计入 PASS**。
    - `--static` 只跑不需要打包产物的部分。
    **健康机上出现 `FAIL` 就是阻断项。**
