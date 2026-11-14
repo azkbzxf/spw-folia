@@ -31,13 +31,21 @@ can also be floated straight over your desktop.
   itself on the left (real song, real lyrics, real background), so every slider reflects live.
 - **Custom fonts and subtitles** — import a font pack (`.ttf` / `.otf` / `.woff` / `.woff2`, up to
   50 MB each) or pick from system fonts; weight, size, overall opacity, subtitle style and
-  background, upcoming-lyric blur and more are all adjustable.
+  background, upcoming-lyric blur and more are all adjustable. **Text colour** has its own
+  light / dark / follow-system choice, plus a separate one for the transparent window (both default
+  to follow-system, i.e. unchanged behaviour).
 - **Colours follow the cover art** — theme, background and accent colours derive from the current
   track's cover and change as the song changes.
+- **Picture quality on your terms** — the **Global rendering** group at the top of the lyric-style
+  settings sets the lyric canvas resolution (`0.5×`–`2×`) and anti-aliasing for every style that
+  follows it; a single style can still override both in its own **Rendering** group.
 - **Float the lyrics over your desktop** — the button panel at the bottom right of the player page
   turns on **transparent playback page**: the window becomes genuinely transparent and leaves only
   lyrics and effects over the desktop or other windows, ideal for streaming or OBS overlays. The row
   below, **mouse passthrough**, lets you keep working while the lyrics stay on screen.
+- **No screensaver while it plays** — 模组管理 → 配置 → 播放页 → **Keep screen awake** (on by
+  default) blocks the screensaver and display sleep while the player page is open, so the lyrics are
+  never covered; turn it off to go back to the system's own power policy.
 - **Shortcuts to get back** — SPW's shortcut manager offers two re-bindable actions, `Toggle
   transparent playback page` (default **Ctrl+Alt+G**) and `Toggle transparent playback page + mouse
   passthrough` (default **Ctrl+Alt+Shift+G**). **Ctrl+Alt+B** restores opacity from the
@@ -109,6 +117,10 @@ The full dependency matrix and crash troubleshooting live in
   it does in Folia. All inert settings controls have been removed; the list of what remains is in
   [docs/known-inert-settings.md](docs/known-inert-settings.md).
 - **Windows only** — the helper depends on WebView2 and the Windows audio stack.
+- **Global rendering only reaches styles that draw at a pixel density** — the ten with a `render`
+  tier (sonnet, tempera, lumiere, hanabi, machi, nebbia, monet, pendolo, diorama, cadenza) plus
+  machi's own quality group follow it; classic, partita, tilt, claddagh, cappella and still are pure
+  DOM/CSS and are drawn the same whatever the tier says.
 - **Follows SPW patch releases** — the menu entry is located at runtime, so 1.19.x patch releases
   work without a plugin update; anything below 1.19.0 is refused explicitly and logged
   (see [docs/hook-target.md](docs/hook-target.md)).

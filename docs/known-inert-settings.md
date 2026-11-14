@@ -17,6 +17,7 @@
 | 播放页 | 打开过渡动画（`transitionAnimation`） | 关 | 插件读 config → 宿主 `--no-curtain` → 页面按 `splash=0` 导航，不装上游开屏。**下一次打开 Folia 生效**（spawn 期参数） |
 | 播放页 | 歌词样式预览动画（`previewAnimation`） | **开** | 设置树顶层布尔 → 页面 `usePreviewAnimation()`。关时货架走 `ShelfStatic`，**一个渲染器 chunk 都不加载**；开时走 `ShelfLiveView`（真实渲染器小图 + 磁盘缓存） |
 | 播放页 | 显示问题反馈按钮（`showProblemButton`） | **关** | 控制播放页右上角的救生圈按钮及其诊断面板。关闭时 **React 不挂载**（不是 CSS 隐藏），因此也不上报 hit region |
+| 播放页 | 保持屏幕唤醒（`keepScreenAwake`，issue #22 第 3 条） | **开** | 插件读 config → 设置树顶层布尔 → 宿主 `SetThreadExecutionState(ES_CONTINUOUS\|ES_DISPLAY_REQUIRED\|ES_SYSTEM_REQUIRED)`，播放页开着时阻止屏保与显示器休眠。关掉即恢复系统设置。宿主每 1 s 重断言一次（防别的进程改掉执行状态），关窗时清除；`--no-keep-awake` 是诊断用的逃生参数 |
 | 诊断与日志 | 详细日志（`verboseLog`） | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志。**下一次打开 Folia 生效** |
 | 支持与反馈 | 出现问题（`button`） | — | 环境自检 + 预填反馈页 + 打开日志文件夹 |
 
@@ -30,8 +31,11 @@
 | 歌词动画 | 歌词样式磁贴（17 种 + 随机） | 写入 `visualizerMode`；随机磁贴打开随机池，手选样式则关闭随机（与上游 `preserveRandom` 语义一致） |
 | 歌词动画 | 纹理分辨率、镜头运动强度、文字动势、背景短线密度、外围边框等样式参数 | 通过 `visualizerTunings` 传给渲染器 |
 | 歌词动画 | 各样式专属参数（商籁 / 凝彩 / 绘光 / 花火 / … / 心象 / 静止） | 同上；只保留可渲染的项。0.7.26 起**只有「静止」没有设置面板**，其余 16 个都有 |
-| 歌词动画 | 各样式面板的「渲染」组：分辨率、抗锯齿（上游 0.7.26 的 #929） | 写进该样式 tuning 的 `render`，随 `visualizerTunings` 下发；默认「跟随全局」。受影响的是 `cadenza` `diorama` `fume` `hanabi` `lumiere` `monet` `nebbia` `pendolo` `sonnet` `tempera`，其中 2D canvas 那四个（`cadenza` `fume` `monet` `nebbia`）只有分辨率一行。町景用自己的 `quality` 组表达同一件事 |
+| 歌词动画 | **全局渲染**（本窗口新增，issue #22 第 1 条）：歌词画布分辨率 `0.5×/0.75×/1×/1.5×/2×`、抗锯齿 `自动/开/关` | 对应上游「动画与性能」页的 #929 全局挡位，而那个页面没有被注入，所以用户原本无处可设。两条通路同时走：① 发布时把各样式 tuning 里 `render.*` 的 `'global'` **物化**成该值（町景的 `quality` 按上游 `settle()` 映射），改动立刻生效且**不写回**设置树（关掉/改回后「跟随全局」仍在）；② 同时镜像进 Folia 自己的 `localStorage['lyric_render_quality']`，下次开窗时它的 store 初值也一致。全局挡位只对**读它**的样式有效，见下一行 |
+| 歌词动画 | 各样式面板的「渲染」组：分辨率、抗锯齿（上游 0.7.26 的 #929） | 写进该样式 tuning 的 `render`，随 `visualizerTunings` 下发；默认「跟随全局」，选了具体值就只改这个样式。受影响的是 `cadenza` `diorama` `fume` `hanabi` `lumiere` `monet` `nebbia` `pendolo` `sonnet` `tempera`，其中 2D canvas 那四个（`cadenza` `fume` `monet` `nebbia`）只有分辨率一行。町景用自己的 `quality` 组表达同一件事。**`classic` `partita` `tilt` `claddagh` `cappella` `still` 没有这个字段**（纯 DOM/CSS，不吃像素密度），所以「全局渲染」对它们不生效 |
 | 字体 | 字体族（无衬线/衬线/等宽/自定义）、字号、自动字重、整体透明度 | 字体族/字重写入 `theme.fontStyle` / `theme.fontWeight`（自定义时另写 `fontFamily` / `fontFamilyStack`），渲染器实际读取 |
+| 字体 | **文字颜色**（本窗口新增，issue #22 第 2 条）：浅色 / 深色 / 跟随系统 | 写进设置树 `fontColorMode`。**只改文字那一侧**：`themeFromSample` 拿到独立的 `options.textIsLight`，`primaryColor` / `secondaryColor` / `accentColor` 按它选，而 `isDaylight` 与背景色仍由封面（不透明）或系统配色（透明）决定 —— 否则选「深色文字」会把绘光的暗场、凝彩的调色底、以及 `transparencyCompat` 的兼容判定一起翻过去。默认「跟随系统」= 引入这个选项之前的逐字行为 |
+| 字体 | **透明窗口下的文字颜色**（同上）：浅色 / 深色 / 跟随系统 | 写进 `transparentFontColorMode`，只在「播放页透明背景」打开时出现并生效（透明时没有封面底色，原策略本来就与不透明时不同，所以两者分开选）。默认「跟随系统」 |
 | 字体 | 自定义字体（磁贴 + 导入字体包 + 系统字体列表） | 导入的字体包经 `FontFace` 注册进注入页并持久化到 IndexedDB（单个 ≤ 50 MB，支持 `.ttf/.otf/.woff/.woff2`）；系统字体列表由插件 Kotlin 侧用 AWT 枚举，随设置树以 `systemFonts` 下发（**不落盘**） |
 | 字幕 | 隐藏翻译字幕、字幕内容模式（翻译）、字幕不透明度、字幕背景、即将歌词模糊、字幕字号 | 映射到 `subtitleOverlay*` / `showSubtitleTranslation` / `subtitleContentMode` / `subtitleFontScale` |
 | 字幕 | **副字幕行数 / 内容**（上游 0.7.25 新增，行组合即 `subtitleOverlayLayout`） | 写进设置树 `subtitle.subtitleOverlayLayout`，随 `ObsBrowserSourceConfig` 下发；播放页按它逐行取文本。可选「1/2/3 行」并逐行选内容，多行布局的第一行固定是当前句。行内容里**没有罗马音**（理由见 §2 的罗马音一行）；从一行切到三行时上游会自动插入罗马音行，所以 store 侧还有一道 `sanitizeSubtitleOverlayLayout` 把它换掉 |

@@ -76,11 +76,25 @@ webView.DefaultBackgroundColor = Color.Black;
 - 区域内到达的消息由 `WndProc` 无条件转发：把客户坐标换屏幕坐标后 `ScreenToClient(WebView2 输入子窗口)`，
   `SendMessage` 投给 `Chrome_WidgetWin_1`（退路 `Chrome_RenderWidgetHostHWND`）。滚轮例外：
   `WM_MOUSEWHEEL` 的 `lParam` 已是屏幕坐标、delta 在 `WPARAM` 里，原样投递。
-- **fail-open**：`mousePassthrough` 关闭、页面未上报矩形或 viewport 非法时区域置空（整窗可点）——
-  宁可多点到页面，也不吞掉用户的点击。
+- **fail-closed（issue #24 起）**：穿透开启时捕获窗**永远**有一个区域。页面热区有效就用热区并集；还没上报
+  （持久化的穿透在 stdin settings 到达时就生效，远早于 WebView2 ready）就退到两个**角落锚点**（右上齿轮 +
+  右下圆钮，右/下锚定，视口未知时按 1:1 估）；连锚点都被裁掉时显式传**空 HRGN**（`CreateRectRgn(0,0,0,0)`）。
+  绝不能传 `null` —— `SetWindowRgn(hwnd, NULL)` 是「取消区域」，命中测试随即放开整窗，这正是用户报的
+  「勾了穿透，点击仍被置顶窗口吞掉」：捕获窗从一出生就是整窗，把每一次点击都吃掉了。
+- **z-order 才是那次故障的决定性成因**：`ShowInputCatcher()` 原先先 `BringToFront()` 再 `Show()`，而对**隐藏**
+  窗口 `BringToFront()` 是静默 no-op；`ApplyWindowGeometry()` 又用 `TopMost` 把播放窗重新提到最上。于是捕获窗
+  长期位于播放窗**之下**、从未收到输入，穿透整体失效。现在捕获窗 `Owner = this` 并用显式
+  `SetWindowPos(HWND_TOPMOST)` 压在上面，且每次 geometry 变化后重新断言。日志里 `catcher raised` 这一行是否
+  出现，就是这条修复的直接证据（修复前它一次都不会出现）。
+- **主窗口 `WS_EX_TRANSPARENT`**（仅穿透期间）：作为纵深防御让主窗整体让位。注意它**不传染**子窗口 ——
+  WebView2 的 `Chrome_WidgetWin_0` 仍可命中，所以只靠它并不能实现穿透，热区的可用性靠的是捕获窗
+  `SendMessage` 转发（与命中测试无关）。
 - **拖拽连续性**：热区内按下任一鼠标键即把区域临时扩展为整窗（`catcherDragActive`），全部按键抬起后恢复；
   若 button-up 被 WebView2 吃掉，下一次移动用 `GetAsyncKeyState` 自愈，区域不会永久保持整窗。
 - 区域重建时机：hitbox 更新、bounds 变化、穿透开关、句柄重建（`OnHandleCreated`）。
+- **诊断**：`hitbox rects=N viewport=WxH`（页面声称什么）与 `hitbox apply rects=N [fallback=corner]`（捕获窗实际
+  变成什么）各一行，均按变化去重。这两行是本类故障唯一能从日志定性的证据 —— 此前只有 `rects=0` 可看，
+  分不清「区域是 2 个热区」还是「整窗」。
 - **参数窄化陷阱**：x64 .NET Framework 上 `IntPtr.ToInt32()` 是**带溢出检查**的窄化转换，而 Win32 把消息参数
   零扩展投递——`WM_MOUSEWHEEL` 滚轮向下时低 dword 的 bit31 为 1，`ToInt32()` 会抛 `OverflowException` 直接弹
   「应用程序中发生了未经处理的异常」。参数一律走 `unchecked((int)m.WParam.ToInt64())` /
@@ -169,8 +183,9 @@ node poc/settings-ui/scripts/verify-colour-key.mjs   # 真实宿主 + GDI 全屏
 - **默认会吞鼠标**：透明模式靠捕获窗口转发鼠标；要操作下层窗口需打开面板里的「鼠标穿透（操作桌面）」，或按
   Ctrl+Alt+B / ESC 退出透明。打开穿透后只有热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，其余位置的
   点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口。
-- **热区来自页面上报**：上报缺失或解析失败时退化为整窗可点（fail-open）；按住拖拽期间热区临时扩展为整窗，
-  松开即恢复。
+- **热区来自页面上报**：上报缺失时退化为**两个角落锚点**（不是整窗，issue #24 之前是 fail-open 整窗，那是个
+  bug）；按住拖拽期间热区临时扩展为整窗，松开即恢复。页面若改动了齿轮/圆钮的位置，锚点会错位 —— 表现是
+  「兜底时点不到」，不会退回整窗。
 - **`backdrop-filter` 退化**：透明时 chrome/面板/播放条改用平面底色（§2.2），控件仍可点。
 - **样式限制**：`monet`、浅色主题的 `lumiere`、`machi`、`nebbia` 不可用（§3）；`tempera`/`lumiere`(暗色)/
   `pendolo`/`still`/`hanabi` 在透明期间会自动精简，画面与不透明时略有差异——`tempera` 只剩逐字歌词与线框，

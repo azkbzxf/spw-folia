@@ -146,11 +146,16 @@ internal object FoliaDiagnostics {
      * the old `config.json` key, but only as a migration source for the page's own store
      * (injected as `showPlaybackBarLegacy`); see [FoliaConfigSync.showPlaybackBar]. A legacy read is
      * not a declared switch.
+     *
+     * issue #22 item 3: `keepScreenAwake` is listed. Omitting it does not fail silently — this check
+     * would report FAIL 「声明里有代码没读的开关」 the moment a user pressed 「出现问题」, because the
+     * comparison is two-directional.
      */
     private val KNOWN_CONFIG_SWITCHES = setOf(
         "transitionAnimation",
         "showProblemButton",
         "previewAnimation",
+        "keepScreenAwake",
         "verboseLog",
     )
 

@@ -25,6 +25,8 @@ import {
 import Stage from '~/model/Stage';
 import { getStyleEntry } from '~/model/styles';
 import { getStyleTransparencyCompat } from '~/model/transparencyCompat';
+/* issue #22 item 1: 全局歌词画布挡位 → Folia 自己的 localStorage 键（下次开窗一致）。 */
+import { installLyricRenderQualityMirror } from '~/model/lyricRenderQualityStorage';
 import {
     CONTROL_CARD_BG,
     FONT_SCALE_OPTIONS,
@@ -159,6 +161,10 @@ const App: React.FC<AppProps> = ({ injected }) => {
     }, [state.transparentPlayerBackground]);
 
     useEffect(() => subscribeSettingsRoundTrip(), []);
+    /* issue #22 item 1: 歌词画布的全局挡位除了随 config 物化下发（本次运行生效），还要镜像进 Folia 自己的
+     * localStorage 键，播放页下次初始化才会拿到同一个值。挂在 App 上而不是控件里：控件只在设置窗打开时
+     * 挂载，而「加载时同步一次」必须在页面加载时就发生。 */
+    useEffect(() => installLyricRenderQualityMirror(), []);
     useEffect(() => setSettingsUiOpenState(open), [open]);
 
     // v0.4.11: if the button is switched off while its panel is open, take the panel down with it.

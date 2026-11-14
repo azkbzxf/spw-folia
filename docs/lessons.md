@@ -173,7 +173,20 @@
 - **鼠标穿透用 OS 命中测试层，不做合成输入。** 捕获窗 `SetWindowRgn` = 页面热区并集
   （±4 CSS px 容差），区域外原生穿透。**禁止**再用 `mouse_event` 回放 / 220 ms 恢复捕获窗 /
   逐点命中 —— 合成输入只回放左键（右键/滚轮/悬停被吞）、拖拽必断、会被提权窗口与反作弊拦截。
-- **fail-open**：热区数据缺失时宁可整窗可点，也不吞用户点击。
+- **fail-*closed*（issue #24 修正）：穿透开启时区域永远不能是 `null`。** `SetWindowRgn(hwnd, NULL)` 是
+  「取消区域」= 整窗可命中，所以「热区还没上报就先 fail-open」的写法会让捕获窗从一出生就吞掉每一次点击，
+  而持久化的穿透恰恰在 stdin settings 到达时就生效、远早于 WebView2 ready。缺数据时退到**角落锚点**
+  （右/下锚定，视口未知按 1:1），连锚点都被裁掉就显式传**空 HRGN**（`CreateRectRgn(0,0,0,0)`）——
+  传 `null` 和传「空 List」都不行，后者在 `combined` 仍为 `IntPtr.Zero` 时同样退化成整窗。
+- **「窗口在 z-order 的哪一层」比「区域设成什么」更能决定穿透是否生效。** 对**隐藏**窗口调用
+  `BringToFront()` 是静默 no-op，而 `TopMost = true` 的重新赋值会把播放窗又提到最上；两者叠加会让捕获窗
+  长期待在播放窗**之下**、一次输入都收不到，症状与「区域设错」完全一样。`Owner = this` + 显式
+  `SetWindowPos(HWND_TOPMOST)` + geometry 后重新断言，三件都要做。
+- **`WS_EX_TRANSPARENT` 不传染子窗口。** 主窗设了它，WebView2 的 `Chrome_WidgetWin_0`（ex-style `0`）仍然
+  命中，所以「给主窗加 transparent」不能单独实现穿透；热区可用性靠捕获窗 `SendMessage` 转发，与命中测试无关。
+- **fail-open 的日志缺口本身就是 bug。** 这类故障此前只有 `passthrough=on rects=0` 一行可看，分不清区域是
+  「2 个热区」还是「整窗」。现在必须同时记「页面声称什么」（`hitbox rects=N viewport=WxH`）与「实际变成什么」
+  （`hitbox apply rects=N [fallback=corner]`），并按变化去重。
 - **拖拽连续性**：按住键期间区域临时整窗，并用 `GetAsyncKeyState` 自愈丢失的抬起事件。
 - **透明窗口不要用 WinForms `TransparencyKey`**，它会闪一帧洋红（设置色键会重建窗口句柄）。
   直接用 `SetLayeredWindowAttributes` / 分层窗口 API，并在设置背景色**之前**装好色键。

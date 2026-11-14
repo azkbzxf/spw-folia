@@ -34,9 +34,10 @@ import {
     parseSubtitleOverlayLayout,
     subtitleOverlayLayoutFromContentMode,
 } from '@/utils/lyrics/subtitleOverlayLayout';
-/* #929: the global lyric-canvas render tier lives in Folia's own settings store; this window has no
- * control for it (upstream's is on 动画与性能, which we do not inject), so it is mirrored here at its
- * default and handed to the reused panels through the store stub. */
+/* #929: the global lyric-canvas render tier lives in Folia's own settings store, whose own control
+ * sits on 动画与性能 — a page this window does not inject (issue #22 item 1). The value is therefore
+ * owned here, handed to the reused panels through the store stub, published materialised into each
+ * style's tuning (`publisher/config.ts`) and mirrored into Folia's localStorage key. */
 import { DEFAULT_LYRIC_RENDER_QUALITY, normalizeLyricRenderQuality } from '@/utils/lyricRenderQuality';
 import { getStyleTransparencyCompat } from './transparencyCompat';
 import { mergeTuningMap } from './mergeTuning';
@@ -78,6 +79,28 @@ export type BackgroundMode = 'common' | 'monet' | 'nomand' | 'latent' | 'url' | 
 export type SettingsSection = 'visualizer' | 'background' | 'common' | 'subtitle';
 
 export type FontChoice = 'sans' | 'serif' | 'mono' | 'custom';
+
+/**
+ * issue #22 item 2 — 歌词/字幕的文字颜色。
+ *
+ * 只影响**文字**（`Theme.primaryColor` / `accentColor` / `secondaryColor`），不影响背景与强调色之外的
+ * 任何东西：`Theme.backgroundColor` 由封面色决定，改了会把画面本身的底色也翻过去。
+ *
+ * 三个取值的语义（不要按名字猜，按这一句读）：
+ *  - `'light'` = **浅色文字**，适合深色画面（映射到 `themeFromSample` 的 `isLightOverride = false`，
+ *    即深色主题）；
+ *  - `'dark'`  = **深色文字**，适合浅色画面（`isLightOverride = true`，浅色主题）；
+ *  - `'system'`= 维持引入这个设置之前的行为：不透明时由封面亮度决定，透明窗口时跟随系统配色方案。
+ *
+ * 默认 `'system'`，所以升级用户看到的样子不变。
+ */
+export type FontColorMode = 'light' | 'dark' | 'system';
+
+export const FONT_COLOR_MODES = ['light', 'dark', 'system'] as const satisfies readonly FontColorMode[];
+
+/** 存着/导入的取值读成合法值；认不得的一律回 `'system'`（保持现状，不改观感）。 */
+export const normalizeFontColorMode = (value: unknown): FontColorMode =>
+    (FONT_COLOR_MODES as readonly unknown[]).includes(value) ? value as FontColorMode : 'system';
 
 /** Each style's tuning defaults, imported from Folia so its own panel shows Folia's values. */
 export const STYLE_TUNING_DEFAULTS: Record<StyleMode, Record<string, unknown>> = {
@@ -284,17 +307,29 @@ interface SettingsState {
     textureResolution: number;
     setTextureResolution: (value: number) => void;
 
-    /** #929: the GLOBAL lyric-canvas render tier (分辨率 / 抗锯齿), read by the reused panels'
-     *  `LyricRenderQualityRows` through `stubs/useVisualizerSettingsStore` — that stub aliases Folia's
-     *  store to this one, and the rows call `formatLyricRenderScale(global.scale)`, which throws on
-     *  `undefined`. Upstream keeps the tier in 「动画与性能」(GraphicsPage); this window does not inject
-     *  that page, so there is no control here — the value stays at the upstream default and each
-     *  style's own `render` override (in its tuning bag) is what the panel lets the user change.
-     *  Not persisted (no UI writes it, so there is nothing to round-trip) and NOT published in the
-     *  config: `ObsBrowserSourceConfig` has no such field, and the player side reads the per-style
-     *  `render` from `visualizerTunings`, which is already published. */
+    /** #929 / issue #22 item 1: the GLOBAL lyric-canvas render tier (分辨率 / 抗锯齿), read by the
+     *  reused panels' `LyricRenderQualityRows` through `stubs/useVisualizerSettingsStore` — that stub
+     *  aliases Folia's store to this one, and the rows call `formatLyricRenderScale(global.scale)`,
+     *  which throws on `undefined`. Upstream keeps the tier in 「动画与性能」(GraphicsPage); this
+     *  window does not inject that page, so `chrome/SpwRenderQualityGroup` is the control and this
+     *  store owns the value.
+     *
+     *  Two consumers, and they need different things (see `publisher/config.ts`):
+     *   - the published config: each style's `render.scale === 'global'` is materialised into this
+     *     value, because the player page never reads the global tier from the config — it reads its
+     *     own localStorage key;
+     *   - Folia's own storage: `model/lyricRenderQualityStorage.ts` mirrors this value into
+     *     `LYRIC_RENDER_QUALITY_STORAGE_KEY`, so a window opened later starts on the same tier. */
     lyricRenderQuality: LyricRenderQuality;
     handleSetLyricRenderQuality: (patch: Partial<LyricRenderQuality>) => void;
+
+    /** issue #22 item 2: 歌词/字幕的文字颜色（不透明窗口时用的那一份）。 */
+    fontColorMode: FontColorMode;
+    setFontColorMode: (mode: FontColorMode) => void;
+    /** issue #22 item 2: 透明窗口下的文字颜色。需求原文要求它单独一份，因为透明时没有封面底色，
+     *  原来的策略（跟随系统配色）与不透明时（跟随封面）本来就不是一回事。 */
+    transparentFontColorMode: FontColorMode;
+    setTransparentFontColorMode: (mode: FontColorMode) => void;
 
     smartBeat: SmartBeatSettings;
     handleSetSmartBeat: (patch: { enabled?: boolean; effects?: Record<string, BeatEffectPatch> }) => void;
@@ -410,9 +445,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setTextureResolution: textureResolution => set({ textureResolution }),
 
     // #929: same shape/default as Folia's `useVisualizerSettingsStore.lyricRenderQuality`
-    // (DEFAULT_LYRIC_RENDER_QUALITY = { scale: 1, antialias: 'auto' }). The setter is named after
-    // Folia's (`handleSetLyricRenderQuality`) and normalises exactly like it does, so any future
-    // control in this window behaves the same way; today nothing in this window calls it.
+    // (DEFAULT_LYRIC_RENDER_QUALITY = { scale: 1, antialias: 'auto' } — 「各样式原来的样子」, so an
+    // upgrading user's look does not change). The setter is named after Folia's
+    // (`handleSetLyricRenderQuality`) and normalises exactly like it does.
     lyricRenderQuality: { ...DEFAULT_LYRIC_RENDER_QUALITY },
     handleSetLyricRenderQuality: patch =>
         set(state => {
@@ -421,6 +456,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             if (next.scale === current.scale && next.antialias === current.antialias) return {};
             return { lyricRenderQuality: next };
         }),
+
+    // issue #22 item 2: `'system'` is the pre-existing behaviour in both windows (opaque = cover,
+    // transparent = system scheme), so both default to it and an upgrading user sees no change.
+    fontColorMode: 'system',
+    setFontColorMode: fontColorMode => set({ fontColorMode: normalizeFontColorMode(fontColorMode) }),
+    transparentFontColorMode: 'system',
+    setTransparentFontColorMode: transparentFontColorMode =>
+        set({ transparentFontColorMode: normalizeFontColorMode(transparentFontColorMode) }),
 
     // The reference window (screenshot 1) has 智能动感模式 on, so the injected window starts the same
     // way. Folia's own stored default is `false` (src/types.ts DEFAULT_SMART_BEAT_SETTINGS); this is a
@@ -588,6 +631,13 @@ export interface SettingsSnapshot {
     subtitle: SubtitleSettings;
     lyricMotion: number;
     textureResolution: number;
+    /** #929 / issue #22 item 1: 歌词画布的全局分辨率与抗锯齿挡位. Absent from every tree persisted by an
+     *  older build — `applySnapshot` falls back to the upstream default (1× / 自动), which is exactly
+     *  what those builds rendered with, so the upgrade is invisible. */
+    lyricRenderQuality: LyricRenderQuality;
+    /** issue #22 item 2: 歌词/字幕的文字颜色。Both default to `'system'` (= 引入前的行为). */
+    fontColorMode: FontColorMode;
+    transparentFontColorMode: FontColorMode;
     transparentPlayerBackground: boolean;
     mousePassthrough: boolean;
     /** v0.4.17 (issue #18 item 2): 「显示播放条」, page-owned since the 配置 page switch was retired.
@@ -611,6 +661,9 @@ export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
     subtitle: state.subtitle,
     lyricMotion: state.lyricMotion,
     textureResolution: state.textureResolution,
+    lyricRenderQuality: state.lyricRenderQuality,
+    fontColorMode: state.fontColorMode,
+    transparentFontColorMode: state.transparentFontColorMode,
     transparentPlayerBackground: state.transparentPlayerBackground,
     mousePassthrough: state.mousePassthrough,
     showPlaybackBar: state.showPlaybackBar,
@@ -765,6 +818,17 @@ export const applySnapshot = (snapshot: Partial<SettingsSnapshot> | null | undef
             },
             lyricMotion: clean(snapshot.lyricMotion, state.lyricMotion),
             textureResolution: clean(snapshot.textureResolution, state.textureResolution),
+            // #929 / issue #22 item 1: `normalizeLyricRenderQuality` is upstream's own validator, so a
+            // tree carrying `{scale: 3}` or `{antialias: 'yes'}` (hand-edited, or written by a build
+            // whose option list was longer) hydrates to the default pair instead of reaching the
+            // renderer as an unknown pixel density.
+            lyricRenderQuality: normalizeLyricRenderQuality(clean(snapshot.lyricRenderQuality, state.lyricRenderQuality)),
+            // issue #22 item 2: same rule for the two colour modes; an unknown string means "keep the
+            // pre-existing behaviour" rather than a broken theme.
+            fontColorMode: normalizeFontColorMode(clean(snapshot.fontColorMode, state.fontColorMode)),
+            transparentFontColorMode: normalizeFontColorMode(
+                clean(snapshot.transparentFontColorMode, state.transparentFontColorMode),
+            ),
             transparentPlayerBackground: transparentBlocked
                 ? false
                 : clean(snapshot.transparentPlayerBackground, state.transparentPlayerBackground),

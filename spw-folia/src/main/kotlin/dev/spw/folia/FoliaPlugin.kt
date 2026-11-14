@@ -562,9 +562,10 @@ class FoliaPlugin(
      *
      * The switches are owned by SPW's ConfigManager (`preference_config.json` → one file per group)
      * and the plugin never renders its own UI for them; it only mirrors them. Two are spawn-time
-     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and two are hot
-     * (`showProblemButton`, `previewAnimation`), injected into the settings tree so the page remounts
-     * the 救生圈 button / the style shelf without a restart.
+     * (`transitionAnimation` → `--no-curtain`, `verboseLog` → `--verbose-log`) and three are hot
+     * (`showProblemButton`, `previewAnimation`, `keepScreenAwake`), injected into the settings tree
+     * so the page remounts the 救生圈 button / the style shelf without a restart, and the C# host
+     * picks `keepScreenAwake` off that same tree to hold the display awake.
      *
      * v0.4.17 (issue #18 item 2): `showPlaybackBar` is no longer one of them. The switch moved to the
      * player page's own menu and the page owns it; the plugin only reads its old `config.json` value
@@ -586,12 +587,15 @@ class FoliaPlugin(
     /**
      * Applies the root-level members the page must receive but must never persist.
      *
-     * Four of them today, and they differ in where the truth lives:
+     * Five of them today, and they differ in where the truth lives:
      *  - `systemFonts` — derived data enumerated locally, stripped on the way back by
      *    [FoliaSystemFonts.withoutSystemFontsJson];
      *  - `showProblemButton` (v0.4.11) — a 配置 page switch owned by the plugin, rewritten from
      *    [FoliaConfigSync] on every push instead of trusted from the incoming tree;
      *  - `previewAnimation` (v0.4.15) — the same kind of switch, same rule;
+     *  - `keepScreenAwake` (issue #22 item 3) — the same kind of switch again: 配置 page switch, read
+     *    by [FoliaConfigSync], consumed by the C# host to hold the display awake while the player
+     *    page is open. Plugin-owned, so also stripped on the way back;
      *  - `showPlaybackBarLegacy` (v0.4.17) — a one-time MIGRATION hint, not a setting: the old
      *    `config.json` value, offered to the page so it can seed its own switch. The page owns that
      *    switch now, so this member is stripped on the way back and never trusted from the echo.
@@ -825,7 +829,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.5.0"
+        const val PLUGIN_VERSION = "0.5.1"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -897,6 +901,20 @@ class FoliaPlugin(
          */
         private const val PREVIEW_ANIMATION_KEY = "previewAnimation"
 
+        /**
+         * issue #22 item 3: 配置 page switch 「保持屏幕唤醒」, owned by the plugin (`config.json`) and
+         * injected as a root-level settings-tree member the C# host reads directly.
+         *
+         * Declared here as well as in `FoliaConfigSync` on purpose: that one is a `private companion`
+         * constant, and the two classes only need to agree on the SPELLING, which the JVM test
+         * `FoliaConfigSyncTest` pins. Widening the sync's constant to `internal` just to share a
+         * string would couple two independent owners of the same literal.
+         *
+         * Stripped from the page's echo (see [stripInjectedMembers]): the page does not own it, so a
+         * persisted copy would be a second writer for one fact.
+         */
+        private const val KEEP_SCREEN_AWAKE_KEY = "keepScreenAwake"
+
         /** Dev checkout root, used only as a fallback while assets are not packaged next to the plugin. */
         private const val DEV_ROOT = "D:/输出目录/dsh2"
 
@@ -911,12 +929,19 @@ class FoliaPlugin(
          * Three are stripped, and they are stripped for two different reasons:
          *  - `systemFonts` is DERIVED data (recomputed on every start); persisting it would add
          *    ~10-20 KB of names that go stale as soon as a font is installed;
-         *  - `showProblemButton` / `previewAnimation` are owned by the 配置 page (config.json), so
-         *    keeping a copy in the settings file would give one fact two writers and let the page's
-         *    echo win;
+         *  - `showProblemButton` / `previewAnimation` / `keepScreenAwake` are owned by the 配置 page
+         *    (config.json), so keeping a copy in the settings file would give one fact two writers
+         *    and let the page's echo win;
          *  - `showPlaybackBarLegacy` is a one-time MIGRATION HINT, not a setting: its value is
          *    whatever the old config.json still holds. Persisting it would freeze a stale copy into
          *    the tree and make it look like the page's own value.
+         *
+         * ## `keepScreenAwake` (issue #22 item 3) — same rule as `previewAnimation`
+         *
+         * It is a 配置 page switch, so the plugin is its only writer; the page merely receives it and
+         * the C# host consumes it (`JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake")`). If the
+         * echo were persisted, the settings file would hold a value that goes stale the moment the
+         * user toggles the switch — and the next start would push the stale one back.
          *
          * ## `showPlaybackBar` is deliberately NOT in that list (v0.4.17, issue #18 item 2)
          *
@@ -934,10 +959,13 @@ class FoliaPlugin(
         internal fun stripInjectedMembers(tree: String): String = Json.withoutMember(
             Json.withoutMember(
                 Json.withoutMember(
-                    FoliaSystemFonts.withoutSystemFontsJson(tree),
-                    SHOW_PROBLEM_BUTTON_KEY,
+                    Json.withoutMember(
+                        FoliaSystemFonts.withoutSystemFontsJson(tree),
+                        SHOW_PROBLEM_BUTTON_KEY,
+                    ),
+                    PREVIEW_ANIMATION_KEY,
                 ),
-                PREVIEW_ANIMATION_KEY,
+                KEEP_SCREEN_AWAKE_KEY,
             ),
             SHOW_PLAYBACK_BAR_LEGACY_KEY,
         )

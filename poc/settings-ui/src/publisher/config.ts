@@ -5,6 +5,8 @@ import type { Line, LyricData, Theme, Word } from '@/types';
 import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 import type { VisualizerTuningBundle } from '@/components/visualizer/tuningRegistry';
 import { DEFAULT_SUBTITLE_OVERLAY_LAYOUT } from '@/utils/lyrics/subtitleOverlayLayout';
+import { DEFAULT_LYRIC_RENDER_QUALITY } from '@/utils/lyricRenderQuality';
+import type { LyricAntialias, LyricRenderQuality, LyricRenderScale } from '@/types';
 import { normalizeMachiTuning } from '@/components/visualizer/machi/machiTuning';
 import {
     type BackgroundMode,
@@ -163,6 +165,55 @@ export const buildBackgroundConfig = (settings: SettingsSnapshot) => {
     };
 };
 
+/** 一个样式 tuning 里 `render` 覆盖的形状（上游 `LyricRenderOverride`，`types.ts`）。 */
+interface RenderOverride {
+    scale: 'global' | LyricRenderScale;
+    antialias: 'global' | LyricAntialias;
+}
+
+/**
+ * #929 / issue #22 item 1: 把「跟随全局」物化成全局挡位里的**具体值**。
+ *
+ * 为什么必须在发布层做，而不是「把全局挡位也发给播放页」：
+ *  - 播放页的全局挡位是它自己的 zustand store 字段，初始值只从 `localStorage['lyric_render_quality']`
+ *    读（`stores/visualizerSettingsPersistence.ts` 的 `readStoredLyricRenderQuality`）。上游
+ *    `ObsBrowserSourceConfig` 里**没有**这个字段，config 到不了那个 store，所以「config 里带一个全局挡位」
+ *    是没有接收方的死字段。
+ *  - 渲染器读的是 `useLyricRenderQuality(tuning.render)`（`renderQuality/useLyricRenderQuality.ts`），
+ *    也就是「全局挡位叠上覆盖」。把覆盖里的 `'global'` 提前展开成全局值，渲染器拿到的结果与
+ *    「播放页的全局挡位恰好等于这里的值」完全相同 —— 这就是让改动立刻生效的唯一通路。
+ *
+ * 纪律（与 `transparencyCompat` 相同）：**只改发布出去的这份副本**，绝不写回 `settings.styleTunings`。
+ * 写回去的话，「跟随全局」这个状态就丢了，用户把全局改回 1× 时那些样式会停在旧值上，再也回不来。
+ *
+ * 町景另算：它的 `quality.{renderScale,antialias}` 是另一套取值，展开规则与上游
+ * `machi/engine/quality.ts` 的 `settle()` 逐字一致（`'global'` → 全局 antialias 为 `'off'` 时取
+ * `'off'`，否则取 `'smaa'`），所以这里不另立一套判断。
+ */
+const materializeRenderQuality = (
+    bundle: Record<string, Record<string, unknown>>,
+    global: LyricRenderQuality,
+): void => {
+    for (const [mode, tuning] of Object.entries(bundle)) {
+        if (mode === 'machi') continue;
+        const render = tuning.render as RenderOverride | undefined;
+        // 没有 `render` 一项的样式（2D canvas 之外的、或旧存档）根本没有这两个控件，不动它。
+        if (!render || typeof render !== 'object') continue;
+        tuning.render = {
+            scale: render.scale === 'global' ? global.scale : render.scale,
+            antialias: render.antialias === 'global' ? global.antialias : render.antialias,
+        } satisfies RenderOverride;
+    }
+    const machi = bundle.machi;
+    const quality = machi?.quality as Record<string, unknown> | undefined;
+    if (!machi || !quality || typeof quality !== 'object') return;
+    machi.quality = {
+        ...quality,
+        renderScale: quality.renderScale === 'global' ? global.scale : quality.renderScale,
+        antialias: quality.antialias === 'global' ? (global.antialias === 'off' ? 'off' : 'smaa') : quality.antialias,
+    };
+};
+
 /** Every style's tuning, keyed by mode exactly as Folia's `VisualizerTuningBundle` expects.
  *
  *  v0.2.0: while the player window is transparent, styles that paint a large semi-transparent
@@ -198,6 +249,13 @@ export const buildTuningBundle = (
         const override = transparentStyleTuning(styleMode, { isDaylight: options.isDaylight === true });
         if (override) bundle[styleMode] = { ...bundle[styleMode], ...override };
     }
+    /* #929 / issue #22 item 1: LAST, after both `normalizeMachiTuning` and the transparent override.
+     *  - after the normaliser because it is what turns a legacy machi `quality` into 跟随全局, and only
+     *    then does `'global'` appear in the bag this step has to expand;
+     *  - after the transparent override because that override only adds render-irrelevant keys today,
+     *    but running last means it can never clobber an expanded value either way.
+     *  Only the published copy is touched — see the function's own comment. */
+    materializeRenderQuality(bundle, settings.lyricRenderQuality ?? DEFAULT_LYRIC_RENDER_QUALITY);
     return bundle as VisualizerTuningBundle;
 };
 

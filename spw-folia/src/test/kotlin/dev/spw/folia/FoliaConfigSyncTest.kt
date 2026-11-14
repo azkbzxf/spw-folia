@@ -304,6 +304,130 @@ class FoliaConfigSyncTest {
     }
 
     /**
+     * issue #22 item 3: 「保持屏幕唤醒」 (`keepScreenAwake`) must behave like the other hot switches —
+     * read from the real `config.json` on disk, default **on**, and push exactly once per real change.
+     *
+     * The value is not cosmetic: the C# host reads this root-level member off the settings tree and
+     * holds the display awake while the player page is open. A reader that silently ignored the key
+     * would leave the user's screensaver covering the lyrics again — the exact complaint in the issue
+     * — with nothing in the log to explain it. Hence a real temp file here, not a map stub.
+     */
+    @Test(timeout = 15_000)
+    fun `keepScreenAwake is read from disk and pushed once per change`() {
+        val dir = tmp.newFolder()
+        val configFile = File(dir, "config.json")
+        configFile.writeText("""{"keepScreenAwake":false}""")
+        val rec = Recorder()
+        val pushes = AtomicInteger(0)
+        val sync = FoliaConfigSync(rec::log, DirResolver(dir)) { pushes.incrementAndGet() }
+
+        sync.start(FakeConfigManager(dir))
+        try {
+            assertEquals(
+                "关闭保持屏幕唤醒 must be read from config.json",
+                false,
+                sync.keepScreenAwake,
+            )
+            assertEquals("one change must push the tree exactly once", 1, pushes.get())
+
+            // Same discipline as previewAnimation: a re-read of the same value must not push, or the
+            // page would be remounted once per watcher tick.
+            sync.sync("watch")
+            assertEquals("an unchanged value must not push again", 1, pushes.get())
+
+            configFile.writeText("""{"keepScreenAwake":true}""")
+            sync.sync("watch")
+            assertEquals("turning it back on must be read too", true, sync.keepScreenAwake)
+            assertEquals("the second change must push again", 2, pushes.get())
+        } finally {
+            sync.stop()
+        }
+    }
+
+    /**
+     * The default is **on** (issue #22 item 3), and it must be what reaches the tree when the user's
+     * `config.json` predates the switch — i.e. every upgrading user.
+     *
+     * Defaulting off would leave them with the reported bug, because almost nobody revisits the 配置
+     * page after an update. The first-sync log line must also name the default, so "why did my screen
+     * stop sleeping?" is answerable from the log alone.
+     */
+    @Test(timeout = 15_000)
+    fun `a config without the key keeps keepScreenAwake on and injects true`() {
+        val dir = tmp.newFolder()
+        // A pre-issue-#22 file: real, present, and carrying only switches that existed then, all at
+        // their defaults so the first sync takes the "unchanged" branch and prints the value line.
+        File(dir, "config.json").writeText(
+            """{"transitionAnimation":false,"showProblemButton":false,"previewAnimation":true}""",
+        )
+        val rec = Recorder()
+        val sync = newSync(dir, rec)
+
+        sync.start(FakeConfigManager(dir))
+        try {
+            assertEquals(
+                "an absent key must keep the default (on), or upgrading users keep the bug",
+                FoliaConfigSyncAccess.defaultKeepScreenAwake,
+                sync.keepScreenAwake,
+            )
+            assertTrue("the default must be on", sync.keepScreenAwake)
+
+            val tree = sync.applyTo("""{"styleId":"sonnet"}""")
+            assertEquals(
+                "applyTo must inject the default as a root-level member for the C# host",
+                true,
+                Json.boolField(tree, "keepScreenAwake"),
+            )
+            assertEquals("unrelated members must survive the injection", "sonnet", Json.stringField(tree, "styleId"))
+            assertTrue(
+                "the other switches must still be injected alongside it",
+                Json.boolField(tree, "previewAnimation")!!,
+            )
+            assertTrue(
+                "the first-sync log must state the value AND that it is the compiled-in default: " +
+                    "${rec.snapshot()}",
+                rec.snapshot().any { it.contains("keepScreenAwake=true") && it.contains("default") },
+            )
+        } finally {
+            sync.stop()
+        }
+    }
+
+    /**
+     * issue #22 item 3: `keepScreenAwake` is PLUGIN-owned (it comes from `config.json`), so the tree
+     * the page echoes back must have it stripped before it is persisted.
+     *
+     * If it survived, the settings file would hold a copy that goes stale the moment the user toggles
+     * the 配置 page switch — one fact, two writers. This lives here rather than in a separate
+     * `FoliaPlugin` test because it is the other half of the same switch's contract, and the two
+     * halves (read+inject / strip-on-echo) must not drift apart.
+     */
+    @Test(timeout = 15_000)
+    fun `stripInjectedMembers removes keepScreenAwake from the page echo`() {
+        val echoed = """{"keepScreenAwake":false,"showProblemButton":false,""" +
+            """"previewAnimation":true,"showPlaybackBarLegacy":true,""" +
+            """"showPlaybackBar":false,"styleId":"sonnet"}"""
+
+        val clean = FoliaPlugin.stripInjectedMembers(echoed)
+
+        assertNull(
+            "keepScreenAwake is owned by the 配置 page (plugin side) and must not be persisted " +
+                "from the page's echo: that would be a second writer for one fact",
+            Json.boolField(clean, "keepScreenAwake"),
+        )
+        assertEquals(
+            "the page-owned showPlaybackBar must still survive the strip",
+            false,
+            Json.boolField(clean, "showPlaybackBar"),
+        )
+        assertNull(
+            "the migration hint must still be stripped",
+            Json.boolField(clean, "showPlaybackBarLegacy"),
+        )
+        assertEquals("unrelated state must survive", "sonnet", Json.stringField(clean, "styleId"))
+    }
+
+    /**
      * A half-written file (truncated JSON) must not throw and must not hang. It yields no booleans
      * this tick; the watcher picks the completed file up on the next one.
      */
@@ -445,4 +569,13 @@ private object FoliaConfigSyncAccess {
 
     /** Mirrors `FoliaConfigSync.DEFAULT_PREVIEW_ANIMATION`. */
     const val defaultPreviewAnimation = true
+
+    /**
+     * Mirrors `FoliaConfigSync.DEFAULT_KEEP_SCREEN_AWAKE` (issue #22 item 3).
+     *
+     * On purpose: the issue asks for "the screen stops sleeping after the update", so a future edit
+     * that flips this default would silently reintroduce the reported bug, and this assertion is the
+     * only thing that would notice.
+     */
+    const val defaultKeepScreenAwake = true
 }

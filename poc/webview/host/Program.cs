@@ -68,6 +68,7 @@ namespace SpwFolia
         public double SplashDurationSec = 0.8; // v0.4.8: min on-screen time, clamped to 0.3-2.0 s
         public bool VerboseLog;     // issue #12: extra diagnostics (env report, page console, timings)
         public bool NoServiceWorkerPurge; // v0.4.7: skip the startup SW/cache purge (diagnostics only)
+        public bool NoKeepAwake;    // issue #22 (3): never call SetThreadExecutionState (capture scripts)
         public string LogFile;      // issue #12: the plugin's host log path, reported in the env report
 
         public static CliArgs Parse(string[] argv)
@@ -118,6 +119,9 @@ namespace SpwFolia
                     case "--no-colour-key": a.NoColourKey = true; break;
                     case "--no-color-key": a.NoColourKey = true; break;
                     case "--no-sw-purge": a.NoServiceWorkerPurge = true; break;
+                    // issue #22 (3): escape hatch for diagnostics / recording scripts that must not
+                    // change the machine's power policy while they drive the host.
+                    case "--no-keep-awake": a.NoKeepAwake = true; break;
                     // v0.4.10: the 配置 page frame-rate list is gone, so the host no longer caps
                     // anything and always runs at the display's refresh rate. The flag is still
                     // *accepted and ignored* so a stale plugin build that still sends it keeps

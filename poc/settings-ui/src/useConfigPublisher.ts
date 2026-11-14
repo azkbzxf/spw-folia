@@ -9,7 +9,7 @@ import {
     DEMO_TRACK,
     type BridgeTrackMessage,
 } from '~/bridge';
-import { snapshotFromState, useSettingsStore } from '~/model/settings';
+import { snapshotFromState, useSettingsStore, type FontColorMode } from '~/model/settings';
 import { onSystemSchemeChange, systemPrefersLight } from '~/model/theme';
 import {
     ConfigPublisher,
@@ -110,6 +110,34 @@ const toPublisherTrack = (track: BridgeTrackMessage | null | undefined, lyrics: 
 export interface ConfigPublisherHandle {
     republish: () => void;
 }
+
+/**
+ * issue #22 item 2: 把「文字颜色」的两个模式折成 `themeFromSample` 的入参。
+ *
+ * 三件事要一起看：
+ *  1. 透明窗口用 `transparentFontColorMode`，不透明用 `fontColorMode` —— 需求原文要求分开选，因为
+ *     透明时没有封面底色，原来的策略（跟随系统配色）与不透明时（跟随封面明暗）本来就不同。
+ *  2. `'system'` 必须逐字保持引入这个设置之前的行为：透明时 `systemPrefersLight()`，不透明时 `undefined`
+ *     （由封面亮度决定）。这是「均默认为跟随系统设置，即当前的设置策略不变」的唯一实现方式。
+ *  3. `'light'` = **浅色文字** → 深色主题 → `isLightOverride = false`；`'dark'` = 深色文字 → 浅色主题 →
+ *     `true`。名字指的是文字，不是主题，别按主题的直觉写反。
+ *
+ * 显式选择只驱动**文字**那一侧（`textIsLight`），不驱动背景：`isLightOverride` 保持 `'system'` 时该有的
+ * 值。这样 `isDaylight` 不变，各样式按明暗分支的调色板也不动 —— issue 明确要求只影响文字。
+ */
+const resolveIsLightOverride = (state: {
+    transparentPlayerBackground: boolean;
+    fontColorMode: FontColorMode;
+    transparentFontColorMode: FontColorMode;
+}): { isLightOverride: boolean | undefined; textIsLight: boolean | undefined } => {
+    const transparent = state.transparentPlayerBackground === true;
+    const mode = transparent ? state.transparentFontColorMode : state.fontColorMode;
+    // 'system'：文字与背景同侧，交给封面（不透明）或系统配色（透明）决定。
+    const backgroundSide = transparent ? systemPrefersLight() : undefined;
+    if (mode === 'light') return { isLightOverride: backgroundSide, textIsLight: false };
+    if (mode === 'dark') return { isLightOverride: backgroundSide, textIsLight: true };
+    return { isLightOverride: backgroundSide, textIsLight: undefined };
+};
 
 /** The theme the live publisher last used (font settings already applied). The live preview inside
  *  the settings window renders with the same theme, so it must not guess: it asks for this. */
@@ -220,11 +248,9 @@ export const useConfigPublisher = (): void => {
             // v0.3.0: while the player window is transparent the text colours follow the system
             // colour scheme (dark system → light text), not the cover's darkness. The cover still
             // supplies the hue; the non-transparent window keeps the cover-driven palette.
-            const derived = themeFromSample(
-                coverSample,
-                track?.title,
-                state.transparentPlayerBackground ? systemPrefersLight() : undefined,
-            );
+            // issue #22 item 2: the two colour modes override that default per window kind.
+            const { isLightOverride, textIsLight } = resolveIsLightOverride(state);
+            const derived = themeFromSample(coverSample, track?.title, isLightOverride, { textIsLight });
             const theme = applyThemeFonts(derived.theme, state.appearance);
             const subtitleTheme = state.subtitle.subtitleFontInheritsLyrics
                 ? theme

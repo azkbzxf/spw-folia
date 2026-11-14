@@ -41,7 +41,7 @@
 // Exit code 0 = PASS, 1 = FAIL, 2 = missing packaged payload (run bash packaging/build-package.sh).
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -115,8 +115,17 @@ function runCore() {
     // 1c. every gate script on disk must be reachable from this file. An unwired gate is a check
     // nobody runs — the v0.4.13 failure mode.
     const wired = new Set(REMAINING_SUITES.map((s) => s.file).concat('verify-all.mjs'));
-    const present = spawnSync('bash', ['-lc', `ls "${HERE}"/verify-*.mjs | xargs -n1 basename`], { encoding: 'utf8' })
-        .stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+    // Read the directory instead of shelling out to `ls | xargs basename`. The shell version was not
+    // merely redundant: `bash` is not on the default PATH on this machine (Git ships it at
+    // C:\Program Files\Git\bin\bash.exe, which is NOT added), so `spawnSync` returned no stdout and
+    // the `.stdout.split` below threw `TypeError: Cannot read properties of undefined`. That killed
+    // the whole gate — every other core check included — with a stack trace instead of a verdict,
+    // which is precisely the "a check must never fail in a way nobody can read" rule at the top of
+    // this file. `readdirSync` has no external dependency and cannot fail that way.
+    const present = readdirSync(HERE)
+        .filter((name) => name.startsWith('verify-') && name.endsWith('.mjs'))
+        .map((name) => name.trim())
+        .filter(Boolean);
     const orphans = present.filter((f) => !wired.has(f)).sort();
     record('no orphaned verify-* scripts', orphans.length === 0, orphans.join(','));
 

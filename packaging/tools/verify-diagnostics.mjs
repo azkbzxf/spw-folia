@@ -273,8 +273,13 @@ async function main() {
     // the player page's own bottom-right menu, so it is no longer declared on the 配置 page and the
     // plugin no longer treats it as a config.json switch (only as the one-time `showPlaybackBarLegacy`
     // migration hint). If it ever comes back here, that is a second writer for a page-owned value.
+    // issue #22 item 3: `keepScreenAwake` JOINED this list — 「保持屏幕唤醒」, a 配置 page switch owned
+    // by the plugin and injected into the settings tree for the C# host to consume
+    // (`JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake")`). Default true on purpose: after
+    // upgrading, the screen simply stops sleeping, which is what the issue asked for.
     assert('C1 the 配置 page declares every known switch',
-        declaredKeys.join(',') === 'previewAnimation,showProblemButton,transitionAnimation,verboseLog',
+        declaredKeys.join(',') ===
+            'keepScreenAwake,previewAnimation,showProblemButton,transitionAnimation,verboseLog',
         declaredKeys.join(','));
     assert('C2 显示问题反馈按钮 defaults to off',
         (declaredSwitches.find((s) => s.key === 'showProblemButton') || {}).def === false,

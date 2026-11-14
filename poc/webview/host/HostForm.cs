@@ -155,6 +155,19 @@ namespace SpwFolia
         // v0.2.2: while a button is held down inside an interactive rectangle the catcher region is
         // dropped for the whole window so a drag cannot slip out of the page's hands.
         private bool catcherDragActive;
+        // issue #24: "勾选鼠标穿透后点击仍被置顶窗口吞掉". Two low-cost diagnostics that were missing
+        // from every bug report: what the page reported (rects + viewport) and what the catcher
+        // window region actually became. Both are de-duplicated so a page that re-posts its hitbox on
+        // every frame cannot flood the log.
+        private int lastHitboxLogRects = -1;
+        private double lastHitboxLogVw = -1;
+        private double lastHitboxLogVh = -1;
+        private string lastHitboxApplySig;
+        // issue #22 (3): "保持屏幕唤醒". SetThreadExecutionState is *thread* state, so the on/off
+        // transitions and the 1 s re-assert all happen on the UI thread (the timer thread).
+        private bool keepAwakeOn;
+        private bool keepAwakeKnown;
+        private long lastKeepAwakeAt;
         // v0.4.0: `TransparencyKey` is a WinForms property, and toggling it calls UpdateStyles(),
         // which may recreate the window handle. A freshly created handle paints BackColor (the key
         // magenta) for a frame before the layered colour key is in force — the fullscreen pink-purple
@@ -181,6 +194,11 @@ namespace SpwFolia
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_LAYERED = 0x00080000;
+        // issue #24: layered window + WS_EX_TRANSPARENT makes the whole window hit-test transparent,
+        // so a click over an empty area reaches the window underneath instead of this (topmost) one.
+        // The catcher's hot zones still work: they forward by SendMessage into the WebView2 input
+        // child, which does not depend on hit testing at all.
+        private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int LWA_COLORKEY = 0x1;
         private const int LWA_ALPHA = 0x2;
         private const uint SWP_NOSIZE = 0x0001;
@@ -188,6 +206,15 @@ namespace SpwFolia
         private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_FRAMECHANGED = 0x0020;
+
+        // issue #22 (3): keep the display awake while the player page is open. The plugin injects
+        // `keepScreenAwake` (default true) into the settings tree; the page does not own it.
+        private const uint ES_CONTINUOUS = 0x80000000;
+        private const uint ES_SYSTEM_REQUIRED = 0x00000001;
+        private const uint ES_DISPLAY_REQUIRED = 0x00000002;
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern uint SetThreadExecutionState(uint esFlags);
 
         [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
@@ -381,9 +408,65 @@ namespace SpwFolia
             // Keep the target in sync with the page even when the window is already in that mode:
             // exiting via the badge/hotkey leaves the page switch on, so the next "on" must re-apply.
             transparencyTarget = on;
+            // issue #22 (3): same shape, same place — the persisted "保持屏幕唤醒" flag is read from the
+            // settings tree the plugin injects (root-level boolean, default true) and applied on the
+            // UI thread because SetThreadExecutionState is thread state.
+            ApplyKeepScreenAwakeFromSettings();
             if (on == transparencyActive) return;
             if (IsHandleCreated) SafeBeginInvoke(delegate { SetTransparency(on); });
             else SetTransparency(on);
+        }
+
+        // ------------------------------------------------------ issue #22 (3): keep screen awake
+
+        /// <summary>
+        /// Reads the plugin-injected root-level `keepScreenAwake` (strict "true") and drives the
+        /// thread execution state. Default when the key is absent is *on* — the plugin injects `true`
+        /// by default and the user's complaint ("一段时间不动，屏幕壁纸就被覆盖了") is the failure of that
+        /// default. Only a literal `false` turns it off; `--no-keep-awake` is the escape hatch.
+        /// </summary>
+        private void ApplyKeepScreenAwakeFromSettings()
+        {
+            bool on = true;
+            if (!string.IsNullOrEmpty(settingsRaw))
+            {
+                try
+                {
+                    string raw = JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake");
+                    if (raw != null) on = raw.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+                catch (Exception ex) { log.Error("keep-awake-parse", ex); }
+            }
+            if (args.NoKeepAwake) on = false;
+            SetKeepAwake(on);
+        }
+
+        /// <summary>
+        /// issue #22 (3): ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED blocks the screensaver
+        /// and display sleep; ES_CONTINUOUS alone clears it. Called from the UI thread only. The state
+        /// is idempotent by design (`keepAwakeOn`), so the three settings-arrival points can call it
+        /// unconditionally without a log line per message.
+        /// </summary>
+        private void SetKeepAwake(bool on)
+        {
+            if (keepAwakeKnown && keepAwakeOn == on) return;
+            keepAwakeOn = on;
+            keepAwakeKnown = true;
+            lastKeepAwakeAt = clock.ElapsedMilliseconds;
+            try
+            {
+                if (on)
+                {
+                    SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+                    log.Log("info", "keep-awake on");
+                }
+                else
+                {
+                    SetThreadExecutionState(ES_CONTINUOUS);
+                    log.Log("info", "keep-awake off");
+                }
+            }
+            catch (Exception ex) { log.Error("keep-awake", ex); }
         }
 
         private void SetTransparency(bool on)
@@ -701,15 +784,25 @@ namespace SpwFolia
                     // v0.2.2: region-based pass-through — the catcher only receives what the page
                     // claims, and reports button holds so a drag can expand to the whole window.
                     inputCatcher.DragStateChanged = OnCatcherDragStateChanged;
+                    // issue #24: own the catcher by the player window. An owned window is always kept
+                    // above its owner, so the catcher cannot be pushed behind the player by a later
+                    // TopMost/geometry pass — which is what made every click land on the WebView2
+                    // child instead of the catcher and left passthrough doing nothing at all.
+                    try { inputCatcher.Owner = this; }
+                    catch (Exception ex) { log.Error("transparency-mouse", ex); }
                 }
                 ApplyInputCatcherBounds();
-                if (transparencyActive && inputCatcher != null && inputCatcher.Visible)
+                // issue #24: Show() FIRST, then raise. The old order asked BringToFront() while the
+                // window was still hidden (Visible == false), so the raise was a silent no-op and the
+                // catcher stayed *below* the player window for its whole life. Every click then hit
+                // the player's WebView2 child instead — the page looked clickable while passthrough
+                // did nothing at all, which is exactly the reported "点击仍被置顶窗口吞掉".
+                if (!inputCatcher.Visible) inputCatcher.Show();
+                inputCatcher.RaiseAboveSiblings();
+                if (transparencyActive && inputCatcher.Visible)
                 {
-                    inputCatcher.BringToFront();
                     log.Log("info", "transparency mouse=catcher raised bounds=" + inputCatcher.Bounds);
                 }
-                if (!inputCatcher.Visible) inputCatcher.Show();
-
                 log.Log("info", "transparency mouse=catcher shown bounds=" + inputCatcher.Bounds);
             }
             catch (Exception ex) { log.Error("transparency-mouse", ex); }
@@ -724,7 +817,7 @@ namespace SpwFolia
                 {
                     inputCatcher.Bounds = Bounds;
                     ApplyInputCatcherRegion();
-                    inputCatcher.BringToFront();
+                    inputCatcher.RaiseAboveSiblings();
                     log.Log("info", "transparency mouse=catcher synced bounds=" + inputCatcher.Bounds);
                 }
             }
@@ -797,6 +890,15 @@ namespace SpwFolia
         /// </summary>
         private void UpdateHitRegions(Dictionary<string, object> msg)
         {
+            // issue #24 defence in depth: WebMessageReceived already arrives on the UI thread, so this
+            // is a no-op in practice — but every consumer below (SetWindowRgn, ex-styles, the catcher
+            // window) is UI-thread-only, and a wrong-thread call would fail silently inside the
+            // catch-all, leaving a stale region. Marshal instead of trusting the caller.
+            if (InvokeRequired)
+            {
+                SafeBeginInvoke(delegate { UpdateHitRegions(msg); });
+                return;
+            }
             try
             {
                 double vw = JsonUtil.GetDouble(msg, "vw", 0);
@@ -824,6 +926,16 @@ namespace SpwFolia
                 hitViewportHeight = vh;
                 hitRegionsCss.Clear();
                 hitRegionsCss.AddRange(next);
+                // issue #24: "passthrough=on rects=0 -> catcher shown" was the user's log and it was
+                // the whole diagnosis we had. Record what the page claims, de-duplicated: the page
+                // re-posts on every layout change and an unthrottled line would drown the log.
+                if (next.Count != lastHitboxLogRects || vw != lastHitboxLogVw || vh != lastHitboxLogVh)
+                {
+                    lastHitboxLogRects = next.Count;
+                    lastHitboxLogVw = vw;
+                    lastHitboxLogVh = vh;
+                    log.Log("info", "hitbox rects=" + hitRegionsCss.Count + " viewport=" + vw + "x" + vh);
+                }
                 // v0.2.2: page rects changed — rebuild the catcher window region (= hit test).
                 ApplyInputCatcherRegion();
             }
@@ -837,38 +949,122 @@ namespace SpwFolia
         /// SetWindowRgn. Windows then delivers input only inside those rectangles and hands everything
         /// outside — clicks, wheel, hover, drags — to the window below at OS hit-test level. No
         /// synthetic input any more, so elevated windows and anti-cheat games work too.
-        /// Fail-open: no rects / bad viewport / passthrough off -> null region (whole window).
-        /// While a button is held (catcherDragActive) the region is dropped for drag continuity.
+        ///
+        /// issue #24: this used to be fail-*open*. When passthrough was on but the page had not
+        /// reported a hot zone yet (persisted `mousePassthrough` takes effect the moment stdin
+        /// settings arrive, long before WebView2 is ready), the region was set to null, and
+        /// SetWindowRgn(hwnd, IntPtr.Zero) *removes* the region — the catcher became a full-window
+        /// topmost surface that swallowed every click. Now a passthrough catcher is always given a
+        /// region: the page's hot zones when they exist, plus two corner anchors that exist before the
+        /// page can say anything, and an explicitly empty HRGN (not null, not an empty list) when even
+        /// those get clipped away.
         /// </summary>
         private void ApplyInputCatcherRegion()
         {
+            // issue #24 defence in depth: a layered topmost window that is hit-test transparent
+            // overall lets clicks reach the desktop even where the catcher has no region yet. Hot
+            // zones are unaffected — they forward by SendMessage, not by hit testing.
+            ApplyMainWindowHitTestStyle(mousePassthrough);
             if (inputCatcher == null) return;
             try
             {
-                List<Rectangle> rects = null;
-                if (mousePassthrough && !catcherDragActive
-                    && hitRegionsCss.Count > 0 && hitViewportWidth > 0 && hitViewportHeight > 0)
+                if (!mousePassthrough || catcherDragActive)
                 {
-                    double scaleX = inputCatcher.ClientSize.Width / hitViewportWidth;
-                    double scaleY = inputCatcher.ClientSize.Height / hitViewportHeight;
-                    if (scaleX > 0 && scaleY > 0)
+                    // Passthrough off (ordinary clickable window) or a button is held: whole window.
+                    inputCatcher.ApplyWholeWindowRegion();
+                    return;
+                }
+                int clientW = inputCatcher.ClientSize.Width;
+                int clientH = inputCatcher.ClientSize.Height;
+                if (clientW <= 0 || clientH <= 0)
+                {
+                    inputCatcher.ApplyEmptyRegion();
+                    return;
+                }
+                // issue #24: s = clientW / hitViewportWidth (one DPI ratio for both axes; the page
+                // reports CSS pixels so the ratio is the same in x and y). Unknown viewport -> 1.
+                bool viewportOk = hitViewportWidth > 0 && hitViewportHeight > 0;
+                double scale = 0;
+                double scaleY = 0;
+                if (viewportOk)
+                {
+                    scale = clientW / hitViewportWidth;
+                    scaleY = clientH / hitViewportHeight;
+                    if (!(scale > 0) || !(scaleY > 0)) viewportOk = false;
+                }
+                if (!viewportOk) { scale = 1; scaleY = 1; }
+
+                Rectangle clip = new Rectangle(Point.Empty, inputCatcher.ClientSize);
+                List<Rectangle> rects = new List<Rectangle>();
+                bool pageRects = false;
+                if (viewportOk && hitRegionsCss.Count > 0)
+                {
+                    for (int i = 0; i < hitRegionsCss.Count; i++)
                     {
-                        rects = new List<Rectangle>();
-                        Rectangle clip = new Rectangle(Point.Empty, inputCatcher.ClientSize);
-                        for (int i = 0; i < hitRegionsCss.Count; i++)
-                        {
-                            RectangleF r = hitRegionsCss[i];
-                            Rectangle rect = Rectangle.Round(new RectangleF(
-                                (float)((r.Left - 4) * scaleX), (float)((r.Top - 4) * scaleY),
-                                (float)((r.Width + 8) * scaleX), (float)((r.Height + 8) * scaleY)));
-                            rect.Intersect(clip);
-                            if (rect.Width > 0 && rect.Height > 0) rects.Add(rect);
-                        }
+                        RectangleF r = hitRegionsCss[i];
+                        Rectangle rect = Rectangle.Round(new RectangleF(
+                            (float)((r.Left - 4) * scale), (float)((r.Top - 4) * scaleY),
+                            (float)((r.Width + 8) * scale), (float)((r.Height + 8) * scaleY)));
+                        rect.Intersect(clip);
+                        if (rect.Width > 0 && rect.Height > 0) { rects.Add(rect); pageRects = true; }
                     }
                 }
+                // issue #24: the two chrome floats are always clickable in passthrough mode, even
+                // before the page has reported anything. Both are anchored to the right/bottom edge,
+                // so an imprecise `s` can only move them along that edge — never out of the window.
+                AddCornerRegion(rects, clip, clientW - 64 * scale, 24 * scale, scale);
+                AddCornerRegion(rects, clip, clientW - 72 * scale, clientH - 96 * scale, scale);
                 inputCatcher.ApplyHitRegion(rects);
+                string sig = rects.Count + "/" + (pageRects ? "page" : "corner") + "/" + clientW + "x" + clientH;
+                if (sig != lastHitboxApplySig)
+                {
+                    lastHitboxApplySig = sig;
+                    log.Log("info", "hitbox apply rects=" + rects.Count + (pageRects ? "" : " fallback=corner"));
+                }
             }
             catch (Exception ex) { log.Error("transparency-mouse", ex); }
+        }
+
+        /// <summary>
+        /// issue #24: adds one 40*s square chrome anchor (the gear / the round button) to `rects`,
+        /// clipped to the window. A square that a very small window clipped away entirely is skipped —
+        /// the other corner, or the explicit empty region, keeps the result fail-closed.
+        /// </summary>
+        private static void AddCornerRegion(List<Rectangle> rects, Rectangle clip, double x, double y, double scale)
+        {
+            double size = 40 * scale;
+            if (size < 1) size = 1;
+            Rectangle rect = Rectangle.Round(new RectangleF((float)x, (float)y, (float)size, (float)size));
+            rect.Intersect(clip);
+            if (rect.Width > 0 && rect.Height > 0) rects.Add(rect);
+        }
+
+        /// <summary>
+        /// issue #24: keeps WS_EX_TRANSPARENT on the *main* window in sync with passthrough.
+        /// A layered window with WS_EX_TRANSPARENT is skipped by hit testing altogether, so even if the
+        /// catcher had no region (or was not raised yet) a click over an empty area goes to whatever is
+        /// underneath instead of being eaten by this always-on-top player window. The page's chrome is
+        /// still clickable: the catcher window (a separate HWND, not transparent) takes those clicks
+        /// and forwards them into the WebView2 input child with SendMessage, which never consults the
+        /// main window's hit test. Style writes copy ApplyTransparencyVisual's Get/SetWindowLongPtr +
+        /// SetWindowPos(SWP_FRAMECHANGED) shape.
+        /// </summary>
+        private void ApplyMainWindowHitTestStyle(bool transparent)
+        {
+            if (!IsHandleCreated) return;
+            try
+            {
+                IntPtr hwnd = Handle;
+                long style = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+                bool has = (style & WS_EX_TRANSPARENT) != 0;
+                if (transparent == has) return;
+                long next = transparent ? (style | WS_EX_TRANSPARENT) : (style & ~(long)WS_EX_TRANSPARENT);
+                SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(next));
+                SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                log.Log("info", "window hit-test transparent=" + (transparent ? "on" : "off"));
+            }
+            catch (Exception ex) { log.Error("window-hittest", ex); }
         }
 
         /// <summary>Catcher drag bookkeeping: expand to the whole window while a button is held.</summary>
@@ -917,6 +1113,11 @@ namespace SpwFolia
                 }
                 catch (Exception ex) { log.Error("transparency", ex); }
             }
+            // issue #24: a recreated handle starts without WS_EX_TRANSPARENT, exactly like it starts
+            // without the layered style — restore it from the live passthrough state, and re-assert the
+            // catcher region so the window is never briefly a full-window click sink.
+            ApplyMainWindowHitTestStyle(mousePassthrough);
+            ApplyInputCatcherRegion();
             EnsureTransparencyHotkey();
             // v0.4.8: the opening animation is Folia's own page splash, shown for every Folia open
             // (not only transparency sessions). Arming the clock as early as the handle exists keeps
@@ -1023,6 +1224,10 @@ namespace SpwFolia
                     + " awareness=" + DpiSupport.DescribeAwareness());
                 SyncWebViewBounds("geometry:" + reason);
                 ApplyInputCatcherBounds();
+                // issue #24: `TopMost = args.TopMost` above re-raises the player window, which drops
+                // the catcher below it again (that is why geometry could re-break a working passthrough
+                // session). Re-assert the catcher's z-order after every geometry pass.
+                if (inputCatcher != null && inputCatcher.Visible) inputCatcher.RaiseAboveSiblings();
             }
             catch (Exception ex) { log.Error("geometry", ex); }
         }
@@ -1242,6 +1447,11 @@ namespace SpwFolia
             closing = true;
             try { ShowCursorNow(); } catch (Exception) { }
             timer.Stop();
+            // issue #22 (3): SetThreadExecutionState is thread state, so the clear must run on the same
+            // (UI) thread that set it. ES_CONTINUOUS alone restores the normal power policy; the process
+            // exiting also clears it, this just makes the intent explicit and immediate.
+            try { if (keepAwakeOn) { keepAwakeOn = false; SetThreadExecutionState(ES_CONTINUOUS); } }
+            catch (Exception ex) { log.Error("keep-awake", ex); }
             exitTimer.Stop();
             if (transparencyHotkeyRegistered)
             {
@@ -1963,6 +2173,15 @@ namespace SpwFolia
             TrackCursor();
             TickSplash();
             long now = clock.ElapsedMilliseconds;
+            // issue #22 (3): re-assert the display-awake state once a second. ES_CONTINUOUS is
+            // per-thread and any other process (or a media/ACPI transition) can clear the effective
+            // state, so the open player page keeps saying "do not sleep" for as long as it is open.
+            if (keepAwakeOn && now - lastKeepAwakeAt >= 1000)
+            {
+                lastKeepAwakeAt = now;
+                try { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED); }
+                catch (Exception ex) { log.Error("keep-awake", ex); }
+            }
             long elapsed = now - lastTick;
             if (lastTick == 0) elapsed = 16;
             lastTick = now;
@@ -2735,6 +2954,14 @@ namespace SpwFolia
     /// </summary>
     internal sealed class TransparencyInputCatcher : Form
     {
+        /// <summary>issue #24: what the window region currently means. Three distinct states, because
+        /// `null` used to mean both "whole window" and "nothing" and that ambiguity was the bug.</summary>
+        private enum RegionMode
+        {
+            WholeWindow,
+            HitRects
+        }
+
         private const int WS_EX_LAYERED = 0x00080000;
         private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -2780,6 +3007,14 @@ namespace SpwFolia
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
 
+        // issue #24: the catcher must sit above the player window, otherwise it never sees a click.
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOACTIVATE = 0x0010;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
 
@@ -2787,6 +3022,9 @@ namespace SpwFolia
         private int buttonsDown;
         private bool dragActive;
         private List<Rectangle> lastRegionRects;
+        // issue #24: the region's *meaning* is kept separately from the rects, so handle recreation and
+        // every later Apply* call can never confuse "whole window" with "empty" (see ApplyHitRegion).
+        private RegionMode regionMode = RegionMode.WholeWindow;
 
         /// <summary>Raised when the held-button state changes (true = drag in progress).</summary>
         public Action<bool> DragStateChanged;
@@ -2809,6 +3047,25 @@ namespace SpwFolia
             get { return true; }
         }
 
+        /// <summary>
+        /// issue #24: puts this window at the top of its z-order band without activating it.
+        /// `Form.BringToFront()` is not enough here: it is a no-op while the window is still hidden
+        /// (which is how the caller used to invoke it) and it cannot lift the window above a sibling
+        /// that was itself re-raised later by ApplyWindowGeometry's TopMost assignment. An explicit
+        /// SetWindowPos(HWND_TOPMOST) is idempotent and works whether or not the window is visible.
+        /// </summary>
+        public void RaiseAboveSiblings()
+        {
+            if (!IsHandleCreated) return;
+            try
+            {
+                // HWND_TOPMOST = -1, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE
+                SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            catch (Exception) { }
+        }
+
         protected override CreateParams CreateParams
         {
             get
@@ -2825,7 +3082,12 @@ namespace SpwFolia
             // alpha 1/255 is invisible to the eye but keeps the window hit-testable
             SetLayeredWindowAttributes(Handle, 0, 1, LWA_ALPHA);
             // v0.2.2: handle recreation drops the window region — put the last shape back.
-            ApplyHitRegion(lastRegionRects);
+            // issue #24: a handle recreated *before* the first ApplyHitRegion has no remembered shape,
+            // and the old `ApplyHitRegion(lastRegionRects)` call then passed null = whole window, i.e.
+            // it reintroduced the very fail-open this fix removes. Replay the remembered shape when
+            // there is one, otherwise stay fail-closed with an explicit empty region.
+            if (lastRegionRects != null) ApplyHitRegion(lastRegionRects);
+            else if (regionMode == RegionMode.HitRects) ApplyEmptyRegion();
         }
 
         protected override void WndProc(ref Message m)
@@ -2927,14 +3189,61 @@ namespace SpwFolia
         }
 
         /// <summary>
+        /// issue #24: the whole window is clickable again — passthrough is off, or a button is held and
+        /// the drag must not be able to leave the window. This is the ONLY path that removes the region
+        /// (SetWindowRgn with IntPtr.Zero); it is explicit so "no region" can no longer be produced by
+        /// accident from an empty rect list.
+        /// </summary>
+        public void ApplyWholeWindowRegion()
+        {
+            regionMode = RegionMode.WholeWindow;
+            lastRegionRects = null;
+            if (!IsHandleCreated) return;
+            try { SetWindowRgn(Handle, IntPtr.Zero, true); }
+            catch (Exception) { }
+        }
+
+        /// <summary>
+        /// issue #24: fail-closed. An *explicitly empty* HRGN (CreateRectRgn(0,0,0,0)) rather than
+        /// null/IntPtr.Zero: SetWindowRgn with a real (empty) region makes the window hit-test
+        /// nowhere, while IntPtr.Zero would remove the region and make it hit-test everywhere.
+        /// Ownership: the HRGN handed to SetWindowRgn belongs to the system afterwards (MSDN), so it
+        /// is not deleted here; only a failed hand-off is.
+        /// </summary>
+        public void ApplyEmptyRegion()
+        {
+            regionMode = RegionMode.HitRects;
+            lastRegionRects = new List<Rectangle>();
+            if (!IsHandleCreated) return;
+            IntPtr empty = IntPtr.Zero;
+            try
+            {
+                empty = CreateRectRgn(0, 0, 0, 0);
+                if (empty == IntPtr.Zero) return;
+                if (SetWindowRgn(Handle, empty, true) != 0) empty = IntPtr.Zero;
+            }
+            catch (Exception) { }
+            finally
+            {
+                if (empty != IntPtr.Zero) DeleteObject(empty);
+            }
+        }
+
+        /// <summary>
         /// v0.2.2: the window region IS the hit test (SPW-island's shaped input peer). rects is the
         /// union of the page's interactive rectangles in window pixels; input outside it falls through
         /// to the window below at OS hit-test level. null/empty = whole window (fail-open).
         /// Ownership: the HRGN handed to SetWindowRgn is owned by the system afterwards (MSDN), so it
         /// is never deleted here; only the temporary CombineRgn operands are.
+        ///
+        /// issue #24: an empty or all-clipped `rects` no longer degenerates into a full-window region.
+        /// When no rectangle survives, this lands on the explicit empty region (fail-closed) instead of
+        /// leaving `combined` at IntPtr.Zero — the second half of the same bug. Callers that really
+        /// mean "whole window" now say so with ApplyWholeWindowRegion().
         /// </summary>
         public void ApplyHitRegion(List<Rectangle> rects)
         {
+            regionMode = RegionMode.HitRects;
             lastRegionRects = rects;
             if (!IsHandleCreated) return;
             IntPtr combined = IntPtr.Zero;
@@ -2958,6 +3267,17 @@ namespace SpwFolia
                         }
                         DeleteObject(one);
                     }
+                }
+                // issue #24: nothing survived -> hand over a real empty region, never IntPtr.Zero.
+                if (combined == IntPtr.Zero)
+                {
+                    IntPtr empty = CreateRectRgn(0, 0, 0, 0);
+                    if (empty != IntPtr.Zero)
+                    {
+                        if (SetWindowRgn(Handle, empty, true) != 0) empty = IntPtr.Zero;
+                        if (empty != IntPtr.Zero) DeleteObject(empty);
+                    }
+                    return;
                 }
                 if (SetWindowRgn(Handle, combined, true) != 0) combined = IntPtr.Zero;
             }

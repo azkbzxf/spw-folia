@@ -35,6 +35,25 @@ const LOCAL_KEYS = {
         /** v0.4.17: that panel now holds three unrelated switches, so it can no longer be named after
          *  the transparency switch alone ("透明背景" would be a lie for a screen reader). */
         playerPageSettings: '播放页设置',
+        /** issue #22 item 1: 视觉样式 tab 顶部新增的「渲染」组。组标题是本页独有的（上游把这两行放在
+         *  「动画与性能」页，那一页不注入），两个**行**的标签则复用上游已有的 key，不在这里重复。
+         *  标题必须叫「全局渲染」而不是「渲染」：上游每个样式自己的面板里也有一个「渲染」组
+         *  （`options.lyricRenderSection`），同名的两组会叠在同一个 tab 里，用户分不出哪个是全局挡位。 */
+        renderGroup: '全局渲染',
+        /** issue #22 item 2: 通用 tab 的两行文字颜色。上游没有任何「文字颜色」的 key，所以这一组全部
+         *  是本页新增的。 */
+        fontColor: '文字颜色',
+        /** 「浅色」指的是**文字**本身，不是浅色外观 —— 中文里极易读反，所以 hint 直说配什么画面。 */
+        fontColorHint: '浅色文字，适合深色画面',
+        fontColorDesc: '只改歌词与字幕的文字颜色，不影响背景与封面色。跟随系统时，不透明窗口由封面明暗决定，'
+            + '透明窗口跟随系统的深色/浅色模式。',
+        fontColorLight: '浅色',
+        fontColorDark: '深色',
+        fontColorSystem: '跟随系统',
+        transparentFontColor: '透明窗口下的文字颜色',
+        transparentFontColorHint: '透明窗口时单独生效',
+        transparentFontColorDesc: '透明窗口没有封面底色可依据，所以这一份单独设置；默认跟随系统，'
+            + '与引入这个设置之前的行为一致。',
     },
 } as const;
 
@@ -44,6 +63,18 @@ const LOCAL_KEYS_EN = {
     options: {
         showPlaybackBar: 'Show playback bar',
         playerPageSettings: 'Player page settings',
+        renderGroup: 'Global rendering',
+        fontColor: 'Text colour',
+        fontColorHint: 'Light text, for dark artwork',
+        fontColorDesc: 'Changes the colour of lyrics and subtitles only — not the background or the cover palette. '
+            + 'On System, an opaque window follows the cover\'s brightness and a transparent one follows the OS theme.',
+        fontColorLight: 'Light',
+        fontColorDark: 'Dark',
+        fontColorSystem: 'System',
+        transparentFontColor: 'Text colour while transparent',
+        transparentFontColorHint: 'Applies to the transparent window only',
+        transparentFontColorDesc: 'A transparent window has no cover colour to derive from, so its text colour is '
+            + 'chosen separately. System keeps the behaviour from before this setting existed.',
     },
 } as const;
 

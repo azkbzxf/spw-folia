@@ -120,23 +120,47 @@ const ensureContrast = (color: Rgb, isLight: boolean): Rgb => {
 
 /** Builds a Folia Theme from a sampled cover. `isLightOverride` (v0.3.0) forces the light/dark side
  *  instead of the cover's own darkness — the transparent window follows the system colour scheme,
- *  while the cover still supplies the hue. */
+ *  while the cover still supplies the hue.
+ *
+ *  issue #22 item 2: `options.textIsLight` forces the side of the **text** colours alone, leaving the
+ *  background's own side (and therefore `isDaylight`, which the renderers branch on) where it was.
+ *  That split is the whole point of the setting: 浅色/深色文字 is a statement about the TEXT, not about
+ *  the picture. Reusing `isLightOverride` for it would have flipped `isDaylight` too, and every style
+ *  that paints a different palette per side (绘光's dark field, 凝彩's tone ground, …) would have
+ *  switched its whole composition — i.e. the background, which the issue explicitly says must not move.
+ *  Omitted (or equal to the background side) it changes nothing: the text follows the background
+ *  exactly as before. */
 export const themeFromSample = (
     sample: CoverSample | null,
     name?: string,
     isLightOverride?: boolean,
+    options?: { textIsLight?: boolean },
 ): { theme: Theme; isDaylight: boolean } => {
     const isLight = isLightOverride ?? (sample ? luminance(sample.average) > 0.55 : false);
-    if (!sample) return { theme: isLight ? LIGHT_FALLBACK : DARK_FALLBACK, isDaylight: isLight };
+    const textIsLight = options?.textIsLight ?? isLight;
+    if (!sample) {
+        // 没有封面色时用的是两套固定调色板；文字侧与背景侧不同时按文字侧选，背景色仍归背景侧。
+        const fallback = textIsLight ? LIGHT_FALLBACK : DARK_FALLBACK;
+        if (textIsLight === isLight) return { theme: fallback, isDaylight: isLight };
+        return { theme: { ...fallback, backgroundColor: (isLight ? LIGHT_FALLBACK : DARK_FALLBACK).backgroundColor }, isDaylight: isLight };
+    }
     const { average, accent } = sample;
-    const background = isLight ? mix(average, { r: 255, g: 255, b: 255 }, 0.45) : scale(average, 0.28);
-    const primary = isLight ? scale(background, 0.16) : mix(average, { r: 255, g: 255, b: 255 }, 0.9);
+    // 两侧各自的两个基色：背景按 `isLight` 选，文字按 `textIsLight` 选。`textIsLight === isLight` 时
+    // 下面每一行都与引入这个选项之前逐字相同。
+    const lightBase = mix(average, { r: 255, g: 255, b: 255 }, 0.45);
+    const background = isLight ? lightBase : scale(average, 0.28);
+    const primary = textIsLight ? scale(lightBase, 0.16) : mix(average, { r: 255, g: 255, b: 255 }, 0.9);
     const accentColor = saturation(accent) < 0.12 ? mix(primary, accent, 0.4) : mix(accent, { r: 255, g: 255, b: 255 }, 0.15);
     const secondary = mix(primary, background, 0.55);
     // Only the system-driven side re-checks contrast; the cover-driven palette (the non-transparent
-    // window) must keep its exact v0.1.x colours.
-    const systemDriven = isLightOverride !== undefined;
-    const font = (color: Rgb) => toHex(systemDriven ? ensureContrast(color, isLight) : color);
+    // window) must keep its exact v0.1.x colours. issue #22 item 2: an explicit 浅色/深色文字 choice
+    // counts as system-driven for the same reason a system scheme does — the user named a side, so the
+    // text has to be readable on it. This never pulls a colour the user picked (they pick a side, not a
+    // value): it only clamps colours that would sit on the wrong side of the contrast line, i.e. the
+    // cover's accent and the mid-tone secondary. A light-side primary (≈0.9 luminance) and a dark-side
+    // one (≈0.16) are already inside the bound and come through untouched.
+    const systemDriven = isLightOverride !== undefined || options?.textIsLight !== undefined;
+    const font = (color: Rgb) => toHex(systemDriven ? ensureContrast(color, textIsLight) : color);
     const theme: Theme = {
         name: name ?? 'Cover Theme',
         backgroundColor: toHex(background),

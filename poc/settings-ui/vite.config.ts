@@ -357,6 +357,39 @@ const SETTINGS_SURGERY: SettingsSurgeryFile[] = [
                 find: "                            <Row label={t('options.previewText')}>\n                                <Segmented value={previewPlaceholderId} options={previewPlaceholderOptions} onChange={onPreviewPlaceholderChange} />\n                            </Row>\n",
                 replace: '',
             },
+            /* issue #22 item 1: 歌词画布的全局分辨率 / 抗锯齿。
+             * 上游把这两行放在「动画与性能」页（`pages/GraphicsPage.tsx` 的 PERFORMANCE 组），那一页本插件
+             * 不注入，于是设置窗里根本没有它们 —— 用户在样式面板里只能看到「跟随全局」，却没有地方设这个
+             * 「全局」。这里把本页自己的 `SpwRenderQualityGroup` 插到视觉样式 tab 的最上面。
+             * 位置在 `randomEnabled` 两个分支**之前**（紧跟 RandomPoolGroup 那一行）：挡位是全局的，随机池
+             * 开着时也要能改，所以不能放进 `!randomEnabled` 的片段里。 */
+            {
+                what: 'spw render quality group element',
+                find: "                    {activeSection === 'visualizer' && randomEnabled && <RandomPoolGroup />}\n",
+                replace: "                    {activeSection === 'visualizer' && randomEnabled && <RandomPoolGroup />}\n"
+                    + "                    {/* spw-folia issue #22: 全局歌词画布挡位（上游只在「动画与性能」页有，那一页不注入）。 */}\n"
+                    + "                    {activeSection === 'visualizer' && <SpwRenderQualityGroup />}\n",
+            },
+            {
+                what: 'spw render quality group import',
+                find: "import RandomPoolGroup from '../random/RandomPoolGroup';\n",
+                replace: "import RandomPoolGroup from '../random/RandomPoolGroup';\n"
+                    + "import SpwRenderQualityGroup from '~/chrome/SpwRenderQualityGroup';\n",
+            },
+            /* issue #22 item 2: 歌词/字幕的文字颜色两行，放在通用 tab 的字体区块里、字体族之前 ——
+             * 颜色是这一组里第一个会改到「看起来是什么样」的选项，排在字体族前面读起来是「先颜色，再字形」。 */
+            {
+                what: 'spw font color rows element',
+                find: "                            <Row\n                                label={t('options.fontFamily')}\n",
+                replace: "                            <SpwFontColorRows />\n"
+                    + "                            <Row\n                                label={t('options.fontFamily')}\n",
+            },
+            {
+                what: 'spw font color rows import',
+                find: "import SubtitleOverlayRowsSetting from './SubtitleOverlayRowsSetting';\n",
+                replace: "import SubtitleOverlayRowsSetting from './SubtitleOverlayRowsSetting';\n"
+                    + "import SpwFontColorRows from '~/chrome/SpwFontColorRows';\n",
+            },
         ],
     },
     {

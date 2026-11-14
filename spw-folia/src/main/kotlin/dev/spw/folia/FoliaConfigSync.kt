@@ -86,6 +86,27 @@ internal class FoliaConfigSync(
     var transitionAnimation: Boolean = DEFAULT_TRANSITION_ANIMATION
         private set
 
+    /**
+     * 配置 page switch 「保持屏幕唤醒」 (issue #22 item 3).
+     *
+     * The user's complaint is that a long, still playback page gets covered by the screensaver /
+     * display sleep. The host owns the mechanism (it calls the Win32 execution-state API while the
+     * window lives), so all the plugin does is read this switch and inject it into the settings tree
+     * exactly like [showProblemButton] / [previewAnimation]. The HOST consumes it directly from the
+     * tree (`JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake")`), which is why the key name and
+     * the root-level placement are a cross-language contract and must not be renamed here.
+     *
+     * Default **on**: this is the behaviour the issue asks for, and it is what makes the fix reach
+     * users who never open the 配置 page after upgrading. [syncInternal] logs the value with its
+     * source, so "my screen stopped sleeping" is answerable from the log alone.
+     *
+     * Owned by the PLUGIN (it comes from `config.json`, not from the page), therefore stripped from
+     * the page's echo before persisting — see `FoliaPlugin.stripInjectedMembers`.
+     */
+    @Volatile
+    var keepScreenAwake: Boolean = DEFAULT_KEEP_SCREEN_AWAKE
+        private set
+
     @Volatile
     var verboseLog: Boolean = DEFAULT_VERBOSE_LOG
         private set
@@ -184,7 +205,10 @@ internal class FoliaConfigSync(
     fun applyTo(tree: String): String {
         val withLegacyBar = Json.withBoolMember(tree, SHOW_PLAYBACK_BAR_LEGACY_KEY, showPlaybackBar)
         val withProblem = Json.withBoolMember(withLegacyBar, SHOW_PROBLEM_BUTTON_KEY, showProblemButton)
-        return Json.withBoolMember(withProblem, PREVIEW_ANIMATION_KEY, previewAnimation)
+        val withPreview = Json.withBoolMember(withProblem, PREVIEW_ANIMATION_KEY, previewAnimation)
+        // issue #22 item 3: the C# host reads this root-level member directly
+        // (`JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake")`) to hold the display awake.
+        return Json.withBoolMember(withPreview, KEEP_SCREEN_AWAKE_KEY, keepScreenAwake)
     }
 
     // ------------------------------------------------------------------ sync ----
@@ -291,6 +315,16 @@ internal class FoliaConfigSync(
                 log("config $PREVIEW_ANIMATION_KEY=$value (style shelf animation ${if (value) "on" else "static glyphs"})")
             }
         }
+        // issue #22 item 3: 「保持屏幕唤醒」. The `default` wording in the log matters — it is the
+        // answer to "why did my screen stop sleeping after the update?", and a value read from the
+        // file must not be reported as a default.
+        readBoolean(playerText, KEEP_SCREEN_AWAKE_KEY)?.let { value ->
+            if (value != keepScreenAwake) {
+                keepScreenAwake = value
+                changed = true
+                log("config $KEEP_SCREEN_AWAKE_KEY=$value (display sleep ${if (value) "blocked while the player page is open" else "follows the system setting"})")
+            }
+        }
 
         // 诊断与日志组（v0.4.11 搬过去的；旧值从 config.json 迁移）
         //
@@ -323,7 +357,8 @@ internal class FoliaConfigSync(
             log(
                 "config sync ($reason): unchanged " +
                     "(showPlaybackBarLegacy=$showPlaybackBar showProblemButton=$showProblemButton " +
-                    "previewAnimation=$previewAnimation " +
+                    "previewAnimation=$previewAnimation keepScreenAwake=$keepScreenAwake " +
+                    "(default $DEFAULT_KEEP_SCREEN_AWAKE when the key is absent) " +
                     "transitionAnimation=$transitionAnimation verboseLog=$verboseLog)"
             )
         }
@@ -439,12 +474,34 @@ internal class FoliaConfigSync(
 
         const val SHOW_PROBLEM_BUTTON_KEY = "showProblemButton"
         const val PREVIEW_ANIMATION_KEY = "previewAnimation"
+
+        /**
+         * issue #22 item 3: 「保持屏幕唤醒」 — a 配置 page switch owned by the plugin and carried into
+         * the settings tree as a ROOT-LEVEL boolean member.
+         *
+         * The C# host reads this exact spelling off the tree
+         * (`JsonUtil.ExtractRawValue(settingsRaw, "keepScreenAwake")`), so it is a cross-language
+         * contract: renaming it here silently disables the feature with no error on either side.
+         */
+        const val KEEP_SCREEN_AWAKE_KEY = "keepScreenAwake"
+
         const val VERBOSE_LOG_KEY = "verboseLog"
 
         const val DEFAULT_TRANSITION_ANIMATION = false
         const val DEFAULT_SHOW_PLAYBACK_BAR = true
         const val DEFAULT_SHOW_PROBLEM_BUTTON = false
         const val DEFAULT_PREVIEW_ANIMATION = true
+
+        /**
+         * Default **on** (issue #22 item 3).
+         *
+         * The issue is "the wallpaper/screensaver covers the lyrics after a while of not touching the
+         * mouse". Defaulting off would leave every upgrading user with the bug they reported, because
+         * almost nobody opens the 配置 page afterwards. Users who DO want the old behaviour turn the
+         * switch off, and the log line in [syncInternal] states where the value came from.
+         */
+        const val DEFAULT_KEEP_SCREEN_AWAKE = true
+
         const val DEFAULT_VERBOSE_LOG = false
 
         /** How long a switch edit may take to reach the page when the host's callback never fires. */
