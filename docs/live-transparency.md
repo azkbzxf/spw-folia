@@ -60,6 +60,13 @@ webView.DefaultBackgroundColor = Color.Black;
   `SetTransparency()` 收尾时对齐；`ApplyTransparencyFromSettings()` 只在 `on != transparencyActive` 时才真正切
   窗口。用 `on == transparencyTarget` 提前 return 会导致「热键退出后页面开关还亮着，再点开关无效」。
 - 窗口仍是 borderless topmost 全屏 Form，几何/DPI/鼠标 idle 逻辑不变；ESC 仍可关窗。
+- **v0.5.1：宿主窗口本体的 OS 级穿透**。色键只让键色像素退出命中测试，WebView2 的
+  `Chrome_WidgetWin_1` 子 HWND 依然覆盖整个客户区并赢下命中测试，于是离开捕获窗口区域的点击会停在
+  插件自己的置顶窗口上，到不了下层窗口。`ApplyHostClickThrough()` 在穿透开启时给主窗口加上
+  `WS_EX_TRANSPARENT`（窗口此时已是 `WS_EX_LAYERED`），这是 Windows 标准的 click-through 组合；
+  顶层窗口被跳过命中测试后，其子 HWND 自然也不再参与。捕获窗口是独立的顶层窗口、**不加**该样式，
+  它用 `SendMessage` 直接投递到 WebView2 输入 HWND，不经命中测试，所以热区按钮照常可点。
+  穿透/透明结束即清除该位，句柄重建时在 `OnHandleCreated` 重新施加。
 
 ### 2.1 鼠标：`TransparencyInputCatcher` + 窗口区域
 
@@ -76,8 +83,24 @@ webView.DefaultBackgroundColor = Color.Black;
 - 区域内到达的消息由 `WndProc` 无条件转发：把客户坐标换屏幕坐标后 `ScreenToClient(WebView2 输入子窗口)`，
   `SendMessage` 投给 `Chrome_WidgetWin_1`（退路 `Chrome_RenderWidgetHostHWND`）。滚轮例外：
   `WM_MOUSEWHEEL` 的 `lParam` 已是屏幕坐标、delta 在 `WPARAM` 里，原样投递。
-- **fail-open**：`mousePassthrough` 关闭、页面未上报矩形或 viewport 非法时区域置空（整窗可点）——
-  宁可多点到页面，也不吞掉用户的点击。
+- **fail-open 仅限非穿透会话**：`mousePassthrough` 关闭时区域置空（整窗可点），宁可多点到页面也不吞点击。
+  **v0.5.1 起穿透开启时改为 fail-closed**：页面未上报矩形、viewport 非法或上报为空，都不再退回「整窗可点」
+  ——那正是「勾了鼠标穿透却完全没效果」的根因（持久化的 `mousePassthrough=true` 在 `stdin-hello`
+  阶段就生效，而此时 WebView2 还没 ready，热区必然为 0）。空列表在 `ApplyHitRegion` 里对应一个
+  **空 HRGN**，而不是把 NULL 传给 `SetWindowRgn`（NULL 会删除区域＝整窗可点）。
+- **热区只覆盖真实控件**。几何基准统一取宿主 Form 的 `ClientSize`（WebView2 实际布局区域），
+  不再用 `TransparencyInputCatcher.ClientSize`——后者在句柄刚创建时可能是 0/异常小值，会把页面上报的
+  矩形全部裁掉（日志里表现为 `hit-region source=fallback`），早期版本因此被迫加右下 460×460、
+  右上 200×200 的大兜底矩形，反而让两个角落出现大片「无法穿透」区域。
+- **页面坐标自适应**。`reportHitRegions()` 上报的是 `getBoundingClientRect()` 的值，而 Folia 舞台
+  自身带 DPI/zoom 变换，这些值可能是 CSS 像素（与 `innerWidth` 同坐标系，需乘 `ClientSize / hitViewport`），
+  也可能已经是窗口像素（不需再缩放）。若一律乘 1.333，右下角控件会被推到 2560 之外全部裁掉——
+  日志表现为 `page=3` 却 `rects=2`（只剩两个 chrome 按钮），于是面板展开时上面两行开关点不到、
+  最靠近圆钮的「显示播放条」反而能点。现在对两种解释各映射一次，按「落在窗口内的矩形数 → 总面积」
+  打分，只保留得分高的一套，不产生多余死角。另外只**始终**并入两个 40×40 CSS（±10 px 容差）的
+  chrome 按钮矩形：右上齿轮与右下圆钮。`player-background-panel` 仅在 `data-open="true"` 时被
+  页面上报，所以面板收起时上方区域完全穿透、展开时才临时占用。日志带 `clip=`、`scale=`、`page=`、
+  `map=css|direct`、`fit=`，hitbox 行还会打印每个矩形原始 `x,y,w,h`，便于核对坐标系。
 - **拖拽连续性**：热区内按下任一鼠标键即把区域临时扩展为整窗（`catcherDragActive`），全部按键抬起后恢复；
   若 button-up 被 WebView2 吃掉，下一次移动用 `GetAsyncKeyState` 自愈，区域不会永久保持整窗。
 - 区域重建时机：hitbox 更新、bounds 变化、穿透开关、句柄重建（`OnHandleCreated`）。
@@ -169,8 +192,8 @@ node poc/settings-ui/scripts/verify-colour-key.mjs   # 真实宿主 + GDI 全屏
 - **默认会吞鼠标**：透明模式靠捕获窗口转发鼠标；要操作下层窗口需打开面板里的「鼠标穿透（操作桌面）」，或按
   Ctrl+Alt+B / ESC 退出透明。打开穿透后只有热区（右下角圆钮、右上角齿轮及其面板/设置页）可点，其余位置的
   点击/右键/滚轮/悬停/拖拽由系统直接落向下层窗口。
-- **热区来自页面上报**：上报缺失或解析失败时退化为整窗可点（fail-open）；按住拖拽期间热区临时扩展为整窗，
-  松开即恢复。
+- **热区来自页面上报**：穿透开启时上报缺失或解析失败**不再**退化成整窗可点（fail-closed，见 §2）；
+  此时仅两个 40×40 CSS 的 chrome 按钮保持可点。按住拖拽期间热区临时扩展为整窗，松开即恢复。
 - **`backdrop-filter` 退化**：透明时 chrome/面板/播放条改用平面底色（§2.2），控件仍可点。
 - **样式限制**：`monet`、浅色主题的 `lumiere`、`machi`、`nebbia` 不可用（§3）；`tempera`/`lumiere`(暗色)/
   `pendolo`/`still`/`hanabi` 在透明期间会自动精简，画面与不透明时略有差异——`tempera` 只剩逐字歌词与线框，

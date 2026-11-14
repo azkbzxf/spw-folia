@@ -155,6 +155,15 @@ namespace SpwFolia
         // v0.2.2: while a button is held down inside an interactive rectangle the catcher region is
         // dropped for the whole window so a drag cannot slip out of the page's hands.
         private bool catcherDragActive;
+        // v0.5.1: whether the main host window currently carries WS_EX_TRANSPARENT. Kept separately
+        // from mousePassthrough so a re-created handle can restore the right style.
+        private bool hostClickThroughApplied;
+        // Diagnostics: the last shape actually handed to SetWindowRgn. Logged only when it changes,
+        // because a drag rebuilds the region on every button down/up.
+        private string lastHitRegionSource = "none";
+        private int lastHitRegionCount = -1;
+        private string lastHitRegionMapping = "none";
+        private int lastHitRegionFit = -1;
         // v0.4.0: `TransparencyKey` is a WinForms property, and toggling it calls UpdateStyles(),
         // which may recreate the window handle. A freshly created handle paints BackColor (the key
         // magenta) for a frame before the layered colour key is in force — the fullscreen pink-purple
@@ -181,6 +190,10 @@ namespace SpwFolia
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_LAYERED = 0x00080000;
+        // v0.5.1: OS-level hit-test transparency. WS_EX_LAYERED | WS_EX_TRANSPARENT is the documented
+        // click-through combination; the colour key alone only removes keyed *pixels* from hit testing,
+        // it does not stop the WebView2 child HWND from winning the hit test over the whole client area.
+        private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int LWA_COLORKEY = 0x1;
         private const int LWA_ALPHA = 0x2;
         private const uint SWP_NOSIZE = 0x0001;
@@ -377,6 +390,10 @@ namespace SpwFolia
                     + " rects=" + hitRegionsCss.Count);
                 // v0.2.2: the catcher window region is the hit test — re-apply it on every toggle.
                 ApplyInputCatcherRegion();
+                // v0.5.1: also make the host window itself invisible to hit testing. Without this,
+                // a click that leaves the catcher region stops at our own topmost player window
+                // (or at a WebView2 child HWND) instead of reaching the window below.
+                ApplyHostClickThrough();
             }
             // Keep the target in sync with the page even when the window is already in that mode:
             // exiting via the badge/hotkey leaves the page switch on, so the next "on" must re-apply.
@@ -403,6 +420,9 @@ namespace SpwFolia
                 ApplyTransparencyVisual(on);
                 transparencyActive = on;
                 transparencyTarget = on;
+                // v0.5.1: entering/leaving a transparent session changes whether click-through can
+                // be active, and the handle now definitely exists. Re-assert the style here too.
+                ApplyHostClickThrough();
                 EnsureTransparencyHotkey();
                 if (on) ShowInputCatcher();
                 else HideInputCatcher();
@@ -450,6 +470,57 @@ namespace SpwFolia
                 webView.DefaultBackgroundColor = Color.Black;
             }
             transparencyVisualApplied = true;
+        }
+
+        /// <summary>
+        /// v0.5.1: make the *whole* host window transparent to OS hit testing while mouse passthrough
+        /// is on. The shaped input catcher is a separate top-level window and is deliberately left
+        /// hit-testable: it forwards presses inside the page's chrome rectangles with SendMessage
+        /// straight to the WebView2 input HWND, which bypasses hit testing entirely.
+        ///
+        /// Why the colour key is not enough: LWA_COLORKEY only removes keyed pixels of the layered
+        /// window itself. The WebView2 Chromium child window (Chrome_WidgetWin_1) covers the entire
+        /// client area and is a separate HWND, so on current runtimes it keeps winning the hit test.
+        /// A click that leaves the catcher region then stops at our own topmost player window instead
+        /// of falling through to the desktop — exactly the "勾选鼠标穿透无效果" report. Adding
+        /// WS_EX_TRANSPARENT to an already-layered window is the documented OS-level click-through
+        /// combination and covers the child HWNDs too, because hit testing never descends into a
+        /// top-level window that has been skipped.
+        ///
+        /// Idempotent and reversible: the bit is cleared as soon as passthrough (or transparency)
+        /// ends, and re-applied after a handle re-creation from OnHandleCreated.
+        /// </summary>
+        private void ApplyHostClickThrough()
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+            try
+            {
+                bool want = mousePassthrough && transparencyActive;
+                IntPtr hwnd = Handle;
+                long style = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+                bool have = (style & WS_EX_TRANSPARENT) != 0;
+                if (want != have)
+                {
+                    long next = want ? (style | WS_EX_TRANSPARENT) : (style & ~WS_EX_TRANSPARENT);
+                    SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(next));
+                    // Force the window manager to pick up the new extended style.
+                    SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                    long verify = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+                    if (((verify & WS_EX_TRANSPARENT) != 0) != want)
+                    {
+                        log.Log("warn", "transparency host-click-through=verify-failed want=" + want);
+                        return;
+                    }
+                }
+                if (want != hostClickThroughApplied)
+                {
+                    log.Log("info", "transparency host-click-through=" + (want ? "on" : "off")
+                        + " reason=" + (have == want ? "restored" : "toggled"));
+                }
+                hostClickThroughApplied = want;
+            }
+            catch (Exception ex) { log.Error("transparency-click-through", ex); }
         }
 
         // -------------------------------------------------------- v0.4.9: colour key
@@ -820,24 +891,53 @@ namespace SpwFolia
                         }
                     }
                 }
-                hitViewportWidth = vw;
-                hitViewportHeight = vh;
-                hitRegionsCss.Clear();
-                hitRegionsCss.AddRange(next);
-                // v0.2.2: page rects changed — rebuild the catcher window region (= hit test).
-                ApplyInputCatcherRegion();
+                // v0.5.1: WebMessageReceived runs on a WebView2 thread, while SetWindowRgn and the
+                // WinForms handle belong to the UI thread. Parsing is fine here, but mutating the
+                // shared lists and rebuilding the region must be marshalled, otherwise the region
+                // can be applied against a handle being (re)created and silently dropped.
+                Action apply = delegate
+                {
+                    hitViewportWidth = vw;
+                    hitViewportHeight = vh;
+                    hitRegionsCss.Clear();
+                    hitRegionsCss.AddRange(next);
+                    // v0.5.1: log the raw coordinates. Folia's stage applies its own DPI transform,
+                    // so getBoundingClientRect() can come back either in CSS px (innerWidth space)
+                    // or already in window px. Without the numbers there is no way to tell which.
+                    string detail = "";
+                    for (int i = 0; i < next.Count; i++)
+                    {
+                        RectangleF r = next[i];
+                        if (i > 0) detail += ";";
+                        detail += JsonUtil.Num(r.Left) + "," + JsonUtil.Num(r.Top)
+                            + "," + JsonUtil.Num(r.Width) + "," + JsonUtil.Num(r.Height);
+                    }
+                    log.Log("debug", "transparency hitbox vw=" + JsonUtil.Num(vw)
+                        + " vh=" + JsonUtil.Num(vh) + " rects=" + next.Count + " [" + detail + "]");
+                    ApplyInputCatcherRegion();
+                };
+                if (IsHandleCreated && !IsDisposed) SafeBeginInvoke(apply);
+                else apply();
             }
             catch (Exception ex) { log.Error("hitbox", ex); }
         }
 
         /// <summary>
         /// v0.2.2 (SPW-island shaped-input-peer model): the catcher window's region IS the hit test.
-        /// The page's interactive rectangles are scaled from CSS pixels to window pixels, inflated by
-        /// the same ±4 CSS px of slop the v0.1.9 point test used, and unioned into a window region via
-        /// SetWindowRgn. Windows then delivers input only inside those rectangles and hands everything
+        /// The page's interactive rectangles are mapped to window pixels (v0.5.1: their coordinate
+        /// system is detected at runtime, because the stage's own DPI transform can make them already
+        /// be window px), inflated by the same ±4 px of slop the v0.1.9 point test used, and unioned
+        /// into a window region via SetWindowRgn. Windows then delivers input only inside those
+        /// rectangles and hands everything
         /// outside — clicks, wheel, hover, drags — to the window below at OS hit-test level. No
         /// synthetic input any more, so elevated windows and anti-cheat games work too.
-        /// Fail-open: no rects / bad viewport / passthrough off -> null region (whole window).
+        /// Fail-open only applies to an *opaque/non-passthrough* session: no region means the catcher
+        /// forwards the whole window to the page, as before. With passthrough ON this is fail-closed:
+        /// a missing or empty page report must never turn back into "the whole window is clickable",
+        /// which is what made a persisted passthrough=on (applied at stdin-hello, before WebView2 is
+        /// ready) swallow every click for the whole session. Only the two 40x40 CSS chrome buttons
+        /// stay live unconditionally; the page reports the panel only while it is open, so a closed
+        /// panel is fully click-through. Ctrl+Alt+B is still the keyboard escape hatch.
         /// While a button is held (catcherDragActive) the region is dropped for drag continuity.
         /// </summary>
         private void ApplyInputCatcherRegion()
@@ -846,29 +946,124 @@ namespace SpwFolia
             try
             {
                 List<Rectangle> rects = null;
-                if (mousePassthrough && !catcherDragActive
-                    && hitRegionsCss.Count > 0 && hitViewportWidth > 0 && hitViewportHeight > 0)
+                string source = "full";
+                string mapping = "none";
+                int fit = 0;
+                // v0.5.1: the catcher's own ClientSize is NOT a reliable geometry source. While its
+                // handle settles it can report a zero/partial size, which clipped every page rectangle
+                // away and left the old 460x460 / 200x200 corner blocks as the only live regions —
+                // users saw two large dead corners that would not pass clicks through. The host Form's
+                // ClientSize is exactly the rectangle WebView2 is laid out into and is always valid,
+                // so use it as the single source for both clipping and CSS -> window scaling.
+                Size regionSize = ClientSize;
+                if (regionSize.Width <= 0 || regionSize.Height <= 0) regionSize = Bounds.Size;
+                double scaleX = hitViewportWidth > 0 ? regionSize.Width / hitViewportWidth : 0;
+                double scaleY = hitViewportHeight > 0 ? regionSize.Height / hitViewportHeight : 0;
+                if (mousePassthrough && !catcherDragActive)
                 {
-                    double scaleX = inputCatcher.ClientSize.Width / hitViewportWidth;
-                    double scaleY = inputCatcher.ClientSize.Height / hitViewportHeight;
+                    rects = new List<Rectangle>();
+                    Rectangle clip = new Rectangle(Point.Empty, regionSize);
+                    if (scaleX > 0 && scaleY > 0 && hitRegionsCss.Count > 0)
+                    {
+                        source = "page";
+                        // v0.5.1: the page reports getBoundingClientRect() values. Folia's stage
+                        // applies its own DPI/zoom transform, so those numbers are EITHER CSS px
+                        // (the same space as innerWidth, needing scaleX/Y) OR already window px
+                        // (needing no scaling at all). Scaling window-px rects twice pushed every
+                        // page rectangle outside the clip — the log showed page=3 but rects=2, i.e.
+                        // only the two chrome buttons survived, so the upper two panel rows were
+                        // unclickable while the row nearest the button still worked.
+                        // Score both interpretations against the real window and keep whichever
+                        // actually fits. No permanent corner block is needed either way.
+                        List<Rectangle> cssRects = MapPageHitRects(scaleX, scaleY, clip);
+                        List<Rectangle> directRects = MapPageHitRects(1.0, 1.0, clip);
+                        bool useDirect = directRects.Count > cssRects.Count
+                            || (directRects.Count == cssRects.Count && cssRects.Count > 0
+                                && TotalRectArea(directRects) > TotalRectArea(cssRects));
+                        List<Rectangle> chosen = useDirect ? directRects : cssRects;
+                        mapping = useDirect ? "direct" : "css";
+                        fit = chosen.Count;
+                        rects.AddRange(chosen);
+                    }
+                    // v0.5.1: no permanent corner blocks. Keep only the two small chrome buttons
+                    // reachable even before the page reports anything (startup / handle recreation).
+                    // Positions mirror app.css in CSS px and go through the same scale, so at any DPI
+                    // they are ~80 window px — a button, not a quarter of the screen. The panel above
+                    // the bottom-right button is reported by the page only while data-open="true".
+                    const int pad = 10;
+                    const int btn = 40;
                     if (scaleX > 0 && scaleY > 0)
                     {
-                        rects = new List<Rectangle>();
-                        Rectangle clip = new Rectangle(Point.Empty, inputCatcher.ClientSize);
-                        for (int i = 0; i < hitRegionsCss.Count; i++)
-                        {
-                            RectangleF r = hitRegionsCss[i];
-                            Rectangle rect = Rectangle.Round(new RectangleF(
-                                (float)((r.Left - 4) * scaleX), (float)((r.Top - 4) * scaleY),
-                                (float)((r.Width + 8) * scaleX), (float)((r.Height + 8) * scaleY)));
-                            rect.Intersect(clip);
-                            if (rect.Width > 0 && rect.Height > 0) rects.Add(rect);
-                        }
+                        // top-right gear: right 24, top 24, 40x40
+                        AddClippedRegion(rects, Rectangle.Round(new RectangleF(
+                            (float)((hitViewportWidth - 24 - btn - pad) * scaleX),
+                            (float)((24 - pad) * scaleY),
+                            (float)((btn + 2 * pad) * scaleX), (float)((btn + 2 * pad) * scaleY))), clip);
+                        // bottom-right round button: right 32, bottom 56, 40x40
+                        AddClippedRegion(rects, Rectangle.Round(new RectangleF(
+                            (float)((hitViewportWidth - 32 - btn - pad) * scaleX),
+                            (float)((hitViewportHeight - 56 - btn - pad) * scaleY),
+                            (float)((btn + 2 * pad) * scaleX), (float)((btn + 2 * pad) * scaleY))), clip);
                     }
+                    else
+                    {
+                        // No viewport yet: tiny window-pixel fallback, never a corner block.
+                        AddClippedRegion(rects,
+                            new Rectangle(Math.Max(0, clip.Width - 80), 0, 80, 80), clip);
+                        AddClippedRegion(rects,
+                            new Rectangle(Math.Max(0, clip.Width - 80), Math.Max(0, clip.Height - 80), 80, 80), clip);
+                    }
+                    if (source != "page") source = "fallback";
+                    source += "+chrome";
+                }
+                int count = rects == null ? -1 : rects.Count;
+                if (source != lastHitRegionSource || count != lastHitRegionCount
+                    || mapping != lastHitRegionMapping || fit != lastHitRegionFit)
+                {
+                    lastHitRegionSource = source;
+                    lastHitRegionCount = count;
+                    lastHitRegionMapping = mapping;
+                    lastHitRegionFit = fit;
+                    log.Log("info", "transparency hit-region source=" + source
+                        + " rects=" + count + " passthrough=" + mousePassthrough
+                        + " clip=" + regionSize.Width + "x" + regionSize.Height
+                        + " scale=" + JsonUtil.Num(scaleX) + "," + JsonUtil.Num(scaleY)
+                        + " page=" + hitRegionsCss.Count
+                        + " map=" + mapping + " fit=" + fit);
                 }
                 inputCatcher.ApplyHitRegion(rects);
             }
             catch (Exception ex) { log.Error("transparency-mouse", ex); }
+        }
+
+        /// <summary>v0.5.1: map the page-reported rectangles with one candidate scale, discarding
+        /// whatever falls outside the window. Used to score CSS-space vs window-space reports.</summary>
+        private List<Rectangle> MapPageHitRects(double sx, double sy, Rectangle clip)
+        {
+            List<Rectangle> list = new List<Rectangle>();
+            for (int i = 0; i < hitRegionsCss.Count; i++)
+            {
+                RectangleF r = hitRegionsCss[i];
+                Rectangle rect = Rectangle.Round(new RectangleF(
+                    (float)((r.Left - 4) * sx), (float)((r.Top - 4) * sy),
+                    (float)((r.Width + 8) * sx), (float)((r.Height + 8) * sy)));
+                AddClippedRegion(list, rect, clip);
+            }
+            return list;
+        }
+
+        private static long TotalRectArea(List<Rectangle> list)
+        {
+            long total = 0;
+            for (int i = 0; i < list.Count; i++)
+                total += (long)list[i].Width * list[i].Height;
+            return total;
+        }
+
+        private static void AddClippedRegion(List<Rectangle> list, Rectangle r, Rectangle clip)
+        {
+            r.Intersect(clip);
+            if (r.Width > 0 && r.Height > 0) list.Add(r);
         }
 
         /// <summary>Catcher drag bookkeeping: expand to the whole window while a button is held.</summary>
@@ -918,6 +1113,10 @@ namespace SpwFolia
                 catch (Exception ex) { log.Error("transparency", ex); }
             }
             EnsureTransparencyHotkey();
+            // v0.5.1: a re-created handle loses its extended styles. Restore OS-level click-through
+            // after the transparency state above has been resolved for the new handle.
+            hostClickThroughApplied = false;
+            ApplyHostClickThrough();
             // v0.4.8: the opening animation is Folia's own page splash, shown for every Folia open
             // (not only transparency sessions). Arming the clock as early as the handle exists keeps
             // the shortest-visible window honest: the page installs the splash while parsing, so by
@@ -2958,6 +3157,10 @@ namespace SpwFolia
                         }
                         DeleteObject(one);
                     }
+                    // v0.5.1: an explicitly empty list means "nothing is hit-testable", not
+                    // "remove the region". Passing NULL to SetWindowRgn deletes the region and would
+                    // make the whole window clickable again — the fail-open this change removes.
+                    if (combined == IntPtr.Zero) combined = CreateRectRgn(0, 0, 0, 0);
                 }
                 if (SetWindowRgn(Handle, combined, true) != 0) combined = IntPtr.Zero;
             }
