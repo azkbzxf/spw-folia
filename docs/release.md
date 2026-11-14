@@ -158,8 +158,10 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
    「出现问题」能打开日志文件夹。
 7. 记录到 release notes：插件版本、宿主 exe 的 sha256、Folia 版本（0.7.26）、
    WebView2 SDK/NuGet 版本（1.0.4314.35）与实测 Runtime 版本、设置岛构建。
-8. 三件资产上传（`.spmod` + `.spmod.json` + `SHA256SUMS.txt`），再
-   `gh release download` 回读复算 sha256，与本地逐字节一致才算闭环。
+8. 三件资产上传（`.spmod` + `.spmod.json` + `SHA256SUMS.txt`）。**上传成功即闭环，不要再
+   `gh release download` 回读复算 sha256** —— 那只是验证 GitHub 自己的存储，对发布物质量零信息，
+   是纯粹的等待。要留证据就用一次 `gh release view <tag> --json assets`，读返回里的 `digest`
+   与本地 `dist/release/` 的 sha256 比对（一次 API 调用，不下载）。
 9. 包内无凭据（`packaging/` 不含任何 token / cookie）。
 10. 文档改过就跑 `python packaging/tools/check-doc-links.py`，必须 exit 0。
 
