@@ -79,6 +79,12 @@ const REMAINING_SUITES = [
     // Select menu, Sheet, tooltips) can be clicked at all. Asserting only "the listbox exists" is
     // what let that ship green for a whole release, so this drives a real press through the menu.
     { name: 'kit dropdowns are clickable (issue #21)', file: 'verify-select-layers.mjs' },
+    // issue #24 / PR #25: the passthrough catcher's window region IS the hit test. This reads it
+    // with GetWindowRgn instead of clicking, so it is deterministic and does not move the cursor —
+    // and it catches the two failures that shipped: a null region (= whole window, so every click is
+    // eaten) and a catcher left BELOW the player window (so it never receives input at all). The
+    // z-order check is the one that fails on PR #25's build; keep it.
+    { name: 'passthrough hit region (issue #24)', file: 'verify-hit-region.mjs' },
     { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
     { name: 'packaged layout smoke', file: 'verify-layout.mjs' },
 ];
