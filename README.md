@@ -113,15 +113,16 @@ Runtime”）· .NET Framework 4.8（Windows 10 1903 起内置）。
 
 ## 版本
 
-当前版本 **v0.4.20**（2026-11-06）。每个版本的 `.spmod` 与 SHA-256 校验值都在
-[GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)，变更说明随各自的 Release 发布。
+当前版本 **v0.5.2**（2026-11-15，**预览版**）：Beta 模组系统。每个版本的 `.spmod` 与 SHA-256
+校验值都在 [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases)，变更说明随各自的
+Release 发布。
 
 v0.4.6 之后的一段时间有过一批只在本地构建、从未发布的版本（v0.4.7 ~ v0.4.12），
 它们的改动已全部并入之后的正式版本，因此**不要**去找这些版本的下载。
 v0.4.13 发布后当天因一个严重缺陷被**下架**，由 v0.4.14 修复替代。
 **下载时请只认 [Releases](https://github.com/azkbzxf/spw-folia/releases) 页面上仍然存在的版本。**
 
-各版本的详细变更见 [docs/release-notes-v0.4.20.md](docs/release-notes-v0.4.20.md) 与
+各版本的详细变更见 [docs/release-notes-v0.5.2.md](docs/release-notes-v0.5.2.md) 与
 Releases 页面。
 
 ## 从源码构建

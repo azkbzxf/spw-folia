@@ -62,9 +62,18 @@ can also be floated straight over your desktop.
   cached on disk after the first draw, so reopening the panel is near-instant. On a weaker machine,
   **Config → Player page → 歌词样式预览动画** turns the animation off: each tile then draws a plain
   glyph and far less work is done when the panel opens.
-- **No network, no uploads** — there is no HTTP server and no external request; data only travels
-  between the plugin and its local helper process. Playback state, current track, lyrics and cover
-  art are read, never written.
+- **No network, no uploads** — the plugin runs no HTTP server and makes no background request; data
+  only travels between the plugin and its local helper process. Playback state, current track, lyrics
+  and cover art are read, never written. **The one exception is the beta mod system**: reading the
+  official market's `catalog.json` when you open the market panel, and downloading that one zip when
+  you press install. See [Mods](docs/mods.md).
+- **Mods (beta)** — install mods from the official
+  [Folium market](https://folium-compound.cielaniska.top/): **Config → Mods** (import a zip, open the
+  mods folder, or open the market), or the left end of the slide button in the player page's
+  bottom-right corner. Installed **lyric animations** join the 17 built-in styles on the lyric-style
+  shelf; **progress-bar buttons** appear on the player bar. The plugin verifies the market's published
+  SHA-256 before unpacking. Mods are third-party code and **signatures are displayed but not
+  verified** — install only what you trust. See [docs/mods.md](docs/mods.md).
 
 ## Screenshots
 
@@ -129,7 +138,8 @@ The full dependency matrix and crash troubleshooting live in
 
 ## Versions
 
-The current version is **v0.4.20** (2026-11-06). The `.spmod` and its SHA-256 checksum for every
+The current version is **v0.5.2** (2026-11-15, **pre-release**): the beta mod system. The `.spmod` and
+its SHA-256 checksum for every
 release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases), together with that
 release's notes.
 
@@ -140,7 +150,7 @@ it. **Download only from versions that still exist on the
 [Releases](https://github.com/azkbzxf/spw-folia/releases) page.**
 
 Detailed notes for the current release live in
-[docs/release-notes-v0.4.20.md](docs/release-notes-v0.4.20.md).
+[docs/release-notes-v0.5.2.md](docs/release-notes-v0.5.2.md).
 
 ## Build from source
 
