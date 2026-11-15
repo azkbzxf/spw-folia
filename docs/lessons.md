@@ -199,6 +199,16 @@
 - **拖拽连续性**：按住键期间区域临时整窗，并用 `GetAsyncKeyState` 自愈丢失的抬起事件。
 - **透明窗口不要用 WinForms `TransparencyKey`**，它会闪一帧洋红（设置色键会重建窗口句柄）。
   直接用 `SetLayeredWindowAttributes` / 分层窗口 API，并在设置背景色**之前**装好色键。
+- **鼠标穿透时隐藏一个入口 = 撤掉一条逃生通道，必须写清楚恢复路径。** v0.5.2 的右下角胶囊
+  （「模组市场」左键 + 播放页设置右键）按用户要求 `data-passthrough` 时整颗 `display:none`，
+  **并且** `App.tsx` 的热区收集里两条都不再上报 —— 只做 CSS 隐藏会让捕获窗在同一个位置留一块
+  看不见的可点区域，用户点到的是空气。代价是穿透模式下少了一条鼠标路径，所以恢复不透明只能靠
+  热键 **`Ctrl+Alt+B`**（宿主全局热键）或 SPW 快捷键 **`Ctrl+Alt+Shift+G`**，另外右上齿轮在
+  任何模式下都还在。同一条纪律适用于将来任何「穿透时隐藏」的控件：隐藏与撤热区必须成对，
+  且必须在 `docs/live-transparency.md` 的逃生口清单里更新。
+- **`display:none` 而不是 `opacity:0`**：热区是按 `getBoundingClientRect()` 上报的，透明但仍在
+  布局里的按钮照样有非零矩形，照样会被上报成一个可点区域。淡出（chrome idle fade）用 opacity，
+  隐藏（穿透）用 display —— 两者不是一回事。
 - **多窗口 TopMost 叠层必须显式抬升**（`SetWindowPos(HWND_TOPMOST)` 在 `OnHandleCreated` /
   `OnShown` / `OnActivated` 三处），不能靠创建顺序。
 - **色键方案下不要指望半透明**：目标是把大面积半透明底板**去掉**，不是调淡。

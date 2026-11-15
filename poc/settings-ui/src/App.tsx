@@ -235,7 +235,20 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 rects.push({ x: rect.left, y: rect.top, w: rect.width, h: rect.height });
             };
             push(document.querySelector('[data-spw-chrome="settings"]'));
-            push(document.querySelector('[data-spw-chrome="player-background"]'));
+            /* v0.5.2 (issue #23, second round): 鼠标穿透 HIDES the bottom-right capsule, so its two
+             * halves must NOT be reported as hot regions while passthrough is on. Reporting them would
+             * give the OS-level catcher a clickable rectangle where nothing is painted — the user would
+             * click through the desktop and hit an invisible button. This is the cost of hiding the
+             * capsule: passthrough now has exactly two mouse escapes (the top-right gear, and the
+             * 「出现问题」 button when enabled) plus the global hotkeys Ctrl+Alt+B / Ctrl+Alt+Shift+G.
+             * `docs/lessons.md` §4 records the trade.
+             *
+             * Not gated on `visible`: the capsule fades (`opacity:0`) on chrome idle but stays laid
+             * out and stays a hit target by design — passthrough is the only thing that removes it. */
+            if (!state.mousePassthrough) {
+                push(document.querySelector('[data-spw-chrome="player-background"]'));
+                push(document.querySelector('[data-spw-chrome="mod-market-entry"]'));
+            }
             push(document.querySelector('[data-spw-chrome="player-background-panel"][data-open="true"]'));
             /* issue #12: the 「出现问题」 button and its panel must stay clickable too, otherwise the
              *  very control meant to help a broken setup would be unreachable in passthrough mode. */
@@ -459,6 +472,13 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 onToggleShowPlaybackBar={setShowPlaybackBar}
                 showPlaybackBarLabel={t('options.showPlaybackBar')}
                 panelLabel={t('options.playerPageSettings')}
+                /* v0.5.2 (issue #23, second round): the capsule's light left half. It opens the SAME
+                 * market modal the plugin's 配置 page opens (`openModMarket` above), so there is one
+                 * market screen with two entrances — not two markets.
+                 * `t('options.modMarketTitle')` is the label the market panel itself already uses, so
+                 * screen readers announce the button and the panel it opens with one name. */
+                modMarketLabel={t('options.modMarketTitle')}
+                onOpenModMarket={openModMarket}
             />
             {/* v0.4.0: with the player page opaque the chrome otherwise offers no way out of the
              *  fullscreen window (ESC / the host hotkey work, but they are not discoverable), so the

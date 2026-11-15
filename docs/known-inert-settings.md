@@ -19,9 +19,16 @@
 | 播放页 | 显示问题反馈按钮（`showProblemButton`） | **关** | 控制播放页右上角的救生圈按钮及其诊断面板。关闭时 **React 不挂载**（不是 CSS 隐藏），因此也不上报 hit region |
 | 播放页 | 保持屏幕唤醒（`keepScreenAwake`，issue #22 第 3 条） | **开** | 插件读 config → 设置树顶层布尔 → 宿主 `SetThreadExecutionState(ES_CONTINUOUS\|ES_DISPLAY_REQUIRED\|ES_SYSTEM_REQUIRED)`，播放页开着时阻止屏保与显示器休眠。关掉即恢复系统设置。宿主每 1 s 重断言一次（防别的进程改掉执行状态），关窗时清除；`--no-keep-awake` 是诊断用的逃生参数 |
 | 诊断与日志 | 详细日志（`verboseLog`） | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志。**下一次打开 Folia 生效** |
-| 模组 | 模组市场（`button`，`onOpenModMarket`） | — | 没开窗就开窗 → 宿主 `command open-mod-market` → 页面 `ui action` → 设置岛的模组市场模态。页面未就绪时宿主记住请求、`navDone` 后补发；Shim 另外在设置岛挂载前排队。见 [`docs/mod-system.md`](mod-system.md) §5.1.1 |
+| 模组 | 导入模组…（`button`，`onImportModZip`） | — | `SwingUtilities.invokeLater` → `JFileChooser`（只筛 `.zip`）→ `FoliaModStore.install(zip, expectedSha256 = null)`，解包在 `modActions` 后台线程。取消 → 静默返回（不是错误）；非 `.zip` → 明确提示。**没有摘要可核对**，防护全在 `install` 内部（防穿越 / 条目与总字节上限 / `mod.json` 校验 / 原子替换）。装完重扫并推送，打开着的市场页会自己刷新 |
 | 模组 | 打开模组文件夹（`button`，`onOpenModsFolder`） | — | `explorer.exe` + `<pluginPath>/mods`（**两个 argv**，不拼字符串）。不依赖播放窗口，窗口打不开时照样能用 |
+| 模组 | 模组市场（`button`，`onOpenModMarket`） | — | 没开窗就开窗 → 宿主 `command open-mod-market` → 页面 `ui action` → 设置岛的模组市场模态。页面未就绪时宿主记住请求、`navDone` 后补发；Shim 另外在设置岛挂载前排队。见 [`docs/mod-system.md`](mod-system.md) §5.1.1 |
 | 支持与反馈 | 出现问题（`button`） | — | 环境自检 + 预填反馈页 + 打开日志文件夹 |
+
+**播放页右下角的入口**（不在本表里，因为它不在配置页）：那颗控制是 Folia 自己的
+`SlideActionButton` —— 左端（`data-spw-chrome="mod-market-entry"`）进模组市场，右端
+（`data-spw-chrome="player-background"`）开播放页设置面板。**鼠标穿透时整颗隐藏**，恢复靠
+`Ctrl+Alt+B` / `Ctrl+Alt+Shift+G` 或右上齿轮，见 [`docs/lessons.md`](lessons.md) §4 与
+[`docs/mod-system.md`](mod-system.md) §5.1.1。
 
 逃生口：配置页「支持与反馈 → 出现问题」不依赖播放窗口，播放窗口打不开时照样能用 ——
 这正是它存在的理由。

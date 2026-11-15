@@ -40,17 +40,24 @@
       "preferences": [
         {
           "type": "button",
-          "title": "模组市场",
-          "summary": "打开 Folia 窗口并直接进入模组市场：从官方市场安装社区模组（歌词动画样式、播放条按钮）。Beta：模组是第三方代码，行为与稳定性由模组作者负责，安装前请自行判断。",
+          "title": "导入模组…",
+          "summary": "选一个模组 zip 包（市场下载的，或模组作者提供的）导入：核对包内容后解包到插件的 mods 目录，装好即启用，歌词样式货架立刻多出一组。Beta：模组是第三方代码，行为与稳定性由模组作者负责，本插件不审查它，请只在确认来源可信时导入。",
           "arrow_type": "none",
-          "on_click": "dev.spw.folia.FoliaPlugin.onOpenModMarket"
+          "on_click": "dev.spw.folia.FoliaPlugin.onImportModZip"
         },
         {
           "type": "button",
           "title": "打开模组文件夹",
-          "summary": "在资源管理器里打开插件的 mods 目录。手工把解包好的模组文件夹（含 mod.json）放进去同样生效，下次打开窗口会被扫描到。",
+          "summary": "在资源管理器里打开插件的 mods 目录，看看已经装了哪些模组、每个模组的 mod.json 与 client.mjs 在哪里。也可以在这里删掉一个模组目录，下次打开窗口就不再加载它。",
           "arrow_type": "none",
           "on_click": "dev.spw.folia.FoliaPlugin.onOpenModsFolder"
+        },
+        {
+          "type": "button",
+          "title": "模组市场",
+          "summary": "打开 Folia 窗口并直接进入模组市场，浏览官方与社区模组并一键安装（Beta：第三方代码，行为与稳定性由模组作者负责）。不想开窗口也可以：手工把解包好的模组文件夹（含 mod.json）放进 mods 目录同样生效，下次打开窗口会被扫描到。",
+          "arrow_type": "none",
+          "on_click": "dev.spw.folia.FoliaPlugin.onOpenModMarket"
         }
       ]
     },

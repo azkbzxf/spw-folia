@@ -141,22 +141,35 @@ listFoliumHostRegistries().forEach(r => r.unregisterAll(modId));
 **不碰** `ISLAND_Z_INDEX`（必须 < 200，否则上游 body-portaled 的每个下拉都点不到，
 `docs/lessons.md` §4.1）。
 
-### 5.1.1 入口在 SPW 的配置页（`preference_config.json`），不在播放页
+### 5.1.1 入口在 SPW 的配置页（`preference_config.json`）+ 播放页右下角胶囊
 
-`spw-folia/src/main/resources/preference_config.json` 新增一个 `configs[]` 分区
-**「模组」/ `mods.json`**（紧跟「播放页」，在「诊断与日志」之前），里面两个 `type:"button"`：
+`spw-folia/src/main/resources/preference_config.json` 有一个 `configs[]` 分区
+**「模组」/ `mods.json`**（紧跟「播放页」，在「诊断与日志」之前），里面**三个** `type:"button"`：
 
-| 按钮 | `on_click` | 做什么 |
-|---|---|---|
-| 模组市场 | `dev.spw.folia.FoliaPlugin.onOpenModMarket` | `openFolia()`（没开就开窗）→ 宿主 `command open-mod-market` |
-| 打开模组文件夹 | `dev.spw.folia.FoliaPlugin.onOpenModsFolder` | `ProcessBuilder(listOf("explorer.exe", modsRoot))` |
+| 顺序 | 按钮 | `on_click` | 做什么 |
+|---|---|---|---|
+| 1 | **导入模组…** | `dev.spw.folia.FoliaPlugin.onImportModZip` | `SwingUtilities.invokeLater` → `JFileChooser`（只筛 `.zip`）→ `FoliaModStore.install(zip, expectedSha256 = null)` 在 `modActions` 线程 |
+| 2 | 打开模组文件夹 | `dev.spw.folia.FoliaPlugin.onOpenModsFolder` | `ProcessBuilder(listOf("explorer.exe", modsRoot))` |
+| 3 | 模组市场 | `dev.spw.folia.FoliaPlugin.onOpenModMarket` | `openFolia()`（没开就开窗）→ 宿主 `command open-mod-market` |
 
-**必须是新的 config 文件名**：SPW 的 `ConfigManager.getConfig(name)` 按文件名分别存取（换组 = 换存储
-文件，`docs/lessons.md` §3.1）。所以 `mods.json` 而不是塞进 `config.json`。
+**顺序是用户定的**（原话：「模组市场在配置中的主要功能是能手动导入模组」）：手动导入是**第一项**，
+市场降到第三项。JVM 测试钉住了顺序（按 json 文本里的偏移量比较），所以有人调换会被测出来。
 
 **为什么是 `button` 而不是 `switch`**：`verify-all.mjs` 的双向契约检查只认 `type:"switch"`
 （`verify-all.mjs:115` + `FoliaDiagnostics.KNOWN_CONFIG_SWITCHES`），加一个 switch 就会要求同步那份
-集合、否则「存在问题」自检报 FAIL。这两个入口不存值，天然是 button。
+集合、否则「存在问题」自检报 FAIL。这三个入口都不存值，天然是 button。
+
+**手动导入那条路径的两个线程**（弄反了单测验不出来）：
+
+- `JFileChooser.showOpenDialog` **必须在 Swing EDT** 上；它是模态对话框、自己泵事件循环，off-EDT
+  构造/打开就是典型的「对话框不画 / 窗口冻住」。
+- 解包 **必须离开 EDT**：`FoliaModStore.install` 会走一遍 zip 并写最多 `MAX_TOTAL_BYTES`，占住 EDT
+  就是冻住 SPW 整个设置窗口。它跑在 `modActions`（市场安装用的同一个串行 worker）上，所以手动导入
+  与市场安装永远不会同时往 `mods/` 里解包。
+- **取消不是错误**：`CANCEL_OPTION` 与对话框失败都返回 null → 静默返回，不 toast、不写 error 日志。
+  用户改主意不该被告诉「出错了」。
+- **这条路径没有摘要**：`install(zip, null)` 跳过 SHA-256 那一步，于是 `install` 内部其余全部规则
+  （逐个条目 canonicalize 防穿越、条目数/总字节上限、`mod.json` 校验、原子替换）成为**唯一**防护。
 
 **整条链路（四个名字，每一处都得一致，写错任何一处只会表现为「按钮没反应」）**：
 
@@ -186,10 +199,29 @@ preference_config.json  on_click: …onOpenModMarket
 `registerSettingsUiController` 的监听器对 `'none'` 是显式 no-op。把浮层一起打开会让两个各自抢 ESC 的
 window-capture 监听同时活着，一次 ESC 会关掉两层，破坏 `docs/protocol.md` §8 的契约。
 
-**入口行已删除**：`PlayerBackgroundControl.tsx` 的 `mod-market-row` 那一行、`App.tsx` 里的热区上报项、
-`app.css` 的 `.spw-player-bg-row--fourth` / `.spw-player-bg-badge`、i18n 的 `options.modMarket`。
-**保留**的是 `[data-spw-mod-market="true"]` 的热区上报 —— 穿透模式下不给它上报，用户在穿透时打开市场
-会一张卡片都点不到。
+**右下角胶囊**（v0.5.2 第二轮）：`PlayerBackgroundControl.tsx` 现在渲染一颗胶囊，左半是市场入口
+（`data-spw-chrome="mod-market-entry"`）、右半是原来的设置按钮（`data-spw-chrome="player-background"`
+**保持不变**，`verify-click-zones.mjs:353` 与 `verify-hit-region.mjs` 都按这个值找它）。
+
+视觉全部取自上游自己的写法，**不是自造的**（这一条踩过三次，改之前先读）：
+
+| 元素 | 取值 | 上游出处 |
+|---|---|---|
+| 胶囊底 | `rgba(0,0,0,0.4)` + `blur(24px)` + `border-white/5` + `rounded-full` + `shadow-2xl` | `FloatingPlayerControls.tsx:172,674-676`（`glassBgExpanded` / `backdrop-blur-xl shadow-2xl overflow-hidden rounded-full`） |
+| 左半（市场） | **`bg-transparent`** + `text-white/75`，hover 才 `bg-black/20`，`rounded-full` | `AppShell.tsx:219`（`border-white/15 bg-transparent text-white/75 hover:bg-black/20 hover:text-white`） |
+| 左半图标 | lucide `Command`（⌘：方框四角带环） | 参考截图本身；上游 `CapsuleQuickActions.tsx:3` 用同一图标表达「一个入口、多个去处」 |
+| 右半（设置） | 44 px 实心深色圆（`rgba(0,0,0,0.62)`），**比胶囊大、溢出胶囊轮廓** | 参考截图；`overflow` 因此必须保持 `visible` |
+
+**左半在静止态是透明的**（这是「透明会动」的一半）：只有 glyph 和胶囊自己的描边可见，hover 才浮出
+填充。另加一条 2 s 的 `box-shadow` 呼吸环（尾巴对齐上游 `animate-pulse` 的 2 s），`prefers-reduced-motion`
+下关闭。
+
+**穿透时整颗胶囊 `display:none`，并且两条热区都不再上报**（`App.tsx` 的 `if (!state.mousePassthrough)`）。
+只用 CSS 隐藏会让 OS 级捕获窗在同一位置留一块看不见的可点区域。这也是少掉的一条逃生口：
+恢复不透明靠 `Ctrl+Alt+B` / `Ctrl+Alt+Shift+G`，右上齿轮始终可点（`docs/lessons.md` §4）。
+
+**市场页本身的热区必须保留**：`[data-spw-mod-market="true"]` 那条 —— 穿透模式下不给它上报，
+用户在穿透时打开市场会一张卡片都点不到。
 
 ### 5.2 货架上的模组格走「第二套清单」
 

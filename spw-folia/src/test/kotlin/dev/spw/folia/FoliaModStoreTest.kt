@@ -534,9 +534,13 @@ class FoliaModStoreTest {
      * connects `dev.spw.folia.FoliaPlugin.onOpenModMarket` to `OPEN_MOD_MARKET_COMMAND`. This test
      * closes the loop from the DECLARATION side: the button exists, and the action it eventually
      * produces is the string the page's `ui` handler answers to.
+     *
+     * v0.5.2: the group now carries three buttons, and the FIRST one is 导入模组… — the user's
+     * 「模组市场在配置中的主要功能是能手动导入模组」 put manual import ahead of the market. Order is
+     * asserted, not just presence: a reordering is a silent UX change and nothing else would catch it.
      */
     @Test
-    fun `the mods group is declared with the two buttons and its own config file`() {
+    fun `the mods group is declared with the three buttons in the agreed order and its own config file`() {
         val declaration = javaClass.classLoader
             ?.getResourceAsStream("preference_config.json")
             ?.use { it.readBytes().toString(Charsets.UTF_8) }
@@ -545,12 +549,26 @@ class FoliaModStoreTest {
         assertTrue("the 模组 group needs its own config file (换组 = 换存储文件)", text.contains("\"mods.json\""))
         assertTrue(text.contains("\"title\": \"模组\""))
         assertTrue(
-            "the market button must resolve to a real static method",
-            text.contains("dev.spw.folia.FoliaPlugin.onOpenModMarket"),
+            "manual import is the group's PRIMARY action: its on_click must resolve to a real static method",
+            text.contains("dev.spw.folia.FoliaPlugin.onImportModZip"),
         )
         assertTrue(
             "the folder button must resolve to a real static method",
             text.contains("dev.spw.folia.FoliaPlugin.onOpenModsFolder"),
+        )
+        assertTrue(
+            "the market button must resolve to a real static method",
+            text.contains("dev.spw.folia.FoliaPlugin.onOpenModMarket"),
+        )
+        // Order inside the group: 导入 → 打开文件夹 → 市场. Asserted on offsets in the declaration text
+        // because that is the only place the order exists (SPW renders `preferences` verbatim).
+        val importAt = text.indexOf("dev.spw.folia.FoliaPlugin.onImportModZip")
+        val folderAt = text.indexOf("dev.spw.folia.FoliaPlugin.onOpenModsFolder")
+        val marketAt = text.indexOf("dev.spw.folia.FoliaPlugin.onOpenModMarket")
+        assertTrue(
+            "the order must be 导入模组 → 打开模组文件夹 → 模组市场, got offsets " +
+                "import=$importAt folder=$folderAt market=$marketAt",
+            importAt in 0 until folderAt && folderAt < marketAt,
         )
         assertFalse(
             "the mods group must not declare a switch: verify-all's contract only tracks switches",
@@ -784,6 +802,71 @@ class FoliaModStoreTest {
         assertFalse(FoliaModStore.isSafeRelativePath("/client.mjs"))
         assertFalse(FoliaModStore.isSafeRelativePath("C:/client.mjs"))
         assertFalse(FoliaModStore.isSafeRelativePath(""))
+    }
+
+    // ------------------------------------------------------- 配置页手工导入 zip ----
+
+    /**
+     * issue #23 v0.5.2: 「模组 → 导入模组…」在 `JFileChooser` 之后做的唯一两个判断，钉死它。
+     *
+     * 为什么这个判断值得一个单测、而 `onImportModZip` 本身不值得：那个静态方法只打开一个 Swing
+     * 对话框（在无显示环境里必然失败），而**取消要不要算失败**、**非 zip 要不要放进解包器**是两条
+     * 会在真机上表现为「点了一下什么都没发生」/「报一个看不懂的错误」的规则，它们必须能被自动化
+     * 门禁复现。所以判断逻辑被提到 [FoliaModStore.importableArchive] 这个纯函数里。
+     *
+     * 三种「不是可导入的包」各占一行，因为它们的消息不一样、修法也不一样：
+     *  - `null`（用户取消 / 对话框失败）→ 静默，不是错误；
+     *  - 不存在 / 是目录 → 静默；
+     *  - 存在但不是 `.zip` → 调用方要明确说「只能导入 .zip」，不能把它丢给解包器。
+     */
+    @Test
+    fun `the manual import accepts only an existing zip file and treats cancel as nothing`() {
+        val dir = tmp.newFolder("picked")
+        val zip = File(dir, "my-mod.zip").apply { writeText("not really a zip, only the decision matters") }
+        val upper = File(dir, "MY-MOD.ZIP").apply { writeText("extension case must not matter") }
+        val notZip = File(dir, "my-mod.rar").apply { writeText("wrong container") }
+        val noExtension = File(dir, "my-mod").apply { writeText("no extension") }
+
+        assertNull("cancel / a failed dialog is not an error", FoliaModStore.importableArchive(null))
+        assertNull("a path that does not exist is not importable", FoliaModStore.importableArchive(File(dir, "gone.zip")))
+        assertNull("a directory is not importable", FoliaModStore.importableArchive(dir))
+        assertNull("only .zip is accepted", FoliaModStore.importableArchive(notZip))
+        assertNull("a file without an extension is refused too", FoliaModStore.importableArchive(noExtension))
+
+        assertEquals("a real .zip is accepted", zip.canonicalPath, FoliaModStore.importableArchive(zip)?.canonicalPath)
+        assertEquals(
+            "the extension check must be case-insensitive (Windows names are)",
+            upper.canonicalPath,
+            FoliaModStore.importableArchive(upper)?.canonicalPath,
+        )
+    }
+
+    /**
+     * 手工导入走的是 `install(archive, expectedSha256 = null)`，所以「没有摘要」这条路径必须真的能装。
+     *
+     * 这不只是「不报错」：市场那条路每次都带 `download.sha256`，`null` 分支只有在手工导入时才被
+     * 执行。如果哪天有人给 `install` 加一句「没有摘要就拒绝」，市场页全绿、单测里所有用真实样包
+     * 的用例也都带着 AURORA_SHA256，**只有用户按配置页第一个按钮才会失败** —— 这条用例就是那个
+     * 唯一会红的检查。
+     */
+    @Test
+    fun `a manually picked archive installs with no digest and keeps every unpack guard`() {
+        val (store, recorder) = store()
+        val picked = sampleZip()
+        assertNull("the fixture is not digest-checked on this path by definition", FoliaModStore.normalizeSha256("x"))
+        val archive = FoliaModStore.importableArchive(picked)
+        assertNotNull("the picked sample must be importable", archive)
+        val installed = store.install(archive!!, null).getOrElse { failure ->
+            throw AssertionError("a digest-less manual import must install: ${failure.message}", failure)
+        }
+        assertEquals("sample-aurora-visualizer", installed.id)
+        assertTrue("installed mods are enabled at once", installed.enabled)
+        assertNull("no warning for a well-formed mod: ${installed.error}", installed.error)
+        assertTrue(File(File(store.root, installed.id), "mod.json").isFile)
+        assertTrue(
+            "a digest-less install must still say what it did: ${recorder.snapshot()}",
+            recorder.contains("installed sample-aurora-visualizer"),
+        )
     }
 
     /**

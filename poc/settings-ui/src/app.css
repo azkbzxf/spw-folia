@@ -351,12 +351,108 @@ body.spw-injected {
     /* clear of the auto-hidden taskbar strip at the very bottom of a fullscreen window */
     bottom: 56px;
     /* v0.3.0: no dedicated look any more — the button inherits .spw-chrome-btn (the top-right
-     * gear's background/border/shadow treatment) instead of the old gold ring. */
+     * gear's background/border/shadow treatment) instead of the old gold ring.
+     * v0.5.2: inside the corner capsule it is laid out by flex, not by its own fixed position —
+     * see `.spw-player-capsule-settings` below. */
 }
 
 .spw-chrome-btn--player[data-visible='false'] {
     transform: translateY(4px) scale(0.96);
 }
+
+/* ===========================================================================
+ * v0.5.2 (issue #23, second round) · the player page's bottom-right corner.
+ *
+ * The control in the user's screenshot is **Folia's own `SlideActionButton`**
+ * (`@/components/shared/SlideActionButton.tsx`), and it is rendered as-is by
+ * `PlayerBackgroundControl.tsx`:
+ *
+ *   root     relative w-12 h-12
+ *   track    absolute right-0 top-0 w-24 h-12 rounded-full border-white/10 bg-white/5
+ *   glyph    motion.div left-3.5 top-[17px] w-3.5 h-3.5, animate x:[0,-4,0] opacity:[.45,.85,.45] 1.5s
+ *   circle   w-12 h-12 rounded-full bg-black/40 text-white shadow-lg backdrop-blur-md
+ *
+ * **None of that is restyled here.** Three earlier attempts re-drew this corner in CSS and each was
+ * rejected as「不够贴近原作」; the lesson is that the reference is a SHIPPED COMPONENT, not a
+ * composition. So this block only adds what the plugin needs around it — positioning, hiding, and one
+ * transparent hit area — and never the component's own paint.
+ *
+ * ⚠️ 鼠标穿透 hides the whole control, and that costs an escape hatch: recovery is the global hotkeys
+ * (`Ctrl+Alt+B`, `Ctrl+Alt+Shift+G`) or the always-clickable top-right gear. `display:none` (not
+ * `opacity:0`) is deliberate — an invisible-but-present button would still sit in the OS-level
+ * catcher's region and still take clicks. `App.tsx` stops reporting its rect for the same reason.
+ * `docs/lessons.md` §4 records the trade.
+ * =========================================================================== */
+.spw-player-capsule {
+    position: fixed;
+    top: auto;
+    right: 32px;
+    /* Clear of the auto-hidden taskbar strip at the very bottom of a fullscreen window. The component is
+     * 48 px tall, so 52 px leaves the same visual gap the old 38 px circle had at 56 px. */
+    bottom: 52px;
+    z-index: 2147483001;
+    /* The component is 48x48. Its track extends 48 px further left and is `pointer-events-none` upstream,
+     * so the wrapper only needs the circle's box; the market's hit area is positioned outside it below. */
+    width: 48px;
+    height: 48px;
+    /* `auto`, NOT `none`: `pointer-events` is inherited, and Folia's `SlideActionButton` never declares
+     * it on its circle button — so `none` here made the circle unreachable for a real mouse press while
+     * every gate stayed green (they click through `.click()`, which bypasses hit testing). Upstream sets
+     * `pointer-events-none` on the one thing it wants inert (the track), and that is where inertness
+     * belongs. Measured by `.scratch/issue23/probe-capsule.mjs`. */
+    pointer-events: auto;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+/* The idle fade belongs to the whole control — fading the children separately would leave the track's
+ * outline on screen as an empty pill. */
+.spw-player-capsule[data-visible='false'] {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+}
+
+/* A faded control must not stay clickable: the circle gets that from Folia's own classes, and the left
+ * hit area is explicitly `auto` below. */
+.spw-player-capsule[data-visible='false'] .spw-player-capsule-mod,
+.spw-player-capsule[data-visible='false'] button {
+    pointer-events: none;
+}
+
+/* 鼠标穿透: gone from the layout AND from hit testing. */
+.spw-player-capsule[data-passthrough='true'] {
+    display: none;
+}
+
+/* The market's click target, laid over the track's left end.
+ *
+ * Folia draws the glyph at `left-3.5 top-[17px] w-3.5 h-3.5` inside a 96 px track that starts 48 px to
+ * the LEFT of the circle, i.e. the glyph occupies roughly 14–28 px from the track's left edge. This
+ * overlay covers that end plus the padding a pointer needs (~44x32 CSS px) and paints NOTHING, ever:
+ * what the user sees is Folia's glyph on Folia's track, unmodified. A second icon here would render a
+ * doubled mark, and a hover wash here was the first version's mistake — it drew a dark capsule around
+ * the glyph that upstream never paints (the user: 「移除鼠标放上去的阴影」). Hover feedback on this end
+ * is the track itself, which lights up on approach (`SlideActionButton`'s `opacity-0 → 100`). */
+.spw-player-capsule-mod {
+    position: absolute;
+    /* The track is `right-0`, 96 px wide, in a 48 px wrapper: its left edge is 48 px left of the wrapper's
+     * left edge, hence `left: -48px`. `top: 8px` centres a 32 px target on the 48 px circle. */
+    left: -48px;
+    top: 8px;
+    width: 44px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 9999px;
+    background: transparent;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.spw-player-capsule-mod:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.85);
+    outline-offset: 2px;
+}
+
 
 /* ===========================================================================
  * v0.4.17 (issue #18 item 4) · full-screen click zones over the player picture.
@@ -524,7 +620,8 @@ body.spw-injected {
  * transparent the chrome and its panel paint a flat translucent background instead of blurring. */
 .spw-chrome-btn[data-flat='true'],
 .spw-player-bg[data-flat='true'] .spw-chrome-btn,
-.spw-player-bg[data-flat='true'] .spw-player-bg-panel {
+.spw-player-bg[data-flat='true'] .spw-player-bg-panel,
+.spw-player-bg[data-flat='true'] .spw-player-capsule {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
 }

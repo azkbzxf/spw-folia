@@ -650,6 +650,30 @@ internal class FoliaModStore(
             raw.trim().lowercase(Locale.ROOT).takeIf { SHA256_PATTERN.matches(it) }
 
         /**
+         * The **manual import** entry point's only two decisions, in one place so a JVM test can pin
+         * them (`FoliaPlugin.onImportModZip` is a Swing callback and cannot be driven from a test).
+         *
+         * Returns [candidate] as a canonical [File] when it is an existing regular file whose name
+         * ends in [ZIP_EXTENSION]; null otherwise. Null is the ordinary "nothing to do" answer: the
+         * `JFileChooser` returns null on cancel and the extension filter is advisory (a user can type
+         * any name into the file-name box, and the filter is not applied to typed names), so the
+         * caller must not read "a File came back" as "a mod archive came back".
+         *
+         * What this deliberately does NOT do: check the digest. A hand-imported zip has no published
+         * digest to compare against, so there is nothing to verify here and
+         * `install(file, expectedSha256 = null)` is the right call — but that means **every other
+         * guard inside [install] (traversal, entry count, total bytes, manifest) is the only thing
+         * standing between a hostile archive and `mods/`**. They are not optional on this path.
+         */
+        internal fun importableArchive(candidate: File?): File? {
+            if (candidate == null) return null
+            val file = runCatching { candidate.canonicalFile }.getOrNull() ?: return null
+            if (!file.isFile) return null
+            if (!file.name.lowercase(Locale.ROOT).endsWith(ZIP_EXTENSION)) return null
+            return file
+        }
+
+        /**
          * A relative path inside a mod directory: no traversal, no backslashes, no absolute path.
          *
          * The same rule as upstream `manifest.cjs:isSafeRelativePath`, and it guards two different
@@ -820,6 +844,9 @@ internal class FoliaModStore(
         internal const val MAX_ENTRIES = 512
         internal const val MAX_ENTRY_BYTES = 16L * 1024 * 1024
         internal const val MAX_TOTAL_BYTES = 64L * 1024 * 1024
+
+        /** The only archive type the 配置 page's 导入模组 accepts (matched case-insensitively). */
+        internal const val ZIP_EXTENSION = ".zip"
 
         private val CLIENT_PATTERN = Regex("\\.m?js$", RegexOption.IGNORE_CASE)
         private const val MACOSX_PREFIX = "__MACOSX"

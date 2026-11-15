@@ -27,11 +27,13 @@ import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import javax.swing.JComponent
+import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.KeyStroke
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
  * spw-folia workshop plugin.
@@ -859,6 +861,100 @@ class FoliaPlugin(
         }.onFailure { log("mods: log line failed: ${it::class.java.name}: ${it.message}") }
     }
 
+    /**
+     * The manual-import flow: show a file chooser, then install whatever the user picked.
+     *
+     * **Must be called on the Swing EDT** ([FoliaPlugin.Companion.onImportModZip] does that); the
+     * unpack half leaves the EDT on [modActions]. See that callback's KDoc for why the two halves run
+     * on different threads.
+     *
+     * The chooser is built here rather than shared with [FoliaDiagnostics]'s log-folder helper: that
+     * one only ever opens a directory (`Desktop.open`), while this one needs an `AcceptAllFileFilter`
+     * narrowed to `.zip` plus an `OverwriteWarn`-free read path. Reusing it would mean threading a
+     * mode flag through a class that has nothing to do with mods.
+     *
+     * Three outcomes, three different behaviours, and keeping them apart is the whole point:
+     *  - **cancel / dialog failure** → `null` from the chooser, or an already-cancelled
+     *    [FoliaModStore.importableArchive] → return silently. No toast, no log line the user can see:
+     *    changing one's mind must never look like a failure.
+     *  - **a picked file that is not a zip** → the extension filter is advisory (typed names bypass it),
+     *    so say so instead of handing a `.rar` to the unzipper and reporting whatever it says.
+     *  - **a real archive** → `install(archive, null)` on the worker, then re-scan/publish through the
+     *    existing [pushMods] path, which also re-pushes the settings tree so an open market panel
+     *    refreshes its 「已安装」 section without a restart.
+     *
+     * The result is reported twice on purpose: a `toast` for the user who just clicked, and a `report`
+     * log line for the offline investigation (`docs/lessons.md` §1.6 — evidence over recollection).
+     * The toast is only attempted when a plugin instance exists, which is guaranteed here by the
+     * caller.
+     */
+    private fun pickAndImportModArchive() {
+        val chosen = runCatching {
+            val chooser = JFileChooser()
+            chooser.dialogTitle = "选择要导入的模组包（.zip）"
+            chooser.fileSelectionMode = JFileChooser.FILES_ONLY
+            chooser.isMultiSelectionEnabled = false
+            chooser.isAcceptAllFileFilterUsed = true
+            // The filter narrows what is listed; it does NOT constrain a typed name (see the KDoc).
+            chooser.fileFilter = FileNameExtensionFilter("模组包 (*.zip)", "zip")
+            if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) null else chooser.selectedFile
+        }.getOrElse { failure ->
+            log("mods: import chooser failed: ${failure::class.java.name}: ${failure.message}")
+            return
+        }
+        if (chosen == null) {
+            log("mods: import cancelled by the user (nothing imported)")
+            return
+        }
+        val archive = FoliaModStore.importableArchive(chosen)
+        if (archive == null) {
+            report("mods: import", "warn", "只能导入 .zip 模组包（选中的是 ${chosen.name}）")
+            toast("只能导入 .zip 模组包：${chosen.name}", WorkshopApi.Ui.ToastType.Warning)
+            return
+        }
+        val name = archive.name
+        log("mods: import $name (${archive.length()} bytes) from ${archive.parentFile?.absolutePath}")
+        try {
+            modActions.execute { importArchive(archive, name) }
+        } catch (t: Throwable) {
+            // RejectedExecutionException after shutdown: the plugin is going away.
+            log("mods: import dropped (${t::class.java.name})")
+        }
+    }
+
+    /** One manual import, already on [modActions]. Catches everything: this thread has no supervisor. */
+    private fun importArchive(archive: File, name: String) {
+        val label = "mods: import $name"
+        try {
+            val installed = modStore.install(archive, null).getOrElse { failure ->
+                report(label, "error", "导入失败：${failure.message}")
+                toast("模组导入失败：${failure.message}", WorkshopApi.Ui.ToastType.Error)
+                return
+            }
+            val warning = installed.error
+            report(
+                label, if (warning == null) "info" else "warn",
+                "已导入 ${installed.name} ${installed.version}" + (warning?.let { "（注意：$it）" } ?: ""),
+            )
+            toast(
+                if (warning == null) {
+                    "已导入 ${installed.name} ${installed.version}"
+                } else {
+                    "已导入 ${installed.name} ${installed.version}（注意：$warning）"
+                },
+                if (warning == null) WorkshopApi.Ui.ToastType.Success else WorkshopApi.Ui.ToastType.Warning,
+            )
+        } catch (t: Throwable) {
+            report(label, "error", "导入失败：${t::class.java.name}: ${t.message}")
+            toast("模组导入失败：${t.message}", WorkshopApi.Ui.ToastType.Error)
+        } finally {
+            // Whatever happened, re-scan and publish: the market page's 已安装 section and the lyric
+            // shelf both read the pushed list, and a failed import must not leave them stale.
+            runCatching { pushMods("after manual import") }
+                .onFailure { log("mods: post-import push failed: ${it::class.java.name}: ${it.message}") }
+        }
+    }
+
 
     /**
      * issue #23: injects the installed-mod list as a root-level `mods` member.
@@ -1371,11 +1467,70 @@ class FoliaPlugin(
         }
 
         /**
+         * issue #23 配置页入口（v0.5.2 起为「模组」分区的第一项）: `preference_config.json`
+         * 「模组 → 导入模组…」button target.
+         *
+         * The user's own words shaped the ordering of that group: 「模组市场在配置中的主要功能是能手动
+         * 导入模组」 —— 手动导入是这个分区的主要入口，市场是第三个（市场页里也能装，但那是「浏览」，
+         * 不是「我已经有一个 zip 了」）。So this method is the plugin's **only** archive-import path that
+         * does not go through the market, and it must survive being the first thing a user tries.
+         *
+         * ## Threading (two different threads, and getting this backwards is invisible in tests)
+         *
+         *  - `JFileChooser.showOpenDialog` **must** run on the Swing EDT: it is a modal dialog that
+         *    pumps its own event loop, and constructing/opening it off-EDT is the classic
+         *    "dialog that never paints / frames that freeze" bug. Everything in the lambda below up to
+         *    the archive decision runs on the EDT.
+         *  - The unpack itself must **not**: [FoliaModStore.install] walks a zip and writes up to
+         *    `MAX_TOTAL_BYTES`, and blocking the EDT for that long freezes SPW's whole settings window
+         *    (the button that was just clicked included). It goes on [modActions], the same serialised
+         *    worker the market's install action uses, so a manual import and a market install can never
+         *    unpack into `mods/` at the same time.
+         *
+         * ## Cancel is not an error
+         *
+         * `showOpenDialog` returns `CANCEL_OPTION` when the user presses 取消/Esc/关闭, and `null` when
+         * the dialog itself failed. Both mean "nothing was asked for": no toast, no log line above
+         * debug level, no state change. A user who changes their mind must not be told something went
+         * wrong.
+         *
+         * ## No digest on this path, on purpose
+         *
+         * `install(archive, expectedSha256 = null)`: a hand-imported zip has no published digest to
+         * compare against, so the digest step is skipped — everything else inside `install` (traversal
+         * canonicalisation, entry/total-size caps, manifest validation, atomic replace) still runs and
+         * is now the *only* guard on these bytes. That is the agreed trade (the alternative, refusing
+         * every manual import, would defeat the point of the feature).
+         *
+         * Never throws: SPW resolves `on_click` without a try/catch.
+         */
+        @JvmStatic
+        @JvmName("onImportModZip")
+        fun onImportModZip() {
+            val target = instance
+            if (target == null) {
+                runCatching {
+                    WorkshopApi.ui.toast(
+                        "spw-folia 插件未启动，无法导入模组；请在 SPW 插件管理里启用后重启",
+                        WorkshopApi.Ui.ToastType.Warning,
+                    )
+                }
+                return
+            }
+            runCatching {
+                SwingUtilities.invokeLater { target.pickAndImportModArchive() }
+            }.onFailure { failure ->
+                target.log("mods: import chooser failed: ${failure::class.java.name}: ${failure.message}")
+            }
+        }
+
+        /**
          * issue #23 配置页入口: `preference_config.json` 「模组 → 打开模组文件夹」button target.
          *
          * Sibling of the market page's own 「打开模组文件夹」 button, for the case where the window
          * cannot be opened at all: the mods directory is a plain folder, so a user can drop a mod in
-         * by hand without ever starting WebView2.
+         * by hand without ever starting WebView2. It is also the place to look when the new first item
+         * (导入模组…) refuses an archive and the user wants to see what is actually installed.
          *
          * Same two-argv rule as [FoliaDiagnostics.logFolderCommand]: `explorer.exe` and the path are
          * **separate** ProcessBuilder arguments. Joining them (or passing `"/select,<path>"`) makes
