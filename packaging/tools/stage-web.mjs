@@ -438,7 +438,83 @@ const summary = {
   },
   files: copiedList,
 };
+// Mod-host manifest (issue #23). The injected Shim.js activates Folia mods by importing the client
+// API out of the page bundle, but the chunk that carries it has a CONTENT-HASHED filename
+// (`assets/api-<hash>.js`) that changes on every upstream rebuild, so it cannot be hardcoded. Same
+// for the Folium-1.5 compatibility layer (`assets/deprecated-<hash>.js`), which is what gives mods
+// back `ctx.currentTime` / `ctx.subscribe`; without it a mod's visualizer mounts an empty shell
+// (measured: shells:1, spans:0). Staging records both, once, so the page can resolve them at runtime.
+//
+// HARD GATE — exactly one of each must exist, and the exported symbol must really be in it. A
+// renamed/merged chunk would otherwise ship a bundle whose mods silently do nothing.
+const MOD_HOST_FORMAT = 'spw-folia-mod-host';
+const MOD_HOST_VERSION = 1;
+function requireUniqueChunk(prefix) {
+  const matches = existsSync(assetsOut)
+    ? readdirSync(assetsOut).filter((n) => n.startsWith(prefix) && n.endsWith('.js'))
+    : [];
+  if (matches.length !== 1) {
+    throw new Error(
+      `[stage-web] expected exactly one ${prefix}*.js in ${relative(ROOT, assetsOut)}/, found ${matches.length}`
+      + `${matches.length ? ` (${matches.join(', ')})` : ''}.\n`
+      + '  The mod host resolves this chunk by name at runtime (see packaging/tools/stage-web.mjs);\n'
+      + '  more than one means the bundler emitted a duplicate, none means upstream moved the module.\n'
+      + '  Check the upstream build first, then update this gate — do not hardcode a hash.',
+    );
+  }
+  return `assets/${matches[0]}`;
+}
+const modHostApi = requireUniqueChunk('api-');
+const modHostDeprecated = requireUniqueChunk('deprecated-');
+// The symbols the shim imports by name. Compressors keep these because upstream reads them by name at
+// runtime too (`clientLoader.ts:177,185`), so the check is stable — but prove it instead of assuming.
+for (const [rel, symbol] of [[modHostApi, 'createFoliumClientApi'], [modHostDeprecated, 'addOldClientNames']]) {
+  const text = readFileSync(join(out, rel), 'utf8');
+  if (!text.includes(symbol)) {
+    throw new Error(
+      `[stage-web] ${rel} does not export \`${symbol}\`.\n`
+      + '  The bundled mod host imports it by name; without it every mod in the market fails to activate.\n'
+      + '  Look at the upstream source (src/mods/folium/api.ts, src/mods/folium/deprecated/index.ts) and\n'
+      + '  fix this resolver before shipping a bundle whose mods do nothing.',
+    );
+  }
+}
+// Best-effort: the Folium release the bundle was built from, recorded for support reports.
+let modHostFoliaVersion = null;
+try {
+  const foliaPkg = resolve(ROOT, 'work/folia/folia-major-main/package.json');
+  if (existsSync(foliaPkg)) {
+    const parsed = JSON.parse(readFileSync(foliaPkg, 'utf8'));
+    modHostFoliaVersion = typeof parsed.version === 'string' ? parsed.version : null;
+  }
+} catch {
+  modHostFoliaVersion = null; // never fail staging over a display-only version string
+}
+const modHost = {
+  format: MOD_HOST_FORMAT,
+  version: MOD_HOST_VERSION,
+  folia: modHostFoliaVersion,
+  api: modHostApi,
+  deprecated: modHostDeprecated,
+  assets: 'assets/',
+  // Where the host exe serves mod files from. It is a DEDICATED virtual host on purpose: the bundle
+  // host is owned by SetVirtualHostNameToFolderMapping, which takes precedence over the request
+  // interceptor the mods are served by (measured — /__mods/ under the bundle host never reaches it).
+  // The page imports mod entries cross-origin, so that host answers with Access-Control-Allow-Origin.
+  // Keep in sync with Program.ModsHost.
+  modsBase: 'https://spw-folia-mods.local/',
+};
+writeFileSync(join(out, 'mod-host.json'), JSON.stringify(modHost, null, 2) + '\n');
+// Read it back: this file is how the page finds the API, so a bad write must break the build here
+// rather than as a `mod-host.json has no usable api entry` warning on a user's machine.
+const modHostReadBack = JSON.parse(readFileSync(join(out, 'mod-host.json'), 'utf8'));
+if (modHostReadBack.api !== modHostApi || modHostReadBack.deprecated !== modHostDeprecated) {
+  throw new Error('[stage-web] mod-host.json did not round-trip; refusing to ship an unreadable manifest');
+}
+summary.modHost = modHost;
+summary.modHost.foliaVersionSource = modHostFoliaVersion === null ? null : 'work/folia/folia-major-main/package.json';
+
 const reportFile = resolve(ROOT, opt('report', 'packaging/web-stage-report.json'));
 mkdirSync(dirname(reportFile), { recursive: true });
 writeFileSync(reportFile, JSON.stringify(summary, null, 2));
-console.log(JSON.stringify({ webFiles: copied, webBytes: bytes, settingsFiles, settingsBytes, settingsDedupe, totalBytes: bytes + settingsBytes, missing: missing.length, indexHtmlPatched: summary.indexHtmlPatched, previewShimCopied, previewHtml, previewCovers, splash: summary.splash }, null, 2));
+console.log(JSON.stringify({ webFiles: copied, webBytes: bytes, settingsFiles, settingsBytes, settingsDedupe, totalBytes: bytes + settingsBytes, missing: missing.length, indexHtmlPatched: summary.indexHtmlPatched, previewShimCopied, previewHtml, previewCovers, splash: summary.splash, modHost }, null, 2));

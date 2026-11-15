@@ -5,7 +5,9 @@ import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
 import type { Theme } from '@/types';
 import { useSettingsStore, snapshotFromState, applySnapshot, type SettingsSnapshot } from '~/model/settings';
 
-export type BridgeEventType = 'hello' | 'settings' | 'state' | 'lyrics' | 'track' | 'audio' | 'config' | 'beat' | 'settingsUI' | 'queue' | 'envReport';
+export type BridgeEventType = 'hello' | 'settings' | 'state' | 'lyrics' | 'track' | 'audio' | 'config' | 'beat' | 'settingsUI' | 'queue' | 'envReport'
+    /* issue #23: 模组清单（`settings` 里也带一份，这条是独立推送通道的备用名）与「激活完了」。 */
+    | 'mods' | 'modsReady';
 
 export interface BridgeStateMessage {
     currentTime: number;
@@ -444,6 +446,77 @@ export const openExternalUrl = (url: string): void => {
 
 /** The plugin's feedback URL (GitHub issue form) — kept here so the host and the page agree. */
 export const FEEDBACK_ISSUE_URL = 'https://github.com/azkbzxf/spw-folia/issues/new';
+
+/* ---------------------------------------------------------------------------------------------
+ * issue #23 · 模组市场：页面 → 宿主 → 插件的动作通道（docs/protocol.md §3.1 `modAction`）。
+ *
+ * **纪律与 `control` 完全一样**：页面只发「请求」，执行者是插件（它才知道磁盘，页面在 WebView2 里
+ * 只有虚拟主机）。页面**不维护第二份清单真相** —— 动作的结果由插件重新推一次设置树（含新的
+ * `mods`）回来，市场页自动刷新。
+ *
+ * **信封必须平铺**：Shim 的 `emit()` 对已约定的动作类消息用
+ * `post(Object.assign({ type: 'modAction' }, payload))`，不套 `payload`。写成嵌套的话宿主那条
+ * `type == "modAction"` 分支读不到字段，动作会被静默丢弃（这正是 `docs/protocol.md` §3.1 那条
+ * 「动作类消息必须平铺」的由来）。
+ * ------------------------------------------------------------------------------------------- */
+
+/** 模组动作的四个动作（宿主白名单逐字相同；白名单外的 action 会被丢弃 + warn）。 */
+export type ModActionKind = 'install' | 'uninstall' | 'setEnabled' | 'openFolder';
+
+/** `install` 需要的下载描述（catalog 的 `download` 对象，字段名逐个对应）。 */
+export interface ModActionDownload {
+    /** **绝对** URL（catalog 里是站内相对路径，页面先拼好再发）。 */
+    url: string;
+    sha256: string;
+    fileName: string;
+}
+
+export interface ModActionRequest {
+    action: ModActionKind;
+    /** 「配对用」的请求 id：宿主原样回传，页面据此认领结果（可选）。 */
+    actionId?: string;
+    /** 目标模组。`openFolder` 可以不带。 */
+    modId?: string;
+    /** `setEnabled` 的目标状态。 */
+    enabled?: boolean;
+    /** `install` 的下载描述。 */
+    download?: ModActionDownload;
+    /** `install` 的 catalog 原文（插件据此写 `mod.json` 的兜底字段 / 记日志）。 */
+    mod?: Record<string, unknown>;
+}
+
+/** 一次动作的 `actionId`；页面自己生成，宿主原样回传。 */
+export const newModActionId = (): string =>
+    `mod-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/**
+ * 发一条模组动作。
+ *
+ * 走 `postHostMessage`（**直接** `chrome.webview.postMessage`，不经 Shim 的 emit 回声）：
+ * 动作不需要回声，回声反而会让页面把自己的请求当成一条「宿主动作」再处理一遍。
+ * 非注入环境（dev.html）没有宿主，返回 `false` 并只打一条日志 —— 绝不抛。
+ */
+export const modAction = (request: ModActionRequest): boolean => {
+    const actionId = request.actionId ?? newModActionId();
+    const message: Record<string, unknown> = { type: 'modAction', action: request.action, actionId };
+    if (request.modId) message.modId = request.modId;
+    if (typeof request.enabled === 'boolean') message.enabled = request.enabled;
+    if (request.download) {
+        message.download = {
+            url: request.download.url,
+            sha256: request.download.sha256,
+            fileName: request.download.fileName,
+        };
+    }
+    if (request.mod) message.mod = request.mod;
+    const posted = postHostMessage(message);
+    if (!posted) console.info('[settings-ui] modAction (no host)', message);
+    return posted;
+};
+
+/** 请求插件打开模组文件夹（资源管理器）。`modId` 可选：给了就定位到那一个。 */
+export const openModsFolder = (modId?: string): boolean =>
+    modAction({ action: 'openFolder', ...(modId ? { modId } : {}) });
 
 
 export const bridgeOn = <T,>(type: string, listener: (payload: T) => void): (() => void) => {

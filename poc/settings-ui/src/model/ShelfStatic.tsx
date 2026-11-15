@@ -18,18 +18,38 @@ import { PictureGrid, type PictureState } from '@/components/modal/settings/kit'
 import { VisualizerModeGlyph } from '@/components/visualizer/modeGlyphs';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { VisualizerMode } from '@/types';
-import { RANDOM_VISUALIZER_CHOICE, SHELF_COLUMNS, RandomPicture, type ShelfValue } from './shelfShared';
+import { RANDOM_VISUALIZER_CHOICE, SHELF_COLUMNS, ModPicture, RandomPicture, type ShelfValue } from './shelfShared';
+import { isModStyleMode, parseModStyleMode, type ModStyleEntry } from './modStyles';
 
-/** 一格的图案：真实样式的线性字形（与上游降级时画的是同一个），随机格仍是 Shuffle。 */
-const drawStaticChoice = (value: ShelfValue, _state: PictureState): React.ReactNode => (
-    value === RANDOM_VISUALIZER_CHOICE
-        ? <RandomPicture />
-        : (
-            <span className="grid h-full w-full place-items-center text-[color:var(--st-t2)]">
-                <VisualizerModeGlyph mode={value as VisualizerMode} size={22} />
-            </span>
-        )
-);
+/**
+ * 一格的图案：真实样式的线性字形（与上游降级时画的是同一个），随机格仍是 Shuffle。
+ *
+ * issue #23: 模组格同样走 `<img>`（模组自带的 preview 图）。虽然上游 `VisualizerModeGlyph` 对认不得
+ * 的 mode 会**正确**回落成通用字形（`modeGlyphs.tsx:38-42`），但那样货架两版对同一格画的东西不一样
+ * （实时版是 preview 图、静态版是通用字形），切开关时看起来像换了批模组。统一走 preview 图。
+ */
+const drawStaticChoice = (value: ShelfValue, _state: PictureState): React.ReactNode => {
+    if (value === RANDOM_VISUALIZER_CHOICE) return <RandomPicture />;
+    if (isModStyleMode(value)) {
+        const entry = staticModTable.get(value);
+        return <ModPicture previewUrl={entry?.previewUrl ?? null} label={entry?.label ?? (parseModStyleMode(value)?.vizId ?? 'mod')} />;
+    }
+    return (
+        <span className="grid h-full w-full place-items-center text-[color:var(--st-t2)]">
+            <VisualizerModeGlyph mode={value as VisualizerMode} size={22} />
+        </span>
+    );
+};
+
+/** 与 `ShelfLiveView` 同一套做法：模块级表，让 `drawStaticChoice` 的引用保持稳定。 */
+let staticModTable: ReadonlyMap<string, ModStyleEntry> = new Map();
+
+const setStaticModTable = (entries: readonly ModStyleEntry[]): void => {
+    if (entries.length === 0 && staticModTable.size === 0) return;
+    const next = new Map<string, ModStyleEntry>();
+    for (const entry of entries) next.set(entry.mode, entry);
+    staticModTable = next;
+};
 
 export interface StaticShelfProps {
     value: ShelfValue;
@@ -39,14 +59,17 @@ export interface StaticShelfProps {
     label: string;
     /** Whether the window is on screen at all. Kept in the signature so both shelves are interchangeable. */
     active: boolean;
+    /** issue #23: 模组格（图 + 名字）。 */
+    modEntries?: readonly ModStyleEntry[];
 }
 
 /**
  * 货架的静态版。结构、列数、标签、键盘行为与实时版完全一致（同一个 `PictureGrid`），
  * 只有「格子里画什么」不同 —— 于是切开关时布局不跳。
  */
-export const StaticShelf: React.FC<StaticShelfProps> = ({ value, options, onChange, label, active }) => {
+export const StaticShelf: React.FC<StaticShelfProps> = ({ value, options, onChange, label, active, modEntries = [] }) => {
     const wide = useMediaQuery('(min-width: 1024px)');
+    setStaticModTable(modEntries);
     if (!active) {
         return null;
     }

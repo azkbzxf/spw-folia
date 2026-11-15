@@ -49,6 +49,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `track` | `id`, `title`, `artist`, `album`, `durationMs`, `coverDataUrl?`, `coverPath?` | 封面优先 data URL（JPEG/PNG base64），否则宿主负责本地读取。宿主转发页面时同时给出 `coverUrl` 镜像（见 §1.1） |
 | `queue` | `mode:"circle"\|"circle-end"\|"repeat-one"\|"random"`, `random:bool`, `index:int`, `items:[{id,title,artist,album}]` | 当前播放队列快照。`random=true` 时 `items` 是随机队列且 `index` 对应随机队列位置，否则是顺序队列。首次连接后、队列/模式变化时发送（低频）；播放进度不在此处 |
 | `config` | `config: object` | 可选覆盖：插件强制推送完整 Folia `ObsBrowserSourceConfig`（调试/兼容用，正常不用） |
+| `mods` | `mods:[{id,name,version,author,permissions:[…],enabled,clientEntry,previewUrl,error?}]`, `dir?` | issue #23：已装模组的**全量**清单（变更即全量，不是增量）。`enabled` **必须**是布尔 `true`，宿主按 `=== true` 判定；`clientEntry` 是相对模组根的文件名（如 `client.mjs`）。宿主把 `mods` 数组**原样**转发给页面，只校验它是一个 JSON 数组。数组必须单行（§1 铁律） |
 | `audioMode` | `mode:"loopback"\|"host-fft"\|"off"` | 可选；默认 loopback |
 | `quit` | — | 请求优雅退出 |
 
@@ -67,7 +68,8 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `settings` | `settings: object` | UI 修改了设置 → 插件持久化（并可选校验/夹紧） |
 | `action` | `name:"reset"\|"openDevTools"\|"reload"` | UI 请求的动作 |
 | `control` | `action:"toggle"\|"previous"\|"next"\|"seek"\|"shuffle"\|"queue-play"`, `positionMs?`, `index?`, `random?` | 播放条控制请求（由 §3.1 页面 `control` 转发），插件落到宿主播放器接口，见 §3.4 |
-| `log` | `level:"info"\|"warn"\|"error"`, `msg` | 诊断日志（插件写入 `spw-folia.log`） |
+| `modAction` | `action:"install"\|"uninstall"\|"setEnabled"\|"openFolder"`, `modId?`, `actionId?`, `enabled?`, `download?{url,sha256,fileName}` | issue #23：页面请求的模组动作（由 §3.1 页面 `modAction` 转发）。宿主**只做字段校验与转发**：`action` 白名单外丢弃 + warn；`modId` 必填（`openFolder` 除外）且必须匹配上游 manifest 的 id 模式 `^[a-z0-9][a-z0-9-]*$`；`install` 的 `download.url` 必须是 `https://`。**`download` 由宿主逐字段读出再转义追加，绝不内嵌页面给的子 JSON**（防注入插件 stdin）。`actionId` 原样回传，供页面配对结果 |
+| `log` | `level:"info"\|"warn"\|"error"`, `msg` | 插件诊断日志，宿主镜像进自己的日志流（不转发页面）。模组动作的结果走这条通道回报 |
 
 ## 3. 宿主 ↔ 页面
 
@@ -89,6 +91,9 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 - `{"type":"openUrl","url":"https://…"}`：用默认浏览器打开反馈页；宿主只接受 `http`/`https`，
   其余一律拒绝并记 warn。
 - `{"type":"splash","state":"…","atMs":n}`：开屏遮罩的页面侧时间线（诊断用）。
+- `{"type":"modAction","action":"install"|"uninstall"|"setEnabled"|"openFolder","modId"?,"actionId"?,"enabled"?,"download"?{url,sha256,fileName}}`：
+  issue #23 模组动作（见 §2 `modAction`）。宿主校验后转发成 stdout 同名字段；白名单外丢弃 + warn。
+  `openFolder` 可省略 `modId`（打开整个模组目录）。
 - `{"type":"log","level":"…","msg":"…"}` / `{"type":"fps",…}` / `{"type":"first-frame",…}` / `{"type":"key",…}`
 
 ### 3.2 宿主 → 页面（`chrome.webview.postMessage`，页面侧由 Shim.js 统一接收）
@@ -106,6 +111,8 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `ui` | `{settingsOpen}` | 更新 `__SPW_FOLIA__.ui` 状态 |
 | `envReport` | 宿主环境自检对象（§3.5） | 记入 `inputs.envReport` 并 `emit('envReport')`；「出现问题」面板据此渲染 |
 | `beat` | `{beatImpact,downbeatImpact}` | **目前宿主不发送这条消息**，`beatImpact/downbeatImpact` 恒为 0。Shim 侧的接收路径与 `window.__SPW_FOLIA_BEAT__` 钩子已就绪，但宿主没有任何发 `beat` 的代码 —— 加节拍特效前必须先补宿主侧（见 [`docs/audio-timeline.md`](audio-timeline.md)） |
+| `mods` | `{mods:[…]}` | issue #23：插件的模组清单**原样转发**（数组不动、不重新序列化）。Shim 的处理顺序是**先存 `inputs.mods` 再激活**（激活中的模组代码会调 `listMods()`，先存才能答对），然后 `emitLocal('mods')` 并驱动激活。导航完成时宿主会**重放**最后一份 `mods`（页面可能晚于插件的首次推送） |
+| `modsReady` | `{count,active,errors}` | Shim 在每次激活/停用收敛后发出的**页面 → 宿主**诊断消息。宿主只记日志，不消费 |
 
 ### 3.3 注入全局（Shim.js 暴露，设置岛使用）
 
@@ -123,6 +130,42 @@ window.__SPW_FOLIA__ = {
   lastConfig()                          // 播放页收到的最后一版 config（预览子帧镜像用）
 }
 ```
+
+#### 模组运行时（issue #23，Shim 注入）
+
+```ts
+window.electron = { mods: { … } }        // 仅当页面本身没有时创建。Boolean(window.electron?.mods) 必须为真，
+                                        // 否则上游 isModsBridgeAvailable() 让整条模组路径直接 return。
+                                        // 方法一律降级返回，不抛：listMods() 回 inputs.mods，storage/secrets
+                                        // 的读回 {ok:true,result:null}（模块桥读不到就回空，不能让模组的
+                                        // await 变成 reject），只有真正做不到的（net/rpc/pickFile）回
+                                        // {ok:false,error:'no-main-process'}。
+window.__SPW_FOLIA_MODS__ = {
+  mods, errors,                          // errors: [{modId,stage,error,atMs}]，市场页/调试可读
+  progressButtons, visualizers,          // 两个数组，见下
+  activeIds, host,                       // host = mod-host.json 内容
+  activateNow()                          // 重新收敛一次（手动重试）
+}
+window.__SPW_FOLIA_MOD_PROGRESS__ = [    // 播放条 slot 的注册转发
+  { id, modId, name, slot: 'leading'|'trailing', order, hideWhenCollapsed, mount }
+]                                        // 数组上挂非枚举的 subscribe(fn) / snapshot()
+window.__SPW_FOLIA_MOD_VISUALIZERS__ = [ // 货架模组格（供设置岛读；设置岛是独立 bundle，够不到本注册表）
+  { mode: 'mod:<modId>:<vizId>', modId, vizId, id, label, order, hostBackground }
+]                                        // 同样挂 subscribe / snapshot
+```
+
+激活/停用的纪律（改这段前必读）：
+
+- 只激活 `enabled === true` 且 `clientEntry` 非空、且 `error` 为空的模组。
+- 幂等键是 `id + version`（`clientEntry` 也参与）：版本变了就换 URL（`?v=<version>`），
+  因为 **module map 按 URL 记 module**，同 URL 会继续跑旧代码。
+- 停用必须做五件事，漏一件都静默无效：跑 `activate` 返回的 disposer；**倒序跑 `onRelease` 收集到的
+  release**（漏跑 = 模组的 `every()` 定时器继续跑、`onDispose` 一次都不执行，实测）；倒序跑我们
+  **自己包 `api.events.on` 记下的 disposer**（`events.on` 的 disposer 不进 `onRelease`，且
+  `removeFoliumEventHandlers` 在产物里被压成单字母，不能依赖）；`listFoliumHostRegistries()` 逐个
+  `unregisterAll(modId)`（11 个注册表）；移除该模组镜像到 `__SPW_FOLIA_MOD_PROGRESS__` 的条目。
+- 失败只 `console.warn` + 记进 `errors`，**绝不抛到 shim 外**；激活抛错的模组也要走一次停用，
+  免得留下半注册的样式。
 
 ### 3.4 播放控制通道
 
@@ -255,7 +298,49 @@ unknown 绝不表述成「缺失」。
   （`poc/webview/server/` 的 `server.mjs` 提供 demo 数据）。
 - 生产：`--bundle <dir>`（`.spmod` 包里的 `web/`），虚拟 host `https://spw-folia.local/`。
 - 常用参数：`--fullscreen`（默认）、`--windowed w,h`、`--devtools`、`--fps-log <path>`、
-  `--user-data-dir <dir>`、`--no-sw-purge`。完整清单见 [`docs/host-app.md`](host-app.md)。
+  `--user-data-dir <dir>`、`--no-sw-purge`、`--mods-dir <dir>`。完整清单见 [`docs/host-app.md`](host-app.md)。
+
+### 7.1 模组文件的服务（issue #23）
+
+模组文件在磁盘上（插件的 `<pluginPath>/mods/<modId>/`），页面必须能 `import()` 它们。
+宿主的做法与**不能**这样做法的原因：
+
+- `--mods-dir <dir>` 指定模组根（插件传 `<pluginPath>/mods`）。没传或目录不可用 → 不装拦截器，
+  页面里 `/__mods/`、mods host 的请求都不会被处理。
+- **不能用 `SetVirtualHostNameToFolderMapping`**：它只能映射一个固定目录，而模组目录由插件在运行期增删。
+- **也不能把它挂在 bundle host（`spw-folia.local`）下**：`SetVirtualHostNameToFolderMapping` 对同一 host
+  的优先级**高于** `WebResourceRequested`，映射过的 host 上的请求根本进不了拦截器。实测症状与「文件不存在」
+  完全同形（`Failed to fetch dynamically imported module`），排查时极容易误判。
+- 所以模组文件走**独立虚拟主机** `https://spw-folia-mods.local/`（`Program.ModsHost`，无 folder mapping），
+  由 `WebResourceRequested` 应答，并带 `Access-Control-Allow-Origin: *`
+  —— 页面 origin 是 bundle host，模组请求是**跨源**，没有 CORS 头 `import()` 必被拒。
+- **filter 必须用三参重载**并显式传 `CoreWebView2WebResourceRequestSourceKinds.All`：
+  两参重载默认只匹配 `Document`（顶层导航），module import / fetch 都不在内。
+- **Content-Type 必须按扩展名给对**（`.mjs/.js → text/javascript; charset=utf-8`，`.json → application/json`，
+  `.jpg/.png → image/*`）。module loader 不嗅探，MIME 不对 `import()` 直接被拒。
+- **防目录穿越**：URL decode → 逐段拒绝 `.`/`..`/含 `:` 的段 → `Path.GetFullPath` 规范化后必须仍在模组根内。
+  任一不满足 → 404（`..` 一律 404，不是靠 `Path.Combine` 的运气）。只允许 `GET`，其余 405。
+- 页面侧的 URL 由 `<bundle>/mod-host.json` 的 `modsBase` 决定（见 §7.2），页面不硬编码主机名。
+
+### 7.2 产物清单 `mod-host.json`（issue #23）
+
+`/assets/api-<hash>.js` 这类 chunk 名带内容哈希，升级上游就变，不能写死。`stage-web.mjs` 在 staging 时
+生成 `<out>/mod-host.json`：
+
+```json
+{ "format": "spw-folia-mod-host", "version": 1, "folia": "0.7.26",
+  "api": "assets/api-XXXXXXXX.js",
+  "deprecated": "assets/deprecated-XXXXXXXX.js",
+  "assets": "assets/",
+  "modsBase": "https://spw-folia-mods.local/" }
+```
+
+- `api`：导出 `createFoliumClientApi` / `listFoliumHostRegistries` 的 chunk。
+- `deprecated`：导出 `addOldClientNames` 的 chunk。**这项不是可选的**：Folium 2 的 mount ctx 去掉了
+  `ctx.currentTime` / `ctx.subscribe`，而市场上的模组仍按 Folium 1.5 写；不包这一层，模组样式
+  「注册成功但一个字符都画不出来」（实测：`shells:1, spans:0`）。
+- `folia`：构建来源的 Folium 版本（读不到写 `null`，仅展示用）。
+- 两个 chunk 各自**必须唯一命中**，且导出符号必须在文件里 —— 否则 `stage-web.mjs` throw（硬闸）。
 
 ## 8. 全屏 UI / 交互契约
 

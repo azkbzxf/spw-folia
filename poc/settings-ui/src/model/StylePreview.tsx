@@ -20,12 +20,26 @@ interface StylePreviewProps {
     mode: StyleMode;
     /** The stage's pause button: freezes/resumes the drift of the sample frame. */
     paused?: boolean;
+    /**
+     * issue #23: 一个**外部**给的图片地址，优先于按 `mode` 查表。
+     *
+     * 为什么必须有这条：`getStyleEntry(mode)` 对认不得的 mode 会**静默回落**成 `STYLE_ENTRIES[0]`
+     * （= sonnet，`styles.tsx:305-306`），而模组样式（`mod:<id>:<viz>`）永远不在那张表里 —— 于是
+     * 选了模组样式、实时预览又挂了的时候，这个兜底会画出「商籁」的图，看起来像样式选错了。
+     * 模组格必须把自己的 preview 图从这里传进来，**不能**靠 `mode` 反查。
+     */
+    thumbUrl?: string | null;
+    /** 上面那张图的名字（`alt`）；不给则按 `mode` 查表。 */
+    thumbLabel?: string | null;
 }
 
 const CROSSFADE_MS = 220;
 
-const StylePreview: React.FC<StylePreviewProps> = ({ mode, paused = false }) => {
-    const src = getStyleEntry(mode).thumb;
+const StylePreview: React.FC<StylePreviewProps> = ({ mode, paused = false, thumbUrl = null, thumbLabel = null }) => {
+    /* 外部地址优先；没有才按 mode 查表（内置样式的老路径完全不变）。 */
+    const entry = getStyleEntry(mode);
+    const src = thumbUrl && thumbUrl.length > 0 ? thumbUrl : entry.thumb;
+    const label = thumbUrl && thumbUrl.length > 0 ? (thumbLabel ?? entry.labelFallback) : entry.labelFallback;
     const [previous, setPrevious] = useState<string | null>(null);
     const lastSrc = useRef<string>(src);
 
@@ -55,7 +69,7 @@ const StylePreview: React.FC<StylePreviewProps> = ({ mode, paused = false }) => 
             <img
                 key={src}
                 src={src}
-                alt={getStyleEntry(mode).labelFallback}
+                alt={label}
                 draggable={false}
                 className="spw-preview-in absolute inset-0 h-full w-full object-cover"
             />

@@ -9,19 +9,23 @@
  * registry 并触发它自己的 import；把常量挪出来是最省事的断点。
  */
 import React from 'react';
-import { Shuffle } from 'lucide-react';
+import { Puzzle, Shuffle } from 'lucide-react';
 import type { StyleMode } from './settings';
+import type { ModStyleMode } from './modStyles';
 
 /** Folia's picker choice for the random pool; mirrors `random/lyricStyleChoices.tsx`. */
 export const RANDOM_VISUALIZER_CHOICE = '__random__';
 /**
- * A shelf value: a real style, or the 随机 tile.
+ * A shelf value: a built-in style, a mod style (`mod:<id>:<viz>`), or the 随机 tile.
  *
  * 故意保留成联合类型而不是 `string`：`Stage.tsx` 把它交回 `onVisualizerModeChange(mode: StyleMode)`，
  * 放宽成 string 会在调用处丢类型安全（tsc 基线里一条都不许新增）。`import type` 在编译期被抹掉，
- * 不会在运行期把 `settings.ts` 拖进静态路径。
+ * 不会在运行期把 `settings.ts` / `modStyles.ts` 拖进静态路径。
+ *
+ * issue #23：`ModStyleMode` 是**并列**成员而不是 `StyleMode` 的一部分 —— 后者是上游闭集，并进
+ * `mod:` 会让 `check-style-sync.mjs` 报「StyleMode 联合多成员」（见 `modStyles.ts` 文件头）。
  */
-export type ShelfValue = StyleMode | typeof RANDOM_VISUALIZER_CHOICE;
+export type ShelfValue = StyleMode | ModStyleMode | typeof RANDOM_VISUALIZER_CHOICE;
 
 /** Folia's own shelf geometry (VisPlayground.tsx:123): 7 pictures in the wide window, 4 where it is one column. */
 export const SHELF_COLUMNS = { wide: 7, narrow: 4 };
@@ -35,3 +39,35 @@ export const RandomPicture: React.FC = () => (
         <Shuffle size={28} aria-hidden="true" />
     </span>
 );
+
+/**
+ * issue #23: 一个模组样式的格子。
+ *
+ * **必须**画模组自己的 preview 图（`<img>`），绝不能交给 `LyricStylePicture`：
+ * 上游那个组件会向上游 registry 要 renderer，而注入岛里没有模组运行期，`getVisualizerRegistryEntry`
+ * 对认不得的 mode 会回落到 `DEFAULT_VISUALIZER_MODE = 'classic'`
+ * （`work/folia/…/src/components/visualizer/registry.tsx:57-58` + `src/types/visualizerModes.ts:44`），
+ * 于是**静默画成「古典」的图** —— 看起来一切正常，实际标错了样式。
+ *
+ * 没有 preview 图时画的是「模组」字形而不是破图图标：画不出来也要能看出这是一格模组。
+ */
+export const ModPicture: React.FC<{ previewUrl: string | null; label: string }> = ({ previewUrl, label }) => {
+    if (!previewUrl) {
+        return (
+            <span className="grid h-full w-full place-items-center gap-1 text-[color:var(--st-t2)]">
+                <Puzzle size={22} aria-hidden="true" />
+                <span className="max-w-full truncate px-1 text-[10px] leading-none opacity-70">{label}</span>
+            </span>
+        );
+    }
+    return (
+        <img
+            src={previewUrl}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            data-spw-mod-picture="true"
+            className="h-full w-full object-cover"
+        />
+    );
+};

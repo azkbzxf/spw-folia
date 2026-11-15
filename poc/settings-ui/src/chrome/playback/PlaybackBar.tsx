@@ -10,6 +10,10 @@ import {
 } from '~/bridge';
 import { clockPosition, formatTime, usePlaybackClock, type PlaybackClock } from './playbackClock';
 import PlaybackQueuePanel from './PlaybackQueuePanel';
+/* issue #23: 播放条上的模组按钮（我们自己的本地 slot 表，不复用上游 progressButtons ——
+ * 上游那两套注册表只在 Electron 主窗口的 ProgressBar 里渲染，我们这个 surface 根本不挂它）。
+ * 见 `modProgress.ts` 文件头的三条硬事实。 */
+import ModSlot from './ModSlot';
 /* v0.4.17 (issue #18 item 2): 「显示播放条」 is page-owned now — read it from the settings store, not
  * from the plugin-injected member (`useInjectedSwitch.SHOW_PLAYBACK_BAR_KEY` no longer names it; the
  * plugin ships the old config value as `showPlaybackBarLegacy` for the one-time migration only). */
@@ -34,6 +38,12 @@ import PlaybackQueuePanel from './PlaybackQueuePanel';
  *   「从随机池里换一种」(`options.randomVisualizerReroll`), rendered only while 随机 is on;
  *   seek rail is `.spw-playback-bar .spw-playback-track` and answers BOTH the
  *   pointerdown→pointerup sequence and a plain `click` (synthetic events included).
+ *
+ * issue #23 — mod slots (do NOT rename, do NOT reuse the classes above):
+ *   mod buttons live in `.spw-playback-mod-slot[data-spw-mod-slot="leading|trailing"]`, each one in a
+ *   `.spw-playback-mod` element. They are deliberately **new** classes: `verify-click-zones.mjs` counts
+ *   `.spw-playback-play` / `.spw-playback-step` / `.spw-playback-icon` and would see a mod button as a
+ *   transport control if it shared one. An empty registry renders nothing at all.
  *
  * While the player page is in mouse-passthrough mode the HUD is unmounted entirely (no pixels,
  * no hit region — clicks must fall through to the desktop), as is the case while the settings
@@ -326,6 +336,17 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
         sendPlaybackControl('seek', { positionMs: Math.round(ratio * duration) });
     }, [durationForSeek]);
 
+    /* issue #23: 模组的 `ctx.seek(seconds)` 走这条 —— 与轨道拖动走同一个 `seek` 控制消息
+     * （`sendPlaybackControl('seek', {positionMs})`），所以模组按钮的跳转和用户拖进度条是同一条路，
+     * 插件侧不需要为它新增白名单。 */
+    const seekFromMod = useCallback((positionMs: number) => {
+        if (!Number.isFinite(positionMs)) return;
+        const duration = durationForSeek();
+        const clamped = duration > 0 ? Math.min(Math.max(0, positionMs), duration) : Math.max(0, positionMs);
+        lastSeek.current = { ratio: duration > 0 ? clamped / duration : 0, at: Date.now() };
+        sendPlaybackControl('seek', { positionMs: Math.round(clamped) });
+    }, [durationForSeek]);
+
     const ratioAt = (track: HTMLElement, clientX: number): number => {
         const rect = track.getBoundingClientRect();
         if (rect.width <= 0) return 0;
@@ -485,6 +506,15 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
                         {meta.playing ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
                     </button>
                     <div className="spw-playback-main">
+                        {/* issue #23: leading slot — 模组自己的按钮排在上一首之前。注册表为空时
+                         *  这个组件返回 null，一个节点都不渲染。 */}
+                        <ModSlot
+                            slot="leading"
+                            rootRef={rootRef}
+                            clockRef={clockRef}
+                            durationMs={meta.durationMs}
+                            onSeekMs={seekFromMod}
+                        />
                         <button
                             type="button"
                             className="spw-playback-step"
@@ -545,6 +575,14 @@ const PlaybackBar: React.FC<PlaybackBarProps> = ({ settingsOpen = false }) => {
                         >
                             <ListMusic size={18} />
                         </button>
+                        {/* issue #23: trailing slot — 模组按钮排在播放列表之后（最右端）。 */}
+                        <ModSlot
+                            slot="trailing"
+                            rootRef={rootRef}
+                            clockRef={clockRef}
+                            durationMs={meta.durationMs}
+                            onSeekMs={seekFromMod}
+                        />
                     </div>
                     <div className="spw-playback-line">
                         <span

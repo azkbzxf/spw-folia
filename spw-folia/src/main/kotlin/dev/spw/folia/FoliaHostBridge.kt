@@ -16,10 +16,11 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Protocol (docs/protocol.md v1, verified against poc/webview/host/Program.cs + HostForm.cs):
  *  - plugin -> helper (stdin):  {"t":"hello"...}, {"t":"settings"...}, {"t":"state"...},
- *    {"t":"lyrics"...}, {"t":"track"...}, {"t":"queue"...} (v0.3.0), {"t":"quit"}
+ *    {"t":"lyrics"...}, {"t":"track"...}, {"t":"queue"...} (v0.3.0), {"t":"mods"...} (issue #23),
+ *    {"t":"quit"}
  *  - helper -> plugin (stdout): {"t":"ready"...}, {"t":"closed","reason":...},
  *    {"t":"settings","settings":{...}}, {"t":"action"...}, {"t":"control"...} (v0.3.0),
- *    {"t":"log"...}
+ *    {"t":"modAction"...} (issue #23), {"t":"log"...}
  *
  * The helper reads stdin on a dedicated thread; EOF (plugin process death) closes it, so a
  * double safety net (quit on stop + stdin EOF) keeps no orphan processes around.
@@ -72,6 +73,15 @@ internal class FoliaHostBridge(
 
     /** Called with the raw settings JSON whenever the page sends an updated tree. */
     @Volatile var onSettingsFromPage: ((String) -> Unit)? = null
+
+    /**
+     * issue #23: called with the raw `modAction` line the host forwarded from the page.
+     *
+     * The raw line (not a parsed command object) is handed over on purpose: the plugin decides which
+     * fields an action needs, and a shape it does not understand must be *refused with a reason*
+     * rather than silently dropped by a parser in the transport layer.
+     */
+    @Volatile var onModAction: ((String) -> Unit)? = null
 
     /**
      * v0.4.8: 配置 page switch `transitionAnimation`. When false the helper is spawned with
@@ -229,6 +239,10 @@ internal class FoliaHostBridge(
                 "\"spwVersion\":${Json.str(hostVersion)},\"bundleDir\":${Json.str(web.absolutePath)}}"
         )
         settingsTree?.let { sendSettings(it) }
+        // issue #23: the mod list rides along with the handshake. `ready` re-pushes it (and that is
+        // the copy the page actually receives); this one makes the log of a normal session readable
+        // in order and keeps the list correct if the host ever starts forwarding before `ready`.
+        lastSentMods?.let { sendMods(it) }
         log("host spawned pid=$pid")
         return true
     }
@@ -311,6 +325,52 @@ internal class FoliaHostBridge(
         val body = queueJson.trim().removePrefix("{").removeSuffix("}")
         sendLine("{\"t\":\"queue\",$body}")
     }
+
+    /**
+     * issue #23: publishes the installed-mod list.
+     *
+     * [modsJson] is already the complete `[…]` array built by [FoliaModStore.toJson], i.e. one line
+     * with every string escaped. It is embedded as-is on purpose: re-serialising it here would be the
+     * second place that has to keep the line protocol in mind, and a newline anywhere inside would
+     * split one message into several invalid ones that the host silently drops (`docs/lessons.md` §3).
+     *
+     * The list is perishable state, not a command: it is re-pushed after every action and again when
+     * the host reports `ready`, because the host drops anything posted before WebView2 is up
+     * (`post-page-skip reason=not-ready`). The host forwards it to the page, whose Shim then activates
+     * the enabled clients; the plugin never touches the page's registries.
+     */
+    fun sendMods(modsJson: String) {
+        val body = if (Json.needsCollapsing(modsJson)) Json.singleLine(modsJson) else modsJson
+        if (body !== modsJson) {
+            log("mods -> helper (collapsed ${modsJson.length} -> ${body.length} bytes for the line protocol)")
+        }
+        lastSentMods = body
+        sendLine(modsLine(body))
+    }
+
+    /**
+     * The last list handed to [sendMods], or null before the first push. Replayed on `ready` for the
+     * same reason the settings tree is: the host has no queue for a page that does not exist yet.
+     */
+    @Volatile
+    var lastSentMods: String? = null
+        private set
+
+    /**
+     * Sends one line back to the host's log channel (`{"t":"log","level":…,"msg":…}`), which the host
+     * mirrors into its own log file and (when verbose) the page console.
+     *
+     * This is the plugin's only way to *say something* over the protocol, and it already exists for
+     * exactly this purpose — a mod action's outcome uses it rather than inventing a reply envelope.
+     * The message is escaped, so a Windows path full of backslashes stays one valid line.
+     */
+    fun sendLog(level: String, message: String) {
+        sendLine(logLine(level, message))
+    }
+
+    /** Optional mods provider; called on `ready` to replay the current list (never blocking there). */
+    @Volatile
+    var modsProvider: (() -> String?)? = null
 
     /**
      * v0.3.0: pushes the queue only when it changed (or [force]); returns true when a line went
@@ -493,6 +553,17 @@ internal class FoliaHostBridge(
                     runCatching { sendSettings(tree) }
                         .onFailure { log("settings replay failed: ${it::class.java.name}: ${it.message}") }
                 }
+                // issue #23: same replay for the mod list. A window opened after the last scan would
+                // otherwise start with no mods at all (the host keeps nothing for us), and the page
+                // would show an empty shelf until the user toggled something.
+                runCatching { modsProvider?.invoke() }
+                    .onSuccess { mods ->
+                        if (mods != null) {
+                            log("mods replay on ready (${mods.length} bytes)")
+                            sendMods(mods)
+                        }
+                    }
+                    .onFailure { log("mods replay failed: ${it::class.java.name}: ${it.message}") }
                 replaySnapshot()
                 startPump()
             }
@@ -524,6 +595,24 @@ internal class FoliaHostBridge(
                 val level = Json.stringField(line, "level") ?: "info"
                 val msg = Json.stringField(line, "msg") ?: ""
                 log("host[$level] $msg")
+            }
+            // issue #23: the page asked for a mod action (install / uninstall / setEnabled /
+            // openFolder) and the host forwarded it verbatim. The bridge only moves the line: the
+            // handler lives in FoliaPlugin, which owns the mod directory, the download and the
+            // re-push. Dispatching here keeps the reader thread's failure mode unchanged — the
+            // callback must never throw back into the stdout pump.
+            "modAction" -> {
+                val action = Json.stringField(line, "action") ?: "?"
+                val handler = onModAction
+                if (handler == null) {
+                    log("host modAction ($action) ignored: no handler installed")
+                } else {
+                    try {
+                        handler(line)
+                    } catch (t: Throwable) {
+                        log("modAction handling failed: ${t::class.java.name}: ${t.message}")
+                    }
+                }
             }
             "fps" -> {
                 // Diagnostics for the tiny-viewport investigation (webview-spike task-9):
@@ -735,7 +824,6 @@ internal class FoliaHostBridge(
     companion object {
         /**
          * `docs/host-app.md` §2 exit-code table, as user-facing text.
-         *
          * Returns null for codes that carry no useful message: 0 (normal close) needs no toast, and
          * an unrecognised code is reported by the log line itself — inventing a sentence for it
          * would be exactly the kind of unbacked claim v0.4.7 removed from the self-check.
@@ -764,6 +852,19 @@ internal class FoliaHostBridge(
         /** Track/lyrics are polled every 200 ms (they are cheap cached JSON diffs); the provider
          *  itself throttles the Workshop API round-trip, see FoliaPlaybackExtension. */
         private const val TRACK_CHECK_EVERY_TICKS = 2L
+
+        /**
+         * The complete `mods` line for an already-serialised array (issue #23).
+         *
+         * `internal` so a JVM test can pin the **transport shape** — one line, the array spliced
+         * verbatim, no re-serialisation — without a host process. The host side reads the array out
+         * of this line and relays it unchanged, so any escaping done here is done exactly once.
+         */
+        internal fun modsLine(modsJson: String): String = "{\"t\":\"mods\",\"mods\":$modsJson}"
+
+        /** The complete `log` line (plugin -> host) for one message. Same idea as [modsLine]. */
+        internal fun logLine(level: String, message: String): String =
+            "{\"t\":\"log\",\"level\":${Json.str(level)},\"msg\":${Json.str(message)}}"
 
         /** v0.3.0: queue is diffed every 500 ms; controls force an immediate push via queueDirty. */
         private const val QUEUE_CHECK_EVERY_TICKS = 5L

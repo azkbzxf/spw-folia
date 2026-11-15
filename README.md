@@ -48,8 +48,15 @@ Windows（SPW）**：迷你播放器「更多」菜单里的 `Folia` 条目打�
 - **样式小图不用每次重画** —— 「歌词样式」面板的 17 格小图第一次画完会缓存在本机，
   再次打开几乎立刻出图。机器较弱的话，在「配置 → 播放页 → 歌词样式预览动画」关掉动画，
   每格只画简约图案，打开设置会明显更顺。
-- **不联网、不上传** —— 没有 HTTP 服务、没有外部请求，数据只在插件与本地辅助进程之间传递；
-  只读取播放状态与当前歌曲 / 歌词 / 封面，不写入音乐库。
+- **不联网、不上传** —— 插件自己不开 HTTP 服务，也不做后台请求；数据只在插件与本地辅助进程之间
+  传递；只读取播放状态与当前歌曲 / 歌词 / 封面，不写入音乐库。**唯一的网络请求来自 Beta 模组系统**
+  （打开「模组市场」时读官方市场的 `catalog.json`，点「安装」时下载那一个 zip），见
+  [模组系统](docs/mods.md)。
+- **模组（Beta）** —— 可以把官方 [Folium 模组市场](https://folium-compound.cielaniska.top/) 的模组
+  装进来：播放页右下角按钮面板 → 「模组市场（Beta）」。装好的**歌词动画**会出现在「歌词样式」
+  货架上与 17 种内置样式并列，**进度条按钮**挂在播放条上。插件下载后会核对市场公布的 SHA-256，
+  对不上就不落盘。模组是第三方代码，**签名只在界面展示、不在插件里校验** —— 请只装你信任的来源。
+  支持范围与边界见 [docs/mods.md](docs/mods.md)。
 
 ## 截图
 
@@ -151,14 +158,15 @@ python packaging/tools/assemble-release.py ^
 ## 文档
 
 面向使用者：[运行环境与排障](docs/runtime-requirements.md) ·
-[自检与日志](docs/logging-and-diagnostics.md) · [设置项生效情况](docs/known-inert-settings.md)
+[自检与日志](docs/logging-and-diagnostics.md) · [设置项生效情况](docs/known-inert-settings.md) ·
+[模组系统（Beta）](docs/mods.md)
 
 面向维护者：[架构](docs/architecture.md) · [通信协议](docs/protocol.md) ·
 [原生宿主](docs/host-app.md) · [音频与时间轴](docs/audio-timeline.md) ·
 [设置 UI](docs/settings-ui-impl.md) · [透明窗口机制](docs/live-transparency.md) ·
 [Hook 机制](docs/hook-target.md) · [上游 Folia 同步](docs/upstream-sync.md) ·
 [开发陷阱与纪律](docs/lessons.md) · [Folia 复刻规格](docs/folia-spec/) ·
-[打包发布](docs/release.md) · [许可](docs/licensing.md)
+[模组系统实现](docs/mod-system.md) · [打包发布](docs/release.md) · [许可](docs/licensing.md)
 
 ## 项目地址与反馈
 

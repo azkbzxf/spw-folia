@@ -536,6 +536,25 @@ body.spw-injected {
     cursor: not-allowed;
 }
 
+/* issue #23: 「模组市场（Beta）」 is the panel's LAST row (it is a button, not a switch, so it has no
+ * `.spw-switch` child). It therefore takes the bottom rounding from whichever row precedes it, and
+ * carries the small Beta badge where the other rows carry their switch. */
+.spw-player-bg-row--fourth {
+    border-radius: 0 0 12px 12px;
+}
+
+.spw-player-bg-badge {
+    flex: 0 0 auto;
+    border-radius: 9999px;
+    padding: 2px 7px;
+    background: rgba(216, 176, 114, 0.18);
+    color: #d8b072;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 .spw-player-bg-note--compat {
     color: rgba(214, 168, 84, 0.85);
 }
@@ -833,6 +852,42 @@ html[data-spw-transparent='true'] .visualizer-still div[class*='bg-[radial-gradi
     align-items: center;
     gap: 10px;
     min-width: 0;
+}
+
+/* ===========================================================================
+ * issue #23 · mod slots inside the expanded playback bar.
+ *
+ * These classes are NEW on purpose: `verify-click-zones.mjs` counts
+ * `.spw-playback-play` / `.spw-playback-step` / `.spw-playback-icon`, so a mod
+ * button that borrowed one of them would be counted as a transport control.
+ * An empty registry renders no node at all (the components return null), which
+ * keeps the bar's geometry byte-identical to a build without mods.
+ * =========================================================================== */
+.spw-playback-mod-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    /* never shrink the transport buttons away because a mod drew something wide */
+    max-width: 40vw;
+    overflow: hidden;
+}
+
+.spw-playback-mod {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 0;
+    /* the mod paints its own inside; the slot only guarantees a hit target */
+    pointer-events: auto;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.spw-playback[data-flat='true'] .spw-playback-mod {
+    /* colour-key host window drops backdrop-filter layers everywhere else too */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
 }
 
 /* ===========================================================================

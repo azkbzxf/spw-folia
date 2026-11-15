@@ -65,6 +65,16 @@ namespace SpwFolia
         // cached so it can be replayed after navigation completes and again when the settings UI
         // announces bridgeReady (the injected bundle mounts later than the page navigation).
         private volatile string lastQueuePayload;
+        // issue #23: the plugin's mods list, relayed verbatim. The array text is kept so it can be
+        // replayed after navigation (the page may load after the plugin's first `mods` push).
+        private volatile string lastModsArray;
+        // issue #23: canonical mods root the /__mods/ interceptor serves from (null = not serving).
+        private string modsRoot;
+        private long modsServed;
+        private long modsMisses;
+        private long modsDropped;
+        private long modActionsForwarded;
+        private long modActionsDropped;
 
         // stdin state -> clock anchor (interpolated between 100 ms state messages)
         private readonly object stateGate = new object();
@@ -1492,6 +1502,11 @@ namespace SpwFolia
                 + " statesReceived=" + Interlocked.Read(ref stateCount)
                 + " lastFps=" + JsonUtil.Num(lastFps)
                 + " dropped=" + log.DroppedLines()
+                + " modsServed=" + Interlocked.Read(ref modsServed)
+                + " modsMisses=" + Interlocked.Read(ref modsMisses)
+                + " modsDropped=" + Interlocked.Read(ref modsDropped)
+                + " modActions=" + Interlocked.Read(ref modActionsForwarded)
+                + " modActionsDropped=" + Interlocked.Read(ref modActionsDropped)
                 + " atMs=" + clock.ElapsedMilliseconds);
             try { if (webView != null) webView.Dispose(); } catch (Exception ex) { log.Error("webview-dispose", ex); }
             try { audio.Dispose(); } catch (Exception ex) { log.Error("audio-dispose", ex); }
@@ -1573,6 +1588,20 @@ namespace SpwFolia
                 {
                     core.SetVirtualHostNameToFolderMapping(Program.SettingsHost, Path.GetFullPath(args.SettingsDir), CoreWebView2HostResourceAccessKind.Allow);
                 }
+
+                // issue #23: mod files live outside the static bundle mapping (the plugin owns
+                // <pluginPath>/mods and it changes at runtime), so they are served by a request
+                // interceptor.
+                //
+                // They are NOT served under the bundle host, and that is measured, not stylistic:
+                // SetVirtualHostNameToFolderMapping takes PRECEDENCE over WebResourceRequested for
+                // its host, so every request under https://spw-folia.local/ (including /__mods/…)
+                // is answered by the folder mapping and the handler never runs — the page then sees
+                // "Failed to fetch dynamically imported module", exactly like a missing file. So the
+                // mods get their own UNMAPPED virtual host; the handler answers it with
+                // Access-Control-Allow-Origin, and a cross-origin `import()` of a mod entry then
+                // works (measured: default export resolves to a function).
+                MountModsInterceptor(core);
 
                 // 旧版残留的 Service Worker 必须在这里清掉，而不是等页面脚本去清。
                 //
@@ -1673,6 +1702,272 @@ namespace SpwFolia
             return string.Join("/", parts);
         }
 
+        // ------------------------------------------------------------- issue #23: /__mods/ (mods root)
+
+        /// <summary>The URL prefix mod files are served under; same origin as the page.</summary>
+        private const string ModsUrlPrefix = "/__mods/";
+
+        /// <summary>
+        /// issue #23: serves `--mods-dir` under `https://spw-folia.local/__mods/&lt;modId&gt;/&lt;file&gt;`.
+        ///
+        /// Why an interceptor instead of SetVirtualHostNameToFolderMapping: that mapping is static
+        /// (one folder, fixed at bring-up), while the mods root is owned by the plugin and appears,
+        /// grows and shrinks at runtime. And the files must be SAME ORIGIN with the page — a second
+        /// virtual host makes `import()` and `fetch()` fail outright (FEASIBILITY §2), and a mod entry
+        /// can only be imported as a module.
+        ///
+        /// The filter is only installed when a usable mods root was passed: with no root the page's
+        /// `/__mods/...` requests fall through to the normal bundle handler and 404 on their own.
+        /// </summary>
+        private void MountModsInterceptor(CoreWebView2 core)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(args.ModsDir))
+                {
+                    log.Log("info", "mods-dir none (mod files are not served)");
+                    return;
+                }
+                Directory.CreateDirectory(args.ModsDir); // first run: the plugin may not have made it yet
+                // Only the /__mods/ prefix on the BUNDLE host is filtered even though it can never be
+                // answered (see the note at the call site): keeping the filter costs nothing, and it
+                // documents the contract for a runtime where mapping precedence may differ.
+                core.AddWebResourceRequestedFilter("https://" + Program.BundleHost + ModsUrlPrefix + "*",
+                    CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
+                // The host that actually answers. Must be UNMAPPED and every source kind must be
+                // requested: the 2-argument overload defaults to Document (top-level navigation only),
+                // which never matches a module import or a fetch.
+                core.AddWebResourceRequestedFilter("https://" + Program.ModsHost + "/*",
+                    CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
+                core.WebResourceRequested += OnModsWebResourceRequested;
+                modsRoot = args.ModsDir;
+                log.Log("info", "mods-serve root=" + modsRoot + " host=https://" + Program.ModsHost + "/");
+            }
+            catch (Exception ex) { log.Error("mods-serve", ex); }
+        }
+
+        /// <summary>
+        /// Answers one intercepted request. Runs on the UI thread (WebView2 requirement); a throw here
+        /// would surface as a failed request in the page, so everything is wrapped and failures become
+        /// an explicit 404/500 response instead of an exception escaping into the event pump.
+        /// </summary>
+        private void OnModsWebResourceRequested(object sender, CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            try
+            {
+                CoreWebView2 core = webView == null ? null : webView.CoreWebView2;
+                if (core == null || core.Environment == null)
+                {
+                    // No environment means there is no way to build a response; say so, because an
+                    // unhandled request surfaces only as "Failed to fetch dynamically imported
+                    // module" in the page and looks exactly like a missing file.
+                    log.Log("warn", "mods-serve no-environment");
+                    return;
+                }
+                CoreWebView2Environment env = core.Environment;
+                string uri = e.Request == null ? null : e.Request.Uri;
+                string method = e.Request == null ? null : e.Request.Method;
+                if (args.VerboseLog) log.Log("verbose", "mods-serve hit method=" + (method ?? "?") + " uri=" + LogUri(uri));
+
+                // Read-only surface: a mod file is fetched/imported, never uploaded.
+                if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+                {
+                    modsDropped++;
+                    e.Response = TextResponse(env, 405, "Method Not Allowed", "method-not-allowed");
+                    log.Log("warn", "mods-serve method=" + (method ?? "?") + " rejected uri=" + LogUri(uri));
+                    return;
+                }
+
+                string rel = ModsRelativePath(uri);
+                if (rel == null)
+                {
+                    modsDropped++;
+                    e.Response = TextResponse(env, 404, "Not Found", "bad-path");
+                    log.Log("warn", "mods-serve bad-path uri=" + LogUri(uri));
+                    return;
+                }
+
+                string full = ResolveModFile(modsRoot, rel);
+                if (full == null)
+                {
+                    // Traversal, rooted path, or an unnormalisable segment. This is the security
+                    // boundary the acceptance criterion checks with /__mods/../../index.html.
+                    modsDropped++;
+                    e.Response = TextResponse(env, 404, "Not Found", "path-traversal");
+                    log.Log("warn", "mods-serve traversal uri=" + LogUri(uri) + " rel=" + rel);
+                    return;
+                }
+                if (!File.Exists(full))
+                {
+                    modsMisses++;
+                    e.Response = TextResponse(env, 404, "Not Found", "missing");
+                    return;
+                }
+
+                byte[] bytes = File.ReadAllBytes(full);
+                string contentType = ModContentType(full);
+                MemoryStream stream = new MemoryStream(bytes, false);
+                // CORS is not decoration here. Mod files are served from their own virtual host
+                // (SetVirtualHostNameToFolderMapping on the bundle host takes precedence over this
+                // handler, so /__mods/ under it would never be intercepted), which makes every mod
+                // request CROSS-ORIGIN from the page. Without ACAO the browser refuses the dynamic
+                // import outright — measured as "Failed to fetch dynamically imported module", the
+                // same message a missing file produces.
+                e.Response = env.CreateWebResourceResponse(stream, 200, "OK",
+                    "Content-Type: " + contentType + "\r\n"
+                    + "Access-Control-Allow-Origin: *\r\n"
+                    + "Cross-Origin-Resource-Policy: cross-origin\r\n"
+                    + "Cache-Control: no-cache\r\n");
+                modsServed++;
+                // Per-file lines would flood the log on a big mod; report the count at exit instead.
+                if (args.VerboseLog) log.Log("verbose", "mods-serve 200 rel=" + rel + " bytes=" + bytes.Length + " type=" + contentType);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    CoreWebView2 c2 = webView == null ? null : webView.CoreWebView2;
+                    if (c2 != null && c2.Environment != null)
+                    {
+                        e.Response = TextResponse(c2.Environment, 500, "Internal Server Error", "serve-failed");
+                    }
+                }
+                catch (Exception) { }
+                log.Error("mods-serve", ex);
+            }
+        }
+
+        /// <summary>
+        /// `/__mods/a/b.mjs` -> `a/b.mjs`, or null when the URI does not carry the prefix / is not a
+        /// syntactically usable path. Percent-decoding happens here, BEFORE normalisation, so an
+        /// encoded `..` (`%2e%2e`) is caught by the traversal check rather than slipping through as a
+        /// literal directory name.
+        /// </summary>
+        private static string ModsRelativePath(string uri)
+        {
+            if (string.IsNullOrEmpty(uri)) return null;
+            Uri parsed;
+            if (!Uri.TryCreate(uri, UriKind.Absolute, out parsed)) return null;
+            // Two URL shapes are understood, because the serving host is a deployment detail while the
+            // acceptance contract is about traversal: the dedicated (unmapped) mods host uses the path
+            // as-is, and the bundle host uses the /__mods/ prefix.
+            if (string.Equals(parsed.Host, Program.ModsHost, StringComparison.OrdinalIgnoreCase))
+            {
+                string direct = parsed.AbsolutePath;
+                if (!string.IsNullOrEmpty(direct) && direct.Length > 1) direct = direct.Substring(1);
+                if (string.IsNullOrEmpty(direct)) return null;
+                try { return Uri.UnescapeDataString(direct); }
+                catch (Exception) { return null; }
+            }
+            string path = parsed.AbsolutePath; // already percent-decoded once by Uri for the path part
+            if (path == null || !path.StartsWith(ModsUrlPrefix, StringComparison.Ordinal)) return null;
+            string rest = path.Substring(ModsUrlPrefix.Length);
+            // A second decode: `Uri.AbsolutePath` keeps %2e%2e escaped in some parser versions.
+            try { rest = Uri.UnescapeDataString(rest); }
+            catch (Exception) { return null; }
+            if (rest.Length == 0) return null;
+            // Query/fragment never reach here (AbsolutePath strips them), but a raw `?` inside the
+            // decoded text would be a malformed name; reject anything with control chars or NUL.
+            for (int i = 0; i < rest.Length; i++)
+            {
+                char ch = rest[i];
+                if (ch < 0x20 || ch == '\u007f') return null;
+            }
+            return rest;
+        }
+
+        /// <summary>
+        /// Maps a relative mod path onto the mods root, or null when it escapes. Two independent
+        /// guards: reject any segment that is `..`/`.` or rooted, then require the fully normalised
+        /// path to still live under the (itself normalised) root.
+        /// </summary>
+        private static string ResolveModFile(string root, string rel)
+        {
+            if (string.IsNullOrEmpty(root) || string.IsNullOrEmpty(rel)) return null;
+            string normalRoot = Path.GetFullPath(root);
+            if (!normalRoot.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+            {
+                normalRoot += Path.DirectorySeparatorChar;
+            }
+            string[] segments = rel.Replace('\\', '/').Split('/');
+            for (int i = 0; i < segments.Length; i++)
+            {
+                string seg = segments[i];
+                if (seg.Length == 0) return null;                    // `//` in the path
+                if (seg == "." || seg == "..") return null;
+                // A drive-qualified or rooted segment (C:, \; UNC) can never be a mod file name.
+                if (seg.IndexOf(':') >= 0) return null;
+            }
+            string candidate;
+            try { candidate = Path.GetFullPath(Path.Combine(normalRoot, rel.Replace('/', Path.DirectorySeparatorChar))); }
+            catch (Exception) { return null; }
+            // GetFullPath resolves `..`; the prefix test is what actually proves containment.
+            if (!candidate.StartsWith(normalRoot, StringComparison.OrdinalIgnoreCase)) return null;
+            return candidate;
+        }
+
+        /// <summary>
+        /// Content types the page needs to be exactly right: `import()` is refused unless the response
+        /// is a JavaScript MIME type (the module loader does not sniff), and images must not be
+        /// octet-stream or the <img> previews fail.
+        /// </summary>
+        private static string ModContentType(string full)
+        {
+            string ext = Path.GetExtension(full);
+            if (ext == null) return "application/octet-stream";
+            switch (ext.ToLowerInvariant())
+            {
+                case ".mjs":
+                case ".js": return "text/javascript; charset=utf-8";
+                case ".json": return "application/json; charset=utf-8";
+                case ".map": return "application/json; charset=utf-8";
+                case ".jpg":
+                case ".jpeg": return "image/jpeg";
+                case ".png": return "image/png";
+                case ".webp": return "image/webp";
+                case ".gif": return "image/gif";
+                case ".svg": return "image/svg+xml";
+                case ".css": return "text/css; charset=utf-8";
+                case ".html":
+                case ".htm": return "text/html; charset=utf-8";
+                case ".txt":
+                case ".md": return "text/plain; charset=utf-8";
+                case ".woff": return "font/woff";
+                case ".woff2": return "font/woff2";
+                case ".ttf": return "font/ttf";
+                case ".otf": return "font/otf";
+                case ".mp3": return "audio/mpeg";
+                case ".ogg": return "audio/ogg";
+                case ".wav": return "audio/wav";
+                case ".mp4": return "video/mp4";
+                case ".webm": return "video/webm";
+                default: return "application/octet-stream";
+            }
+        }
+
+        /// <summary>
+        /// Small plain-text response used for every refusal. CORS headers are included because the
+        /// mods host is cross-origin to the page: without them a refusal is indistinguishable from a
+        /// network failure ("Failed to fetch"), and the page could not even read the status code.
+        /// </summary>
+        private static CoreWebView2WebResourceResponse TextResponse(CoreWebView2Environment env, int status, string reason, string message)
+        {
+            byte[] body = Encoding.UTF8.GetBytes(message);
+            return env.CreateWebResourceResponse(new MemoryStream(body, false), status, reason,
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                + "Access-Control-Allow-Origin: *\r\n"
+                + "Cross-Origin-Resource-Policy: cross-origin\r\n"
+                + "Cache-Control: no-store\r\n");
+        }
+
+        /// <summary>Log-safe URI: the path only (a mod path can carry a huge digest query).</summary>
+        private static string LogUri(string uri)
+        {
+            if (string.IsNullOrEmpty(uri)) return "?";
+            int q = uri.IndexOf('?');
+            return q < 0 ? uri : uri.Substring(0, q);
+        }
+
         private string ResolveUrl()
         {            if (args.DemoConfig && string.IsNullOrEmpty(args.DevUrl) && string.IsNullOrEmpty(args.Url) && !string.IsNullOrEmpty(args.Bundle))
             {
@@ -1714,6 +2009,13 @@ namespace SpwFolia
             if (lastTrackPayload != null) PostToPage(lastTrackPayload);
             // v0.3.0: same replay for the queue snapshot (protocol §1 allows `queue` before the page).
             if (lastQueuePayload != null) PostToPage(lastQueuePayload);
+            // issue #23: the plugin pushes `mods` early (right after hello); replay it here so a page
+            // that came up late still receives the current list instead of an empty shelf.
+            if (lastModsArray != null)
+            {
+                PostToPage("{\"type\":\"mods\",\"mods\":" + lastModsArray + "}");
+                log.Log("info", "mods-replay count=" + CountJsonArrayItems(lastModsArray));
+            }
             if (configDirty) SendConfigIfNeeded();
         }
 
@@ -1866,6 +2168,13 @@ namespace SpwFolia
             {
                 UpdateHitRegions(msg);
             }
+            else if (type == "modAction")
+            {
+                // issue #23 (protocol §3.1 `modAction` -> §2 `modAction`): the page asks the plugin to
+                // install/uninstall/enable/disable/open the folder. The host validates the shape and
+                // relays; it never touches the mods directory itself (the plugin is the only writer).
+                RelayModAction(msg);
+            }
             else if (type == "windowDrag")
             {
                 // Alt+drag on the visualizer (Shim.js) -> native move loop, so the window can be
@@ -1950,6 +2259,15 @@ namespace SpwFolia
             {
                 log.Log("info", "eval-result " + (JsonUtil.GetString(msg, "value") ?? "null"));
             }
+            else if (type == "modsReady")
+            {
+                // issue #23: the page finished bringing its active mods in line with the last `mods`
+                // list. Logged only — the plugin learns the outcome from the mods/settings it pushes,
+                // and the page is the one that knows what actually activated.
+                log.Log("info", "page-mods-ready count=" + (int)JsonUtil.GetDouble(msg, "count", 0)
+                    + " active=" + (int)JsonUtil.GetDouble(msg, "active", 0)
+                    + " errors=" + (int)JsonUtil.GetDouble(msg, "errors", 0));
+            }
             else if (type == "envCheck")
             {
                 // issue #12: the settings UI's 「出现问题」 flow asks the host for the half of the
@@ -2027,6 +2345,19 @@ namespace SpwFolia
             sb.Append(",\"framesPosted\":").Append(totalFramesPosted);
             sb.Append(",\"droppedLogLines\":").Append(log.DroppedLines());
             sb.Append(",\"logPath\":").Append(JsonUtil.Str(Program.LogFilePath()));
+            // issue #23: mod serving is a hard requirement of the module shelf, so the diagnostics
+            // report proves whether the interceptor is mounted and what it actually answered. A
+            // count is evidence; "root is set" alone would not tell a working mount from a broken one.
+            sb.Append(",\"mods\":{");
+            sb.Append("\"root\":").Append(JsonUtil.Str(modsRoot));
+            sb.Append(",\"serving\":").Append(string.IsNullOrEmpty(modsRoot) ? "false" : "true");
+            sb.Append(",\"served\":").Append(Interlocked.Read(ref modsServed));
+            sb.Append(",\"misses\":").Append(Interlocked.Read(ref modsMisses));
+            sb.Append(",\"dropped\":").Append(Interlocked.Read(ref modsDropped));
+            sb.Append(",\"listCount\":").Append(lastModsArray == null ? 0 : CountJsonArrayItems(lastModsArray));
+            sb.Append(",\"actions\":").Append(Interlocked.Read(ref modActionsForwarded));
+            sb.Append(",\"actionsDropped\":").Append(Interlocked.Read(ref modActionsDropped));
+            sb.Append('}');
             sb.Append('}');
             return sb.ToString();
         }
@@ -2170,6 +2501,106 @@ namespace SpwFolia
                 log.Log("info", "open-log-folder dir=" + dir + " selected=" + (select ?? "none"));
             }
             catch (Exception ex) { log.Error("open-log-folder", ex); }
+        }
+
+        // -------------------------------------------------- issue #23: mod actions (§3.1 -> §2)
+
+        /// <summary>
+        /// Relays one page-requested mod action to the plugin as `{"t":"modAction",...}`.
+        ///
+        /// The host is a validator and a pipe here, nothing else: it never downloads, never writes
+        /// into the mods directory and never decides what is installed (protocol §1: the plugin is
+        /// the single writer). The `action` whitelist mirrors the `control` discipline — an action a
+        /// newer page sends is dropped with a warning rather than forwarded blind.
+        ///
+        /// Every field is read with JsonUtil.GetString and re-appended as an escaped literal. The
+        /// page-supplied `download` object in particular is NEVER spliced in as raw JSON: it comes
+        /// from a web document, so an unescaped splice would be an injection into the plugin's stdin.
+        /// </summary>
+        private void RelayModAction(Dictionary<string, object> msg)
+        {
+            string action = JsonUtil.GetString(msg, "action");
+            if (action != "install" && action != "uninstall" && action != "setEnabled" && action != "openFolder")
+            {
+                modActionsDropped++;
+                log.Log("warn", "mod-action-drop action=" + (action ?? "?"));
+                return;
+            }
+            string modId = JsonUtil.GetString(msg, "modId");
+            if (string.IsNullOrEmpty(modId) && action != "openFolder")
+            {
+                modActionsDropped++;
+                log.Log("warn", "mod-action-drop action=" + action + " reason=no-mod-id");
+                return;
+            }
+            // mod ids are namespaced into registry ids (`modId:name`), so the upstream manifest
+            // pattern applies here too: a colon or a space would cross namespaces.
+            if (!string.IsNullOrEmpty(modId) && !IsSafeModId(modId))
+            {
+                modActionsDropped++;
+                log.Log("warn", "mod-action-drop action=" + action + " reason=bad-mod-id id=" + modId);
+                return;
+            }
+
+            StringBuilder sb = new StringBuilder(160);
+            sb.Append("{\"t\":\"modAction\",\"action\":\"").Append(JsonUtil.Escape(action)).Append('"');
+            if (!string.IsNullOrEmpty(modId)) sb.Append(",\"modId\":\"").Append(JsonUtil.Escape(modId)).Append('"');
+            // Correlates this action with the plugin's reply; the page mints it, the host echoes it.
+            string actionId = JsonUtil.GetString(msg, "actionId");
+            if (!string.IsNullOrEmpty(actionId)) sb.Append(",\"actionId\":\"").Append(JsonUtil.Escape(actionId)).Append('"');
+            if (action == "setEnabled")
+            {
+                sb.Append(",\"enabled\":").Append(JsonUtil.GetBool(msg, "enabled", false) ? "true" : "false");
+            }
+
+            if (action == "install")
+            {
+                object downloadRaw;
+                Dictionary<string, object> download = null;
+                if (msg.TryGetValue("download", out downloadRaw)) download = downloadRaw as Dictionary<string, object>;
+                string url = download == null ? null : JsonUtil.GetString(download, "url");
+                if (string.IsNullOrEmpty(url))
+                {
+                    modActionsDropped++;
+                    log.Log("warn", "mod-action-drop action=install reason=no-download-url");
+                    return;
+                }
+                // Only https escapes into the plugin's downloader; the plugin re-checks the host.
+                if (url.Length < 8 || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    modActionsDropped++;
+                    log.Log("warn", "mod-action-drop action=install reason=not-https");
+                    return;
+                }
+                string sha256 = JsonUtil.GetString(download, "sha256");
+                string fileName = JsonUtil.GetString(download, "fileName");
+                // Field by field, escaped: never `,"download":<raw sub-JSON>`.
+                sb.Append(",\"download\":{\"url\":\"").Append(JsonUtil.Escape(url)).Append('"');
+                if (!string.IsNullOrEmpty(sha256)) sb.Append(",\"sha256\":\"").Append(JsonUtil.Escape(sha256)).Append('"');
+                if (!string.IsNullOrEmpty(fileName)) sb.Append(",\"fileName\":\"").Append(JsonUtil.Escape(fileName)).Append('"');
+                sb.Append('}');
+            }
+            sb.Append('}');
+
+            log.WriteLine(sb.ToString());
+            modActionsForwarded++;
+            log.Log("info", "mod-action action=" + action + " id=" + (modId ?? "-")
+                + " actionId=" + (actionId ?? "-"));
+        }
+
+        /// <summary>Upstream's manifest id pattern (`electron/modSystem/manifest.cjs:55`).</summary>
+        private static bool IsSafeModId(string modId)
+        {
+            if (string.IsNullOrEmpty(modId) || modId.Length > 128) return false;
+            for (int i = 0; i < modId.Length; i++)
+            {
+                char c = modId[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+                if (i == 0 && !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) return false;
+                if (!ok) return false;
+            }
+            // A trailing separator is legal in the pattern but never a real mod id.
+            return modId[modId.Length - 1] != '-';
         }
 
         /// <summary>Opens an http(s) URL in the user's default browser; anything else is rejected.</summary>
@@ -2510,6 +2941,14 @@ namespace SpwFolia
                 // v0.3.0 playback queue snapshot (protocol §1 `queue` -> §3.2 `queue`).
                 SendQueueToPage(msg, line);
             }
+            else if (t == "mods")
+            {
+                // issue #23 (protocol §1 `mods` -> §3.2 `mods`): the plugin's full installed-mod list.
+                // The array is relayed VERBATIM — re-serialising the entries would risk mangling the
+                // escapes inside `name`/`description` (the single-line rule, protocol §1). Only the
+                // shape is validated here: it must be a JSON array.
+                SendModsToPage(line);
+            }
             else if (t == "config")
             {
                 string configRaw = JsonUtil.ExtractRawValue(line, "config");
@@ -2553,6 +2992,17 @@ namespace SpwFolia
             else if (t == "quit")
             {
                 CloseWith("plugin", 0);
+            }
+            else if (t == "log")
+            {
+                // protocol §2 `log` from the plugin: mirrored into the host's own log stream so both
+                // sides of a mod action sit on one timeline. Not forwarded to the page — the page
+                // learns the outcome from the refreshed `mods`/`settings` push, not from log lines.
+                // The level is carried through as-is (info|warn|error), so a plugin warning stays a
+                // warning in the host log instead of being flattened to info.
+                string pluginLevel = JsonUtil.GetString(msg, "level");
+                if (pluginLevel != "info" && pluginLevel != "warn" && pluginLevel != "error") pluginLevel = "info";
+                log.Log(pluginLevel, "plugin-log msg=" + (JsonUtil.GetString(msg, "msg") ?? ""));
             }
             else if (t == "command")
             {
@@ -2715,6 +3165,90 @@ namespace SpwFolia
             sb.Append('}');
             lastQueuePayload = sb.ToString();
             PostToPage(lastQueuePayload);
+        }
+
+        // issue #23: relay the plugin's mods array verbatim (protocol §1 `mods` -> §3.2 `mods`).
+        // The payload is validated to be a JSON array and forwarded byte-for-byte: every entry keeps
+        // the plugin's own escaping, so a mod.json `name` with quotes/backslashes cannot corrupt the
+        // envelope. Cached for replay after navigation and on a late settings-UI bridgeReady.
+        private void SendModsToPage(string line)
+        {
+            string mods = JsonUtil.ExtractRawValue(line, "mods");
+            if (string.IsNullOrEmpty(mods) || mods.Length == 0 || mods[0] != '[')
+            {
+                // Not an array (missing, an object, or a scalar): drop it and say so. Keeping the last
+                // good list is the safe direction — an empty/wrong push must not blank the page's mods.
+                log.Log("warn", "mods-drop reason=not-an-array bytes=" + (mods == null ? 0 : mods.Length));
+                return;
+            }
+            lastModsArray = mods;
+            string payload = "{\"type\":\"mods\",\"mods\":" + mods + "}";
+            log.Log("info", "mods-recv count=" + CountJsonArrayItems(mods) + " ids=[" + ModIdsFromArray(mods) + "]"
+                + " bytes=" + Encoding.UTF8.GetByteCount(payload));
+            PostToPage(payload);
+        }
+
+        /// <summary>Number of top-level elements in a JSON array text (string-aware, no parsing).</summary>
+        private static int CountJsonArrayItems(string arrayText)
+        {
+            if (string.IsNullOrEmpty(arrayText)) return 0;
+            int count = 0;
+            int depth = 0;
+            bool inString = false;
+            bool escaped = false;
+            bool sawValue = false;
+            for (int i = 0; i < arrayText.Length; i++)
+            {
+                char c = arrayText[i];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+                if (c == '"') { inString = true; if (depth == 1) sawValue = true; continue; }
+                if (c == '{' || c == '[') { depth++; if (depth == 2) sawValue = true; continue; }
+                if (c == '}' || c == ']')
+                {
+                    depth--;
+                    if (depth == 1 && sawValue) { count++; sawValue = false; }
+                    if (depth == 0) return count;
+                    continue;
+                }
+                if (c == ',' && depth == 1)
+                {
+                    if (sawValue) { count++; sawValue = false; }
+                    continue;
+                }
+                if (depth == 1 && !char.IsWhiteSpace(c)) sawValue = true;
+            }
+            return count;
+        }
+
+        /// <summary>Comma-joined mod ids, for the log line only (truncated; a malformed entry is `?`).</summary>
+        private static string ModIdsFromArray(string arrayText)
+        {
+            if (string.IsNullOrEmpty(arrayText)) return "";
+            StringBuilder sb = new StringBuilder(96);
+            string[] parts = arrayText.Split(new char[] { '{' }, StringSplitOptions.RemoveEmptyEntries);
+            int shown = 0;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                int at = parts[i].IndexOf("\"id\"", StringComparison.Ordinal);
+                if (at < 0) continue;
+                int colon = parts[i].IndexOf(':', at);
+                if (colon < 0) continue;
+                int quoteStart = parts[i].IndexOf('"', colon);
+                if (quoteStart < 0) continue;
+                int quoteEnd = parts[i].IndexOf('"', quoteStart + 1);
+                if (quoteEnd < 0) continue;
+                if (sb.Length > 0) sb.Append(',');
+                sb.Append(parts[i].Substring(quoteStart + 1, quoteEnd - quoteStart - 1));
+                shown++;
+                if (shown >= 32) { sb.Append(",…"); break; }
+            }
+            return sb.ToString();
         }
 
         // config is built page-side in production (settings publisher). The embedded demo config is a

@@ -42,6 +42,8 @@ import { DEFAULT_LYRIC_RENDER_QUALITY, normalizeLyricRenderQuality } from '@/uti
 import { getStyleTransparencyCompat } from './transparencyCompat';
 import { mergeTuningMap } from './mergeTuning';
 import { systemPrefersLight } from './theme';
+/* issue #23: 模组样式是**并列**类型，不进 `StyleMode`（见 modStyles.ts 文件头四处断言）。 */
+import type { ModStyleMode } from './modStyles';
 /* 0.7.22 花火's tuning defaults live with the style's own module, not in `src/types.ts` (unlike the
  * 14 older styles), so they are imported from there.
  * 0.7.25 町景 / 雾笺 follow the same convention: both keep their defaults next to the style. */
@@ -301,6 +303,23 @@ interface SettingsState {
     /** Another style from the pool for the song that is playing (never the current one). */
     rerollVisualizerMode: () => void;
 
+    /* issue #23 · 模组样式（`mod:<modId>:<vizId>`）的当前选择。
+     *
+     * 为什么单独一个字段而不是把 `mod:` 放进 `visualizerMode: StyleMode`：`StyleMode` 是上游闭集，
+     * 并进 `mod:` 会让 `scripts/check-style-sync.mjs:479-483` 报「StyleMode 联合多成员」，而它已挂进
+     * `vite build`。所以「当前画哪一样式」在这里是**两段**：
+     *   - `visualizerMode`：内置样式（永远有一个合法值，卸载/禁用模组时回落到它）；
+     *   - `modVisualizerMode`：模组样式，`null` 表示当前没选模组。
+     * 真正发出去的 mode 由 `effectiveVisualizerMode()` 合成（模组在就取它，否则取内置）。
+     *
+     * 不持久化进 `SettingsSnapshot`：模组清单由插件拥有，页面若把它写进设置树，卸载模组后就会
+     * 复活一个不存在的 mode（双写方，`docs/lessons.md:154-157`）。 */
+    modVisualizerMode: ModStyleMode | null;
+    /** 选一个模组样式（货架点了模组格时调用）。 */
+    setModVisualizerMode: (mode: ModStyleMode) => void;
+    /** 清掉模组选择（模组被卸载/禁用、或用户点了内置样式时）。 */
+    clearModVisualizerMode: () => void;
+
     /** Folia's storage keys mirrored for round-trip fidelity (no control in this window yet). */
     lyricMotion: number;
     setLyricMotion: (value: number) => void;
@@ -438,6 +457,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         get().setVisualizerMode(mode, { preserveRandom: options?.preserveRandom }),
     handleToggleRandomVisualizerModePerSong: enable => get().setRandomVisualizerModePerSong(enable),
     handleSetRandomVisualizerModes: modes => get().setRandomVisualizerModes(modes),
+
+    /* issue #23: 模组样式的选择。两个 setter 都**不**写 `visualizerMode`：内置样式那份值必须一直
+     * 保持合法（模组卸载后它就是回落目标），所以两者互不改写。 */
+    modVisualizerMode: null,
+    setModVisualizerMode: mode => set({ modVisualizerMode: mode, randomVisualizerModePerSong: false }),
+    clearModVisualizerMode: () => set({ modVisualizerMode: null }),
 
     lyricMotion: DEFAULT_LYRIC_MOTION,
     setLyricMotion: lyricMotion => set({ lyricMotion }),
@@ -646,8 +671,20 @@ export interface SettingsSnapshot {
     showPlaybackBar: boolean;
 }
 
-export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({
-    version: 1,
+/**
+ * issue #23: 真正要发出去（`config.visualizerMode`）与要画出来（舞台/预览）的那一个 mode。
+ *
+ * 规则只有一条：**选了模组样式就用它，否则用内置样式**。模组样式是开放 string，上游
+ * `VisualizerMode` 本来就是 `BuiltinVisualizerMode | (string & {})`
+ * （`work/folia/folia-major-main/src/types.ts:141-142`），publisher 不需要任何改动。
+ *
+ * 为什么要有这个函数：内置样式那一份 `visualizerMode` 必须**永远是合法值**（它是模组样式消失后的
+ * 回落目标），所以两份值分开存、在这里合成，绝不互相覆盖。
+ */
+export const effectiveVisualizerMode = (state: Pick<SettingsState, 'visualizerMode' | 'modVisualizerMode'>): StyleMode | ModStyleMode =>
+    state.modVisualizerMode ?? state.visualizerMode;
+
+export const snapshotFromState = (state: SettingsState): SettingsSnapshot => ({    version: 1,
     styleId: state.visualizerMode,
     randomVisualizerModePerSong: state.randomVisualizerModePerSong,
     randomVisualizerModes: state.randomVisualizerModes,

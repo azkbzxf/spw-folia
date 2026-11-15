@@ -43,6 +43,10 @@ interface PlayerBackgroundControlProps {
     /** v0.4.17: the panel's own name — it now holds three unrelated switches, so it can no longer be
      *  labelled with the transparency switch's text (`options.playerPageSettings`). */
     panelLabel: string;
+    /** issue #23: 「模组市场（Beta）」 entry row. The market is a separate modal (not a settings tab),
+     *  so this row is a plain button, not a switch. */
+    modMarketLabel: string;
+    onOpenModMarket: () => void;
 }
 
 const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
@@ -61,6 +65,8 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
     onToggleShowPlaybackBar,
     showPlaybackBarLabel,
     panelLabel,
+    modMarketLabel,
+    onOpenModMarket,
 }) => {
     const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -148,6 +154,26 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
                     </span>
                 </button>
                 {compatNote ? <p className="spw-player-bg-note spw-player-bg-note--compat">{compatNote}</p> : null}
+                {/* issue #23: 「模组市场（Beta）」 — 一行按钮，不是开关：市场页是独立模态
+                 *  （平级挂在 App 里，见 ModMarketPanel 文件头），不是播放页的一个状态。
+                 *  它排在最后一行，所以自己带底部圆角（`--fourth` 那条规则与 `--third` 同源）。 */}
+                <button
+                    type="button"
+                    className="spw-player-bg-row spw-player-bg-row--third spw-player-bg-row--fourth"
+                    data-spw-chrome="mod-market-row"
+                    aria-label={modMarketLabel}
+                    onClick={() => {
+                        /* 点完先把这张小面板收起来：市场页是整屏模态，盖在上面时这张面板还在
+                         * 描述「播放页设置」，两层面板同时开着会让 ESC 的所有权变得说不清。 */
+                        onOpenChange(false);
+                        onOpenModMarket();
+                    }}
+                >
+                    <span className="spw-player-bg-text">
+                        <span className="spw-player-bg-label">{modMarketLabel}</span>
+                    </span>
+                    <span className="spw-player-bg-badge" aria-hidden="true">Beta</span>
+                </button>
             </div>
             <button
                 type="button"

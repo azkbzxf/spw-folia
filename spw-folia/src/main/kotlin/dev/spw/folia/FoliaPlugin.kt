@@ -25,6 +25,7 @@ import java.time.LocalDateTime
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import javax.swing.JComponent
 import javax.swing.JFrame
 import javax.swing.JLabel
@@ -120,6 +121,24 @@ class FoliaPlugin(
     private val bridge = FoliaHostBridge(File(pluginContext.pluginPath), ::log)
     private val settingsStore = FoliaSettingsStore(::log)
 
+    /**
+     * issue #23: the mod directory (`<pluginPath>/mods`), which is **the** authority for "which mods
+     * are installed / enabled". The page never writes it and never keeps a second list; it can only
+     * ask for [onModAction] actions. Every disk operation runs on a background worker (see
+     * [runModAction]) because a 30 MB download must not block the bridge's stdout thread.
+     */
+    private val modStore = FoliaModStore(File(pluginContext.pluginPath), ::log)
+
+    /**
+     * Serialises mod actions. Install downloads and unpacks, uninstall deletes, setEnabled rewrites
+     * `mod-system.json` — two of those racing would produce exactly the states the individual methods
+     * go out of their way to avoid (a half-replaced directory, a state file written from a stale
+     * read). One worker thread, in arrival order.
+     */
+    private val modActions = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "spw-folia-mods").apply { isDaemon = true }
+    }
+
     /** Persisted tree, read by the shortcut handlers and written by the host-bridge reader thread. */
     @Volatile
     private var settingsTree: String = "{}"
@@ -148,6 +167,12 @@ class FoliaPlugin(
         // v0.4.0: read the 配置 page switch before the first spawn so the very first Folia open
         // already honours it (the host spawns later, from the menu/tray/shortcut handlers).
         registerConfigSync()
+        // issue #23: one scan before the first settings push, so the tree the page receives already
+        // carries the mod list (the settings island has no other channel). It is a `stat` per mod plus
+        // one small `mod.json` read — a handful of files — so it stays off the "never block start()"
+        // list that the 1.3 s host-bytecode index is on; the *actions* that download or unpack run on
+        // [modActions] instead.
+        refreshMods("startup")
         bridge.settingsTree = withInjectedMembers(settingsTree)
         bridge.hostVersion = pluginContext.spwVersion
         // Fallback snapshot keeps the state line flowing at 100 ms even if the PF4J extension is
@@ -169,6 +194,11 @@ class FoliaPlugin(
             checkTransparencyExpectation(cleanTree)
         }
         bridge.onClosed = { reason -> log("folia window closed (reason=$reason); plugin stays loaded") }
+        // issue #23: the page's mod actions. The host only forwards; the disk work happens here.
+        bridge.onModAction = { line -> runModAction(line) }
+        // The replay on `ready` asks for the list that the scan already produced, so a window opened
+        // long after start-up still gets it without a second directory walk.
+        bridge.modsProvider = { modsJson }
         // v0.4.7: when the helper dies for a diagnosable reason, tell the user *what* it was instead
         // of letting the window blink out and leaving the exit code buried in the log.
         bridge.onHostExitReason = { text ->
@@ -333,6 +363,10 @@ class FoliaPlugin(
         transparentPassthroughShortcut = null
         expectedTransparency = null
         runCatching { configSync.stop() }.onFailure { log("config sync stop failed: $it") }
+        // issue #23: retire the mod worker. `shutdownNow` interrupts an in-flight download, which is
+        // what we want on stop; `install()` always cleans its staging directory in a finally block,
+        // so an interrupted install leaves no half-written mod behind.
+        runCatching { modActions.shutdownNow() }.onFailure { log("mod worker stop failed: $it") }
         runCatching { methodHook?.unhook() }.onFailure { log("unhook failed: $it") }
         methodHook = null
         runCatching { trayMenu.uninstall() }.onFailure { log("tray unhook failed: $it") }
@@ -347,6 +381,9 @@ class FoliaPlugin(
         log("delete")
         runCatching { bridge.stop() }.onFailure { log("bridge stop failed: $it") }
         runCatching { settingsStore.shutdown() }
+        // A reload re-creates the plugin in place, so the old worker must not outlive it: a daemon
+        // thread stuck in a download would keep writing into a mod directory nobody watches any more.
+        runCatching { modActions.shutdownNow() }
         runCatching { FoliaPlaybackExtension.get()?.shutdown() }
     }
 
@@ -587,7 +624,7 @@ class FoliaPlugin(
     /**
      * Applies the root-level members the page must receive but must never persist.
      *
-     * Five of them today, and they differ in where the truth lives:
+     * Six of them today, and they differ in where the truth lives:
      *  - `systemFonts` — derived data enumerated locally, stripped on the way back by
      *    [FoliaSystemFonts.withoutSystemFontsJson];
      *  - `showProblemButton` (v0.4.11) — a 配置 page switch owned by the plugin, rewritten from
@@ -598,14 +635,250 @@ class FoliaPlugin(
      *    page is open. Plugin-owned, so also stripped on the way back;
      *  - `showPlaybackBarLegacy` (v0.4.17) — a one-time MIGRATION hint, not a setting: the old
      *    `config.json` value, offered to the page so it can seed its own switch. The page owns that
-     *    switch now, so this member is stripped on the way back and never trusted from the echo.
+     *    switch now, so this member is stripped on the way back and never trusted from the echo;
+     *  - `mods` (issue #23) — the installed-mod list, owned by the mod directory on disk and
+     *    re-scanned after every action. Derived data like `systemFonts`: the island reads it, the page
+     *    never persists it.
      *
      * One helper for all of them matters because four call sites publish the tree (startup, host
      * open, shortcut edits, page echo); missing one used to mean "the setting silently stops
      * applying after the first echo from the page".
      */
     private fun withInjectedMembers(tree: String): String =
-        withSystemFonts(configSync.applyTo(tree))
+        withMods(withSystemFonts(configSync.applyTo(tree)))
+
+    // ------------------------------------------------------------------ mods ----
+
+    /**
+     * Re-scans the mod directory and caches the list as one line of JSON ([modsJson]).
+     *
+     * Returns the list so a caller can log what changed. Never throws: a broken mod is a reported
+     * state, not an exception, and a scan failure must not stop the settings push that follows it.
+     */
+    private fun refreshMods(reason: String): String {
+        val mods = runCatching { modStore.scan() }.getOrElse { failure ->
+            log("mods: scan failed ($reason): ${failure::class.java.name}: ${failure.message}")
+            emptyList()
+        }
+        val json = FoliaModStore.toJson(mods)
+        modsJson = json
+        val enabled = mods.count { it.enabled && it.clientEntry != null }
+        log("mods: $reason -> ${mods.size} installed, $enabled active (${json.length} bytes)")
+        return json
+    }
+
+    /**
+     * Re-scans **and** publishes, on both channels the page can read.
+     *
+     * Two channels because there are two consumers and they cannot share one: the player page gets
+     * `{"t":"mods",…}` through the host (it needs the raw list to activate clients), while the
+     * settings island only ever sees `getSettings()` / `settings` events, so it reads the same list
+     * as a top-level `mods` member of the tree. Both are pushed on every change — a full list every
+     * time, never a delta, so a dropped message cannot leave a partial view behind.
+     */
+    private fun pushMods(reason: String) {
+        val json = refreshMods(reason)
+        runCatching { bridge.sendMods(json) }
+            .onFailure { log("mods: send failed ($reason): ${it::class.java.name}: ${it.message}") }
+        if (bridge.isRunning()) {
+            runCatching { bridge.sendSettings(withInjectedMembers(settingsTree)) }
+                .onFailure { log("mods: settings re-push failed ($reason): ${it::class.java.name}: ${it.message}") }
+        }
+    }
+
+    /**
+     * Handles one `modAction` line forwarded by the host, on the serialised worker.
+     *
+     * The bridge reader thread returns immediately: a download can take a minute, and blocking the
+     * stdout pump would stall the 100 ms state stream (the page's clock) for its whole duration.
+     *
+     * Every outcome is reported through the **existing** `log` channel — `{"t":"log","level":…,
+     * "msg":…}` back to the host, which is already the "plugin says something" path for this
+     * protocol (`docs/lessons.md` §3: 「宿主只搬运」, and no second transport for one feature). The
+     * actionable outcome of every action is the re-pushed mod list, so the page never has to match a
+     * reply to a request.
+     */
+    private fun runModAction(line: String) {
+        val action = Json.stringField(line, "action") ?: run {
+            log("mods: modAction without action, dropped")
+            return
+        }
+        val actionId = Json.stringField(line, "actionId")
+        try {
+            modActions.execute { executeModAction(action, actionId, line) }
+        } catch (t: Throwable) {
+            // RejectedExecutionException after shutdown: the plugin is going away, nothing to do.
+            log("mods: ${action} dropped (${t::class.java.name})")
+        }
+    }
+
+    /** One action, already on the worker thread. Catches everything: this thread has no supervisor. */
+    private fun executeModAction(action: String, actionId: String?, line: String) {
+        val modId = Json.stringField(line, "modId")
+        val label = "mods: action=$action" + (modId?.let { " mod=$it" } ?: "") +
+            (actionId?.let { " id=$it" } ?: "")
+        try {
+            when (action) {
+                "install" -> reportInstall(line, label)
+                "uninstall" -> reportUnit(label, modStore.uninstall(requireModId(modId)))
+                "setEnabled" -> {
+                    val enabled = Json.boolField(line, "enabled")
+                    if (enabled == null) {
+                        report(label, "error", "缺少 enabled 布尔字段，已忽略")
+                    } else {
+                        reportUnit("$label enabled=$enabled", modStore.setEnabled(requireModId(modId), enabled))
+                    }
+                }
+                "openFolder" -> reportOpenFolder(label, modId)
+                // Anything else is refused rather than guessed at: a future action reaching an older
+                // plugin must fail loudly enough to appear in the log, not silently do nothing.
+                else -> report(label, "warn", "未知 action，已丢弃（本版只支持 install/uninstall/setEnabled/openFolder）")
+            }
+        } catch (t: Throwable) {
+            report(label, "error", "动作失败：${t::class.java.name}: ${t.message}")
+        }
+        // Whatever happened, the list is re-pushed: it is the only thing the page acts on, and a
+        // failed uninstall must not leave the row looking uninstalled.
+        runCatching { pushMods("after $action") }
+            .onFailure { log("mods: post-action push failed: ${it::class.java.name}: ${it.message}") }
+    }
+
+    private fun requireModId(modId: String?): String =
+        modId?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("缺少 modId")
+
+    /**
+     * `install`: validate the address, download to a temp file **outside the mod directory**, verify
+     * the digest and unpack — in that order, and each step refuses before touching `mods/`.
+     *
+     * The URL check is not politeness: the page supplies it, the page renders third-party mod code,
+     * and an unchecked `URL.openStream()` is a request-forgery primitive
+     * ([FoliaModDownloads.isAllowedUrl]). The digest is required for the same reason a package manager
+     * requires one: the market publishes `download.sha256`, so a missing one means we cannot tell
+     * whether we got the file the catalog described.
+     */
+    private fun reportInstall(line: String, label: String) {
+        val download = Json.rawField(line, "download")
+        // Two shapes are accepted because the host forwards what the page sent, and the page's own
+        // vocabulary is the nested `download` object (PLAN §2.3). The flat spelling is what a
+        // hand-written line looks like; both resolve to the same three fields.
+        val url = download?.let { Json.stringField(it, "url") } ?: Json.stringField(line, "downloadUrl")
+        val sha = download?.let { Json.stringField(it, "sha256") } ?: Json.stringField(line, "sha256")
+        val name = download?.let { Json.stringField(it, "fileName") } ?: Json.stringField(line, "fileName")
+        if (url.isNullOrBlank()) {
+            report(label, "error", "缺少 download.url，已忽略")
+            return
+        }
+        if (!FoliaModDownloads.isAllowedUrl(url)) {
+            report(
+                label, "warn",
+                "下载地址不是 https://${FoliaModDownloads.ALLOWED_HOSTS.joinToString(",")} 下的地址，已拒绝：$url"
+            )
+            return
+        }
+        if (sha.isNullOrBlank()) {
+            // The market lists `download.sha256` for every entry; without it we would install bytes
+            // we cannot attribute. Refused, not "installed anyway".
+            report(label, "error", "catalog 条目缺少 sha256，无法校验，已拒绝安装" + (name?.let { "（$it）" } ?: ""))
+            return
+        }
+        report(label, "info", "开始下载 " + (name ?: url))
+        val downloaded = FoliaModDownloads.fetch(url, log = ::log).getOrElse { failure ->
+            report(label, "error", "下载失败：${failure.message}")
+            return
+        }
+        try {
+            val installed = modStore.install(downloaded, sha).getOrElse { failure ->
+                report(label, "error", "安装失败：${failure.message}")
+                return
+            }
+            report(
+                label, if (installed.error == null) "info" else "warn",
+                "已安装 ${installed.name} ${installed.version}" +
+                    (installed.error?.let { "（注意：$it）" } ?: ""),
+            )
+        } finally {
+            // The archive is a download artefact, not a mod: it must never accumulate next to mods
+            // (and install() already deletes it on a digest mismatch).
+            runCatching { downloaded.delete() }
+        }
+    }
+
+    private fun reportUnit(label: String, result: Result<Unit>) {
+        result.fold(
+            onSuccess = { report(label, "info", "已完成") },
+            onFailure = { report(label, "error", "失败：${it.message}") },
+        )
+    }
+
+    /**
+     * Opens the mod folder so a user can drop a zip/dir in by hand (issue #23's other install path).
+     *
+     * With a `modId` the mod's own directory is **selected** inside `mods/`, which is what a user who
+     * just clicked "open folder" on a row expects to see; without one, the `mods/` directory itself.
+     *
+     * `explorer.exe` and the path are **two argv entries**, never one string: `ProcessBuilder` quotes
+     * an argument only when it contains a space and wraps the whole thing, which turns a joined
+     * `"/select,<path>"` into a single unrecognised argument and lands in Documents instead. See
+     * [FoliaDiagnostics.logFolderCommand], which pins the same shape for the log folder.
+     */
+    private fun reportOpenFolder(label: String, modId: String?) {
+        val dir = modStore.root
+        if (!dir.isDirectory && !dir.mkdirs()) {
+            report(label, "warn", "模组目录不存在且无法创建：${dir.absolutePath}")
+            return
+        }
+        val target = modId?.takeIf { MOD_ID_PATTERN.matches(it) }?.let { File(dir, it) }?.takeIf { it.isDirectory }
+        val command = if (target != null) {
+            listOf("explorer.exe", "/select,", target.absolutePath)
+        } else {
+            listOf("explorer.exe", dir.absolutePath)
+        }
+        val ok = runCatching {
+            ProcessBuilder(command).start()
+            true
+        }.getOrElse { failure ->
+            log("mods: open folder failed: ${failure::class.java.name}: ${failure.message}")
+            false
+        }
+        val landing = target ?: dir
+        report(label, if (ok) "info" else "warn", "打开模组目录 ${landing.absolutePath} ok=$ok")
+    }
+
+    /**
+     * Reports one action outcome to the host's log channel (`{"t":"log","level":…,"msg":…}`).
+     *
+     * Deliberately the existing channel: the host already mirrors `log` lines into its own log file
+     * and, when verbose, into the page console. A dedicated reply message would need a new branch at
+     * both ends plus a correlation id, for information the user reads exactly once — and
+     * `docs/lessons.md` §3 says not to open a second transport for one feature.
+     */
+    private fun report(label: String, level: String, message: String) {
+        log("$label -> $message")
+        runCatching {
+            bridge.sendLog(level, "$label -> $message")
+        }.onFailure { log("mods: log line failed: ${it::class.java.name}: ${it.message}") }
+    }
+
+
+    /**
+     * issue #23: injects the installed-mod list as a root-level `mods` member.
+     *
+     * Same rule as `systemFonts`: derived data, owned by the plugin (it is the only writer of the mod
+     * directory), read by the settings island, and removed again by [stripInjectedMembers] before the
+     * page's echo is persisted — otherwise the settings file would hold a stale copy of a fact the
+     * disk already owns, with the page as a second writer (`docs/lessons.md` §3.1).
+     *
+     * The JSON is produced by [FoliaModStore.toJson] (one line, every string escaped) and cached in
+     * [modsJson], so the five call sites that publish the tree all carry the same list without each
+     * of them scanning the disk. A scan failure yields `[]` rather than leaving the previous list in
+     * place: an empty list is the honest answer when the directory cannot be read.
+     */
+    private fun withMods(tree: String): String =
+        FoliaModStore.withModsMember(tree, modsJson)
+
+    /** Last serialised mod list; replaced by [refreshMods] (and by nothing else). */
+    @Volatile
+    private var modsJson: String = "[]"
 
     /**
      * v0.4.0: registers the two player-page transparency shortcuts.
@@ -829,7 +1102,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.5.1"
+        const val PLUGIN_VERSION = "0.5.2"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -918,6 +1191,9 @@ class FoliaPlugin(
         /** Dev checkout root, used only as a fallback while assets are not packaged next to the plugin. */
         private const val DEV_ROOT = "D:/输出目录/dsh2"
 
+        /** issue #23: the upstream `manifest.cjs` id rule, used to refuse a `modId` we cannot address. */
+        private val MOD_ID_PATTERN = FoliaModStore.MOD_ID_PATTERN
+
         @Volatile
         private var instance: FoliaPlugin? = null
 
@@ -935,6 +1211,14 @@ class FoliaPlugin(
          *  - `showPlaybackBarLegacy` is a one-time MIGRATION HINT, not a setting: its value is
          *    whatever the old config.json still holds. Persisting it would freeze a stale copy into
          *    the tree and make it look like the page's own value.
+         *
+         * ## `mods` (issue #23) — the `systemFonts` case exactly
+         *
+         * The installed-mod list is owned by the plugin's mod directory and re-scanned on every start
+         * and after every install/uninstall; the page only reads it to render the market page and the
+         * shelf. Persisting the echo would freeze yesterday's list into the settings file and let it
+         * beat the disk on the next start — the same "one fact, two writers" failure, with the extra
+         * twist that the stale copy names mods that are no longer there.
          *
          * ## `keepScreenAwake` (issue #22 item 3) — same rule as `previewAnimation`
          *
@@ -960,14 +1244,21 @@ class FoliaPlugin(
             Json.withoutMember(
                 Json.withoutMember(
                     Json.withoutMember(
-                        FoliaSystemFonts.withoutSystemFontsJson(tree),
-                        SHOW_PROBLEM_BUTTON_KEY,
+                        Json.withoutMember(
+                            FoliaSystemFonts.withoutSystemFontsJson(tree),
+                            SHOW_PROBLEM_BUTTON_KEY,
+                        ),
+                        PREVIEW_ANIMATION_KEY,
                     ),
-                    PREVIEW_ANIMATION_KEY,
+                    KEEP_SCREEN_AWAKE_KEY,
                 ),
-                KEEP_SCREEN_AWAKE_KEY,
+                SHOW_PLAYBACK_BAR_LEGACY_KEY,
             ),
-            SHOW_PLAYBACK_BAR_LEGACY_KEY,
+            // issue #23: the mod list is DISK state owned by the plugin (the mod directory is the
+            // fact). Keeping the page's echo would freeze a copy that goes stale on the next
+            // install/uninstall and let the page win the next start — the exact double-writer shape
+            // this function exists to prevent.
+            FoliaModStore.MODS_MEMBER,
         )
 
         fun logStatic(message: String) {
@@ -1017,3 +1308,4 @@ class FoliaPlugin(
         }
     }
 }
+

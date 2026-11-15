@@ -142,6 +142,11 @@ node packaging/tools/verify-layout.mjs   # 3. 干净解包上的布局验收（�
 1. 构建输入是新的：宿主、设置岛、Folia 产物都按 §2 重新产出。
 2. `bash packaging/build-package.sh` → 暂存干净、`size-report.json` 未超警戒线、
    `SHA256SUMS.txt` 已重写。
+   > **先刷新 `packaging/native/` 再构建插件**（`docs/lessons.md` §5.1）。这一次尤其重要：
+   > v0.5.2 的宿主 exe 变了（模组文件服务），旧的 `packaging/native/spw-folia-host.exe`（182 KB）
+   > 会让 `verify-select-layers` / `verify-layout` / `verify-mod-market` 全部报「missing」或
+   > 用旧宿主跑出新结果。四个副本大小必须一致：`poc/webview/host/build/`、`packaging/native/`、
+   > `spw-folia/build/plugin-root/host/`、安装目录 `<plugin>/native/`。
 3. **跑门禁**：
    - `node packaging/tools/verify-all.mjs` —— `core`（版本三处一致、声明⇄读取双向、无重复键、
      无孤儿门禁脚本、JVM 配置失败路径）+ 5 个真实宿主套件**并发**跑，约 80 s。
@@ -199,9 +204,21 @@ cd packaging && ./native/spw-folia-host.exe --bundle web --settings-dir web/sett
 
 ## 8. 离线与网络
 
-打包后的页面不发起任何网络请求：断网实测 99 个请求全部同源/本地，0 外部、0 失败；
+**v0.5.2 起不再是「零网络请求」**，因为 beta 模组系统需要去官方市场取东西。范围严格限定在两处：
+
+| 何时 | 去哪 | 由谁发 |
+|---|---|---|
+| 用户打开「模组市场（Beta）」面板 | `folium-compound.cielaniska.top/catalog.json` | 页面（市场给了 `ACAO: *`） |
+| 用户点某个模组的「安装」 | `folium-compound.cielaniska.top/downloads/<file>.zip` | 插件（市场对 zip **没有** CORS 头，页面取不到） |
+
+除此之外插件仍然完全离线：不开市场面板就不发任何请求；不点安装就不下载任何东西；没有后台
+检查更新、没有遥测。模组**不随包分发**（包里不含任何第三方模组代码）。
+
+断网时的行为：市场面板显示「离线」并只列已装模组；已装的模组照常加载（它们从本地磁盘读）。
+
+历史上（v0.4.x）的「99 个请求全部同源/本地」这条结论对**播放页本身**仍然成立：
 `index.html` 里的 aistudiocdn `importmap` 对 OBS 入口是惰性的；不下载字体（也不随包带字体）；
-Service Worker 已移除。唯一的外部依赖是机器的 WebView2 Runtime（系统组件）。
+Service Worker 已移除。唯一的外部依赖仍是机器的 WebView2 Runtime（系统组件）。
 
 ## 9. 许可义务（发版必读）
 

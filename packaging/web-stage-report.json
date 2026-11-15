@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-14T11:28:40.290Z",
+  "generatedAt": "2026-11-15T06:12:53.259Z",
   "out": "packaging/web",
   "webFiles": 1900,
   "webBytes": 27760654,
@@ -10,8 +10,8 @@
     "placeholder_cover": "assets/placeholder_cover-CufMMif3.jpg",
     "placeholder_cover2": "assets/placeholder_cover-2-BuqqkGqf.jpg"
   },
-  "settingsFiles": 1984,
-  "settingsBytes": 9865331,
+  "settingsFiles": 1978,
+  "settingsBytes": 9895942,
   "settingsDedupe": {
     "candidates": 32,
     "rewrittenRefs": 66,
@@ -19,7 +19,7 @@
     "savedBytes": 4232414,
     "skipped": 0
   },
-  "totalBytes": 37625985,
+  "totalBytes": 37656596,
   "excluded": {
     "swTrio": [
       "registerSW.js",
@@ -1979,5 +1979,15 @@
     "nebbia-strokes.json",
     "runtime-config.js",
     "stage-client.html"
-  ]
+  ],
+  "modHost": {
+    "format": "spw-folia-mod-host",
+    "version": 1,
+    "folia": "0.7.26",
+    "api": "assets/api-DO4qGCs5.js",
+    "deprecated": "assets/deprecated-BufsVQO-.js",
+    "assets": "assets/",
+    "modsBase": "https://spw-folia-mods.local/",
+    "foliaVersionSource": "work/folia/folia-major-main/package.json"
+  }
 }

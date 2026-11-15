@@ -260,7 +260,15 @@ child.on('exit', (code) => {
     // The shelf renders one tile per STYLE_ENTRIES row PLUS the 「随机」 tile, which is a real grid
     // cell too (it opens the random pool rather than picking a style). expectedStyles counts only
     // the named styles, so the random cell is +1.
-    styleThumbsLoaded: !!(p.shelf && p.shelf.tiles === expectedStyles.length + 1),
+    //
+    // issue #23: an INSTALLED MOD adds one more tile per mod lyric style (that is the whole point of
+    // the beta mod system — `mod:<id>:<viz>` styles appear on this shelf). This smoke test never
+    // passes `--mods-dir`, so no mod can activate here and the count stays exact; the `+modTiles`
+    // term only guards the case where a future change starts wiring a profile at this host. A
+    // *smaller* count is still a failure — that is a style genuinely missing from the shelf.
+    styleThumbsLoaded: !!(p.shelf
+      && p.shelf.tiles >= expectedStyles.length + 1
+      && p.shelf.tiles === expectedStyles.length + 1 + (p.shelf.modTiles || 0)),
     livePreviewReady: !!(p.probe1 && p.probe1.preview && p.probe1.preview.childShim
       && p.probe1.preview.ready === 'true' && p.probe1.preview.staticFallback === false),
     // The live-preview child frame must render lyrics only: the splash belongs to the player surface

@@ -124,7 +124,7 @@ pnpm build           # = vite build，产物在 dist/
 | `useVisualizerAssetStore` / `useStatusMessageStore` | monet / cappella / tempera 面板 | 空资产包、无消息（上传能力降级） |
 | `backgrounds/registry` | 背景 tab | 6 个内置背景 entry 壳，`renderSettingsPanel` 直接渲染 Folia 真卡片 |
 | `preview/BackgroundPicture` | 背景 tab | Folia glyph fallback（深色卡片 + 模式字形） |
-| `folium{Visualizers,Tunings,Backgrounds,Runtime,MissingEntries}` | 设置面板的 mod 扩展点 | 空 registry（无 Folium mod） |
+| `folium{Visualizers,Tunings,Backgrounds,Runtime}` | 设置面板的 mod 扩展点 | 空 registry（v0.5.2 起模组在**播放页**激活，不在这个岛里；货架的模组格来自注入成员 `mods`，见 `docs/mod-system.md`） |
 | `localMetadataWorkerClient` / `lyrics/workerClient` / `lyrics/parserCore` / `services/db` / `localCoverAssetService` / `localMusicService` | tempera/monet 面板的图片上传链路 | no-op（切断 worker/IndexedDB/music-metadata 依赖，避免把 Electron 侧能力带进 bundle） |
 | `temperaImageArchive` / `TemperaImageLayerDialog` | tempera 面板 | 面板可渲染；添加图片是空实现 |
 
@@ -427,9 +427,13 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
    （`.ttf/.otf/.woff/.woff2`，单个 ≤ 50 MB，存 IndexedDB 并用 `FontFace` 注册）或从插件下发的
    `systemFonts`（AWT 枚举，最多 400 个家族，不持久化）里选，不走 no-op 桩。仍然降级的是 tempera
    画布图片、monet 封面/肖像、cappella 自定义表情/头像 —— 按钮存在但为 no-op。
-4. **Folium mod 扩展卡片**不渲染（无 mod）；`背景类型 → 嵌入/空` 的动态图片列表为空。
+4. **Folium mod 扩展卡片**不渲染；`背景类型 → 嵌入/空` 的动态图片列表为空。
    上游 tuning 里那套 `modKeys` / `modPatch` 白名单（`folium.visualizer.setTuning` 的读写范围）
    同样与本页无关：`folium` 桩是空 registry，**不要为了「跟上游」去补这些声明**。
+   **v0.5.2 起有一个例外**：模组的**歌词动画样式**会出现在货架上（`mod:<id>:<viz>`），但那是
+   走 `model/modStyles.ts` 的第二套并行清单 + 注入成员 `mods`，**不是**把模组注册表搬进了这个岛。
+   四个内置清单（`STYLE_ENTRIES` / `STYLE_MODE_SHELF_ORDER` / `StyleMode` / vite 的 `STYLE_MODES`）
+   仍然一个字节都不许出现 `mod:`。见 [`docs/mod-system.md`](mod-system.md) §5.2。
 5. **背景缩略图**是 Folia 无图时的 glyph fallback。
 6. **纹理分辨率默认显示 1.50x**（Folia 默认 1.5）。
 7. **「动画与性能」页不注入**：全局 `lyricRenderQuality` 挡位因此没有控件，但字段必须留在 store 里
@@ -514,3 +518,4 @@ composition。Folia 0.7.25 给 `TemperaTuning` 新增 `depthOfField` / `depthPan
 - **覆盖层遮住视觉器交互**：打开时 `pointer-events:auto` 覆盖全屏，播放器点击被挡住
   （Folia 自身设置窗口也如此），关闭即恢复。
 - **DSF/视口**：生产全屏两栏成立；窗口化到窄尺寸时 Folia 自身响应式会变单栏，属预期行为，不做特判。
+

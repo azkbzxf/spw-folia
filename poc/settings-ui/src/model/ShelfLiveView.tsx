@@ -39,21 +39,47 @@ import { useFoliumTunings } from '~/stubs/foliumTunings';
 import { useSettingsStore } from './settings';
 import { IS_DAYLIGHT, PREVIEW_THEME } from './theme';
 import { markRestored, resetTileDiskState, setTileKey } from './shelfDiskState';
-import { RANDOM_VISUALIZER_CHOICE, SHELF_COLUMNS, RandomPicture, clampFontScale, type ShelfValue } from './shelfShared';
+import { RANDOM_VISUALIZER_CHOICE, SHELF_COLUMNS, ModPicture, RandomPicture, clampFontScale, type ShelfValue } from './shelfShared';
+import { isModStyleMode, parseModStyleMode, type ModStyleEntry } from './modStyles';
 import { elementFromStaticHtml, readCachedPicture, staticPictureHtml, styleDiskKey, uploadsBlockCaching, writeCachedPicture } from './previewImageCache';
 
 /** 开局最多等这么久磁盘，之后无论如何放开造图（缓存是优化，不能拿「打不开货架」换）。 */
 const DISK_WAIT_MS = 1200;
 
 /**
+ * 一格的模组条目（`mode` → 那一格的 preview 图与名字）。
+ *
+ * 走一个模块级 Map 而不是闭包，是为了让 `drawLiveChoice` 保持**同一个函数引用**：
+ * `PictureGrid` 在 `picture` 是新的函数时会把每一格都重画（见它文件头那行注释），而这张表在货架
+ * 数据变化时由 `LiveShelf` 一次性写好，引用不变。
+ */
+let modPictureTable: ReadonlyMap<string, ModStyleEntry> = new Map();
+
+/** 由 `LiveShelf` 在每次渲染时同步（写一个模块级引用，不触发任何重绘）。 */
+const setModPictureTable = (entries: readonly ModStyleEntry[]): void => {
+    if (entries.length === 0 && modPictureTable.size === 0) return;
+    const next = new Map<string, ModStyleEntry>();
+    for (const entry of entries) next.set(entry.mode, entry);
+    modPictureTable = next;
+};
+
+/**
  * Draws one shelf tile exactly as Folia's own picker does. Defined outside the component because
  * PictureGrid re-renders every tile when the function itself is a new one.
+ *
+ * issue #23: 模组格**必须**在这里分叉。把 `mod:<id>:<viz>` 交给 `LyricStylePicture` 会静默画成
+ * **「古典」**的图：上游 `getVisualizerRegistryEntry` 认不得这个 mode，回落到
+ * `DEFAULT_VISUALIZER_MODE = 'classic'`（`work/folia/…/src/components/visualizer/registry.tsx:57-58`、
+ * `src/types/visualizerModes.ts:44`）。看起来一切正常，实际标错了样式 —— 这类静默错标比报错更难查。
  */
-const drawLiveChoice = (value: ShelfValue, state: PictureState): React.ReactNode => (
-    value === RANDOM_VISUALIZER_CHOICE
-        ? <RandomPicture />
-        : <LyricStylePicture mode={value as VisualizerMode} {...state} />
-);
+const drawLiveChoice = (value: ShelfValue, state: PictureState): React.ReactNode => {
+    if (value === RANDOM_VISUALIZER_CHOICE) return <RandomPicture />;
+    if (isModStyleMode(value)) {
+        const entry = modPictureTable.get(value);
+        return <ModPicture previewUrl={entry?.previewUrl ?? null} label={entry?.label ?? (parseModStyleMode(value)?.vizId ?? 'mod')} />;
+    }
+    return <LyricStylePicture mode={value as VisualizerMode} {...state} />;
+};
 
 /* ------------------------------------------------------------------------------------------ */
 /* 磁盘缓存：一格一实例                                                                         */
@@ -178,19 +204,33 @@ export interface LiveShelfProps {
     paused: boolean;
     /** Whether the window is on screen at all. A hidden overlay keeps no preview clock running. */
     active: boolean;
+    /** issue #23: 货架上的模组格（图与名字）。空数组 = 没有模组样式，行为与改动前一致。 */
+    modEntries?: readonly ModStyleEntry[];
 }
 
-/** 参与磁盘缓存的格子：除随机格以外的样式。 */
+/** 参与磁盘缓存的格子：除随机格与模组格以外的样式。
+ *
+ * issue #23: 模组格**必须**排除。`DiskTile` 的缓存键含 `modSettings/modTunings`，而注入岛里那两个
+ * 走的是空桩（`stubs/foliumVisualizers.ts` / `stubs/foliumTunings.tsx`），键恒为 `null`/`{}`；更重要的
+ * 是模组格根本不走渲染器（画的是 `<img>`），给它算一把永远画不出来的键没有意义，还会吃掉
+ * `previewImageCache.ts` 的 32 条上限。 */
 const styleModesOf = (options: ReadonlyArray<{ value: ShelfValue }>): string[] =>
-    options.map(option => option.value).filter(item => item !== RANDOM_VISUALIZER_CHOICE);
+    options
+        /* `ShelfValue` 的每个成员都是字符串（内置样式 / `mod:…` / `__random__`），所以这里不需要
+         * 类型谓词，取字符串即可。 */
+        .map(option => option.value as string)
+        .filter(item => item !== RANDOM_VISUALIZER_CHOICE && !isModStyleMode(item));
 
 /**
  * The shelf as Folia draws it: `PictureGrid` around live pictures, with one `LyricPreviewProvider`
  * (one clock, one theme, one `look`) over the whole grid.
  */
-export const LiveShelf: React.FC<LiveShelfProps> = ({ mode, value, options, onChange, label, paused, active }) => {
+export const LiveShelf: React.FC<LiveShelfProps> = ({ mode, value, options, onChange, label, paused, active, modEntries = [] }) => {
     const appearance = useSettingsStore(state => state.appearance);
     const styleTunings = useSettingsStore(state => state.styleTunings);
+    /* issue #23: 把模组格表交给模块级的 `drawLiveChoice`（渲染期写一个引用，不是 state：它不影响
+     * 任何 hook 的调用数量，也不该触发一次额外渲染）。 */
+    setModPictureTable(modEntries);
     // 群唱's emoji/avatar and 莫奈's portrait: none are uploaded in this page, so these are the
     // empty shapes Folia's renderer takes (stubbed asset store), exactly as upstream's window passes them.
     const styleAssets = useVisualizerStyleAssets();

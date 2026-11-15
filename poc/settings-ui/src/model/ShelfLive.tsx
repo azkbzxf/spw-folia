@@ -24,6 +24,7 @@ import { usePreviewAnimation } from './useInjectedSwitch';
 import { StaticShelf } from './ShelfStatic';
 import { restoredCount } from './shelfDiskState';
 import type { StyleMode } from './settings';
+import type { ModStyleEntry } from './modStyles';
 import { RANDOM_VISUALIZER_CHOICE, type ShelfValue } from './shelfShared';
 
 /** 实时版按需拉取：开关关的时候这个工厂一次都不会跑，那块 chunk 也就不下载。 */
@@ -44,6 +45,8 @@ interface LyricStyleShelfProps {
     paused: boolean;
     /** Whether the window is on screen at all. A hidden overlay keeps no preview clock running. */
     active: boolean;
+    /** issue #23: 模组格（图 + 名字）。两版货架都要它，否则静态版画不出模组的 preview 图。 */
+    modEntries?: readonly ModStyleEntry[];
 }
 
 /**
@@ -52,7 +55,7 @@ interface LyricStyleShelfProps {
  * `data-spw-shelf-mode` 是给宿主探针的：`"live"` / `"static"`，契约固定，别改字面量。
  * 关窗时整棵货架卸载（`return null`）—— 与改动前一致，探针在窗口关闭时读不到格子。
  */
-export const LyricStyleShelf: React.FC<LyricStyleShelfProps> = ({ mode, value, options, onChange, label, paused, active }) => {
+export const LyricStyleShelf: React.FC<LyricStyleShelfProps> = ({ mode, value, options, onChange, label, paused, active, modEntries = [] }) => {
     const animated = usePreviewAnimation();
 
     if (!active) {
@@ -63,7 +66,7 @@ export const LyricStyleShelf: React.FC<LyricStyleShelfProps> = ({ mode, value, o
         <div data-spw-shelf="" data-spw-shelf-mode={animated ? 'live' : 'static'}>
             {animated
                 ? (
-                    <Suspense fallback={<ShelfPlaceholder value={value} options={options} onChange={onChange} label={label} active={active} />}>
+                    <Suspense fallback={<ShelfPlaceholder value={value} options={options} onChange={onChange} label={label} active={active} modEntries={modEntries} />}>
                         <LiveShelf
                             mode={mode}
                             value={value}
@@ -72,10 +75,11 @@ export const LyricStyleShelf: React.FC<LyricStyleShelfProps> = ({ mode, value, o
                             label={label}
                             paused={paused}
                             active={active}
+                            modEntries={modEntries}
                         />
                     </Suspense>
                 )
-                : <StaticShelf value={value} options={options} onChange={onChange} label={label} active={active} />}
+                : <StaticShelf value={value} options={options} onChange={onChange} label={label} active={active} modEntries={modEntries} />}
         </div>
     );
 };
@@ -86,8 +90,8 @@ export const LyricStyleShelf: React.FC<LyricStyleShelfProps> = ({ mode, value, o
  * 这样「开关开着但 chunk 还没到」的瞬间不会白一块 —— 用户看到的是同一批图案，chunk 一到就被
  * 真实小图替换掉。这条路径只在开关开时走，所以不违反「关掉时不加载渲染器」的约束。
  */
-const ShelfPlaceholder: React.FC<Omit<LyricStyleShelfProps, 'mode' | 'paused'>> = ({ value, options, onChange, label, active }) => (
-    <StaticShelf value={value} options={options} onChange={onChange} label={label} active={active} />
+const ShelfPlaceholder: React.FC<Omit<LyricStyleShelfProps, 'mode' | 'paused'>> = ({ value, options, onChange, label, active, modEntries }) => (
+    <StaticShelf value={value} options={options} onChange={onChange} label={label} active={active} modEntries={modEntries} />
 );
 
 /* ------------------------------------------------------------------------------------------ */
@@ -129,6 +133,10 @@ const readShelfState = () => {
 
     return {
         tiles: tiles.length,
+        // issue #23: mod lyric styles are extra shelf cells on top of the built-ins. Reported
+        // separately so the layout smoke test can tell "a builtin style went missing" (a failure)
+        // from "a mod added a style" (the feature working).
+        modTiles: tiles.filter(tile => String(tile.dataset.value ?? '').startsWith('mod:')).length,
         pictures: root?.querySelectorAll('[data-picture]').length ?? 0,
         images: root?.querySelectorAll('[data-picture="image"]').length ?? 0,
         making: root?.querySelectorAll('[data-picture="making"]').length ?? 0,

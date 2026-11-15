@@ -52,6 +52,9 @@ import PlaybackClickZones from '~/chrome/PlaybackClickZones';
 import { useShowProblemButton } from '~/model/useInjectedSwitch';
 /* issue #12 增加日志功能: 「出现问题」 environment self-check + pre-filled feedback panel. */
 import ProblemReportPanel from '~/chrome/ProblemReportPanel';
+/* issue #23: 「模组市场（Beta）」—— 设置岛里的**平级模态**（不是第 5 个 tab：上游
+ * `VisPlaygroundEditSection` 是闭集，且 SETTINGS_SURGERY 正在裁那个面板的 tab 集合）。 */
+import ModMarketPanel from '~/chrome/mods/ModMarketPanel';
 /* v0.3.0: bottom-centre playback HUD (progress bar; hover expands the control bar). */
 import PlaybackBar from '~/chrome/playback/PlaybackBar';
 import { useConfigPublisher } from '~/useConfigPublisher';
@@ -78,6 +81,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
     const [fontPickerOpen, setFontPickerOpen] = useState(false);
     /** issue #12: 「出现问题」 environment self-check + feedback panel. */
     const [problemPanelOpen, setProblemPanelOpen] = useState(false);
+    /** issue #23: 「模组市场（Beta）」—— 平级模态，入口在右下角菜单里。 */
+    const [modMarketOpen, setModMarketOpen] = useState(false);
     const visualizerMode = state.visualizerMode;
     /* v0.4.11: off by default — the 救生圈 button sits over the artwork and is rarely needed twice.
      * The same self-check stays reachable from SPW 配置 → 支持与反馈 → 出现问题, which also works
@@ -100,12 +105,25 @@ const App: React.FC<AppProps> = ({ injected }) => {
     /** v0.4.17 (issue #18 item 4): the picture-level click zones are inert while the settings overlay
      *  owns the stage and while the host is in mouse passthrough (clicks belong to the desktop then).
      *  They also stand down while the bottom-right settings menu or the diagnostics/modal is open: the
-     *  click that dismisses such a card must not also pause the song. */
+     *  click that dismisses such a card must not also pause the song.
+     *  issue #23: the mod market is a full-screen modal on the very same picture, so it joins this list
+     *  for exactly the same reason (its backdrop click must not pause playback). */
     const clickZonesEnabled = !open
         && state.mousePassthrough !== true
         && !playerPanelOpen
         && !problemPanelOpen
-        && !fontPickerOpen;
+        && !fontPickerOpen
+        && !modMarketOpen;
+
+    /**
+     * issue #23: 打开市场页。先把右下角那张小面板收起来 —— 市场是整屏模态，它盖上去以后那张面板
+     * 描述的还是「播放页设置」，两层面板同时活着会让 ESC 与热区的归属变得说不清。
+     * 市场页的入口只在这张菜单里，而那本来就是「设置浮层关着」的场景，所以不需要动 `open`。
+     */
+    const openModMarket = useCallback(() => {
+        setPlayerPanelOpen(false);
+        setModMarketOpen(true);
+    }, []);
 
     useConfigPublisher();
 
@@ -204,6 +222,11 @@ const App: React.FC<AppProps> = ({ injected }) => {
              *  very control meant to help a broken setup would be unreachable in passthrough mode. */
             push(document.querySelector('[data-spw-chrome="problem-report"]'));
             push(document.querySelector('[data-spw-chrome="problem-report-panel"][data-open="true"]'));
+            /* issue #23: 市场页的入口行（在右下角菜单里）与市场页本身。前者与其它菜单行一样常驻；
+             * 后者是全屏模态 —— 穿透模式下不给它上报热区的话，用户在穿透时打开市场页就会点不到任何
+             * 一张卡片（每一次点击都会落到底下的桌面）。 */
+            push(document.querySelector('[data-spw-chrome="mod-market-row"]'));
+            push(document.querySelector('[data-spw-mod-market="true"]'));
             push(document.querySelector('[data-spw-settings-overlay="true"]'));
             reportHitRegions(rects);
         };
@@ -214,7 +237,7 @@ const App: React.FC<AppProps> = ({ injected }) => {
             window.clearTimeout(settle);
             window.removeEventListener('resize', collect);
         };
-    }, [state.transparentPlayerBackground, state.mousePassthrough, playerPanelOpen, problemPanelOpen, open, chromeVisible]);
+    }, [state.transparentPlayerBackground, state.mousePassthrough, playerPanelOpen, problemPanelOpen, open, chromeVisible, modMarketOpen]);
 
     // v0.1.7: while the player-background panel is open it owns ESC (panel first, window second) —
     // window-capture + stopPropagation keeps both our settings listener and the host's Escape out.
@@ -233,6 +256,25 @@ const App: React.FC<AppProps> = ({ injected }) => {
     /* v0.4.17 (issue #18 item 2): the 「显示播放条」 row lives INSIDE the bottom-right settings menu
      * (`PlayerBackgroundControl`), so the menu already owns ESC — there is no second panel to handle
      * here. See the `playerPanelOpen` ESC effect above. */
+
+    /* issue #23: 市场页是整屏模态，ESC 的归属照 `problemPanelOpen` 的模板（window-capture +
+     * preventDefault + stopPropagation），**并且**它排在所有其它监听之前注册（React 的 effect 按
+     * 组件树里声明顺序执行，这里把它放在 problem 面板那段之前）。
+     *
+     * 三种情况下都必须抢到 ESC：设置浮层开着、关着、以及模组格那一刻宿主也在等 ESC。所以这里不
+     * 依赖 `open`：唯一判据就是 `modMarketOpen`。一次 ESC 只关面板，第二次才落到宿主
+     * （`docs/settings-ui-impl.md:466` / `docs/protocol.md:265-268` 的那条契约）。 */
+    useEffect(() => {
+        if (!modMarketOpen) return undefined;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            setModMarketOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
+    }, [modMarketOpen]);
 
     /* issue #12: same ESC ownership for the diagnostics panel — it is a modal-ish card over the
      * player page, so the first Escape closes it and a second one closes the window. */
@@ -399,6 +441,8 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 onToggleShowPlaybackBar={setShowPlaybackBar}
                 showPlaybackBarLabel={t('options.showPlaybackBar')}
                 panelLabel={t('options.playerPageSettings')}
+                modMarketLabel={t('options.modMarket')}
+                onOpenModMarket={openModMarket}
             />
             {/* v0.4.0: with the player page opaque the chrome otherwise offers no way out of the
              *  fullscreen window (ESC / the host hotkey work, but they are not discoverable), so the
@@ -467,6 +511,13 @@ const App: React.FC<AppProps> = ({ injected }) => {
              *  「显示播放条」 setting (bottom-right menu), no longer a plugin-injected member. The menu
              *  button that flips it lives above this line and is never gated by it. */}
             {showPlaybackBar ? <PlaybackBar settingsOpen={open} /> : null}
+            {/* issue #23: 「模组市场（Beta）」—— **平级**模态，挂在播放条之后、设置浮层之前。
+             *  为什么不是第 5 个 tab：`VisPlaygroundEditSection` 是上游闭集，而现有 SETTINGS_SURGERY
+             *  正在裁那个面板的 tab 集合（`vite.config.ts:286-291`），往上面加 tab 会直接踩门禁。
+             *  为什么**无条件**挂载（组件内部 `open` 才返回节点）：与 `ProblemReportPanel` 同一条教训
+             *  （见上面 :454-461 的注释）——用条件包裹会让后续兄弟节点的位置变化，React 的 reconciler
+             *  会在上游 Folia 树上抛 insertBefore/removeChild NotFoundError。 */}
+            <ModMarketPanel open={modMarketOpen} onClose={() => setModMarketOpen(false)} />
             <div
                 className="font-sans"
                 data-spw-settings-overlay={open ? 'true' : 'false'}

@@ -86,6 +86,11 @@ const REMAINING_SUITES = [
     // z-order check is the one that fails on PR #25's build; keep it.
     { name: 'passthrough hit region (issue #24)', file: 'verify-hit-region.mjs' },
     { name: 'self-check (出现问题)', file: 'verify-diagnostics.mjs' },
+    // issue #23: the beta mod system. This is the only feature that runs third-party code, and every
+    // one of its failure modes is silent — a mod that installs but never activates looks exactly like
+    // one that works until the user selects its style and keeps seeing a builtin. The suite asserts
+    // the mod entry really imports as a module and that selecting a mod style really paints glyphs.
+    { name: 'mod market + activation (issue #23)', file: 'verify-mod-market.mjs' },
     { name: 'packaged layout smoke', file: 'verify-layout.mjs' },
 ];
 

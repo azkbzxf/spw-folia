@@ -52,6 +52,10 @@ namespace SpwFolia
         public string DevUrl;       // protocol §1 hello devUrl / CLI dev server URL
         public string Mode;         // force visualizerMode in the demo config (e.g. sonnet/tempera)
         public string AssetsDir;    // optional extra folder served at https://spw-folia-assets.local/
+        // issue #23: the plugin's mods root (<pluginPath>/mods). Served at
+        // https://spw-folia.local/__mods/<modId>/<file> by HostForm's WebResourceRequested hook —
+        // the page can only import mod entries same-origin (cross-origin import fails, FEASIBILITY §2).
+        public string ModsDir;
         public bool NoOverlay;      // skip the placeholder HUD injection
         public string SettingsDir;  // settings UI dist dir -> https://spw-folia-settings.local/
         public string SettingsEntry = "settings-ui.js";
@@ -104,6 +108,8 @@ namespace SpwFolia
                     case "--port": Next(argv, ref i); break; // dev only: dev-url already carries the port
                     case "--mode": a.Mode = Next(argv, ref i); break;
                     case "--assets": a.AssetsDir = Next(argv, ref i); break;
+                    // issue #23: the mods root the page imports from (/__mods/<modId>/<entry>).
+                    case "--mods-dir": a.ModsDir = Next(argv, ref i); break;
                     case "--no-overlay": a.NoOverlay = true; break;
                     case "--settings-dir": a.SettingsDir = Next(argv, ref i); break;
                     case "--settings-entry": a.SettingsEntry = Next(argv, ref i); break;
@@ -495,7 +501,10 @@ namespace SpwFolia
         public const string BundleHost = "spw-folia.local";
         public const string AssetsHost = "spw-folia-assets.local";
         public const string SettingsHost = "spw-folia-settings.local";
-        public const string DefaultBundleUrl = "https://spw-folia.local/index.html?obs=1&token=spike";
+        // issue #23: a virtual host with NO folder mapping. SetVirtualHostNameToFolderMapping takes
+        // precedence over WebResourceRequested for the same host, so mod files cannot be served from
+        // the bundle host — they get their own unmapped host and the handler answers them.
+        public const string ModsHost = "spw-folia-mods.local";        public const string DefaultBundleUrl = "https://spw-folia.local/index.html?obs=1&token=spike";
 
         private static string shimScript;
         private static string overlayScript;
@@ -643,6 +652,9 @@ namespace SpwFolia
                     }
                 }
                 if (!string.IsNullOrEmpty(args.SettingsDir)) args.SettingsDir = Path.GetFullPath(args.SettingsDir);
+                // issue #23: full path only — HostForm compares every intercepted /__mods/ request
+                // against this root (prefix check), so it must be absolute and canonical.
+                if (!string.IsNullOrEmpty(args.ModsDir)) args.ModsDir = Path.GetFullPath(args.ModsDir);
                 // Packaged layout: <bundle>/settings/settings-ui.js is picked up automatically, so the
                 // plugin can pass only `--bundle <plugin>/web`.
                 if (string.IsNullOrEmpty(args.SettingsDir) && !string.IsNullOrEmpty(args.Bundle))
