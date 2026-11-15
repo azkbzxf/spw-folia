@@ -55,8 +55,11 @@ const LOCAL_KEYS = {
         transparentFontColorDesc: '透明窗口没有封面底色可依据，所以这一份单独设置；默认跟随系统，'
             + '与引入这个设置之前的行为一致。',
         /* issue #23 · 模组市场（Beta）。全部是本页新增的 key：上游 Folia 没有「市场」这个概念。
-         * 每一条都必须同时出现在 `LOCAL_KEYS_EN` 里（那边的注释说明了为什么）。 */
-        modMarket: '模组市场（Beta）',
+         * 每一条都必须同时出现在 `LOCAL_KEYS_EN` 里（那边的注释说明了为什么）。
+         *
+         * 原先还有一条 `modMarket`（播放页右下角菜单里那一行的标签）。入口搬到 SPW 的配置页以后
+         * 那一行被删掉了，`t('options.modMarket')` 没有调用方 —— 按本页「不保留用不到的 label」
+         * 的规矩一起删；面板自己的文案（下面这一串）全部保留。 */
         modMarketTitle: '模组市场',
         modMarketBetaBadge: 'Beta',
         modMarketSearch: '搜索名称或作者',
@@ -108,7 +111,6 @@ const LOCAL_KEYS_EN = {
         transparentFontColorHint: 'Applies to the transparent window only',
         transparentFontColorDesc: 'A transparent window has no cover colour to derive from, so its text colour is '
             + 'chosen separately. System keeps the behaviour from before this setting existed.',
-        modMarket: 'Mod market (Beta)',
         modMarketTitle: 'Mod market',
         modMarketBetaBadge: 'Beta',
         modMarketSearch: 'Search name or author',

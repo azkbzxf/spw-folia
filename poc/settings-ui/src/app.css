@@ -536,24 +536,10 @@ body.spw-injected {
     cursor: not-allowed;
 }
 
-/* issue #23: 「模组市场（Beta）」 is the panel's LAST row (it is a button, not a switch, so it has no
- * `.spw-switch` child). It therefore takes the bottom rounding from whichever row precedes it, and
- * carries the small Beta badge where the other rows carry their switch. */
-.spw-player-bg-row--fourth {
-    border-radius: 0 0 12px 12px;
-}
-
-.spw-player-bg-badge {
-    flex: 0 0 auto;
-    border-radius: 9999px;
-    padding: 2px 7px;
-    background: rgba(216, 176, 114, 0.18);
-    color: #d8b072;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
+/* issue #23 配置页入口: the 「模组市场（Beta）」 row that used to be this panel's last row (and the
+ * `.spw-player-bg-row--fourth` / `.spw-player-bg-badge` rules that existed only for it) is gone — the
+ * entry moved to SPW's 配置 page (`preference_config.json` → 模组 → 模组市场). The panel is back to
+ * being the three switches, whose bottom rounding `--third` already owns. */
 
 .spw-player-bg-note--compat {
     color: rgba(214, 168, 84, 0.85);

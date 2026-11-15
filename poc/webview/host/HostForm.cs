@@ -54,6 +54,20 @@ namespace SpwFolia
         private bool shotTaken;
         private bool settingsAutoOpened;
         private bool settingsOpenRequested;
+        // issue #23 配置页入口: the plugin's 「模组市场」 button asks for this from its own process
+        // (stdin `{"t":"command","command":"open-mod-market"}`). The plugin cannot post to the page
+        // itself, and a post made while WebView2 is still coming up is silently dropped
+        // (`post-page-skip reason=not-ready`) — so a request that could not be delivered is REMEMBERED
+        // and re-posted from OnTick once the page is up (`DeliverPendingModMarket`).
+        //
+        // MEASURED (2026-11-15, this machine): the page never sends `bridgeReady` — the settings bundle
+        // only emits it as a *local* event (`bridge.ts` `emitLocally`), so the branch below is dead and
+        // cannot be the replay point. `navDone` is the real "the page can receive" signal.
+        // Cleared once the page has been told, so a later reload cannot re-open a panel the user
+        // already closed.
+        private bool modMarketRequested;
+        /** Logs the "deferred" line once per request instead of once per 60 Hz tick. */
+        private bool modMarketDeferLogged;
         private long navDoneAt;
         private long shotAtTick;
         private string currentUrl;
@@ -2109,6 +2123,11 @@ namespace SpwFolia
                 // v0.3.0: the settings UI mounts after navigation, so replay the cached queue snapshot
                 // once more here; the PlaybackBar reads inputs.queue as its late-mount initial value.
                 if (lastQueuePayload != null) PostToPage(lastQueuePayload);
+                // NOTE (issue #23 配置页入口): this branch never runs. MEASURED 2026-11-15 — the settings
+                // bundle emits `bridgeReady` only as a LOCAL event (its `emitLocally`, which fans out to
+                // same-page listeners and never reaches `chrome.webview.postMessage`), so the host logs
+                // no such message on a real start. Nothing new may be hung off it; the mod-market
+                // replay lives in `DeliverPendingModMarket` (driven from OnTick on `navDone`).
             }
             else if (type == "settingsUI" || type == "ui-state")
             {
@@ -2672,6 +2691,10 @@ namespace SpwFolia
             }
             // Fallback for settings-UI bundles that never emit bridgeReady: open once, briefly after nav.
             if (args.OpenSettings && !settingsAutoOpened && now - navDoneAt >= 2500) OpenSettingsOnce();
+            // issue #23 配置页入口: a 「模组市场」 request that arrived before the page finished
+            // navigating. Cheap (one bool) and idempotent; see DeliverPendingModMarket's docs for why
+            // this is not hung off the bridgeReady branch.
+            DeliverPendingModMarket();
             if (args.DurationMs > 0 && now >= args.DurationMs)
             {
                 CloseWith("plugin", 0);
@@ -2807,6 +2830,41 @@ namespace SpwFolia
             settingsOpenRequested = true;
             PostToPage("{\"type\":\"ui\",\"action\":\"open-settings\"}");
             log.Log("info", "open-settings requested auto=" + (args.OpenSettings ? "true" : "false"));
+        }
+
+        /// <summary>
+        /// issue #23 配置页入口: posts the pending 「模组市场」 action once the page can receive it.
+        ///
+        /// The signal is <see cref="navDone"/>, NOT `bridgeReady`: measured on this machine (2026-11-15),
+        /// the settings bundle emits `bridgeReady` only as a local page event, so the host's branch for
+        /// it never executes. `navDone` is a fact this process owns (it is set in
+        /// <c>OnNavigationCompleted</c>, right before the host starts replaying lyrics/track/queue), and
+        /// `PostToPage` already no-ops safely before that — the flag stays set and this retries on the
+        /// next tick.
+        ///
+        /// Only ever called on the UI thread (HandleCommand's SafeBeginInvoke and OnTick).
+        /// </summary>
+        private void DeliverPendingModMarket()
+        {
+            if (!modMarketRequested || closing || IsDisposed) return;
+            if (!webviewReady || !navDone)
+            {
+                // Exactly the case this method exists for: the plugin can press its 配置-page button
+                // before WebView2 has navigated (measured: ~0.7 s), and `PostToPage` would drop the
+                // message with `post-page-skip reason=not-ready` — silently, with no way to resend.
+                // Logged once per request (this runs on every tick, so a per-tick line would flood).
+                if (!modMarketDeferLogged)
+                {
+                    modMarketDeferLogged = true;
+                    log.Log("info", "open-mod-market deferred: page not ready (nav-done=" + navDone
+                        + " webview-ready=" + webviewReady + "); will post when it is");
+                }
+                return;
+            }
+            modMarketRequested = false;
+            modMarketDeferLogged = false;
+            PostToPage("{\"type\":\"ui\",\"action\":\"open-mod-market\"}");
+            log.Log("info", "open-mod-market posted action=open-mod-market nav-done=" + navDone);
         }
 
         private static long EpochMs()
@@ -3044,6 +3102,26 @@ namespace SpwFolia
                     if (closing) return;
                     settingsOverlayOpen = false;
                     PostToPage("{\"type\":\"ui\",\"action\":\"close-settings\"}");
+                });
+            }
+            // issue #23 配置页入口: 「模组 → 模组市场」 in SPW's 配置 page. The plugin owns the click
+            // but not the page, so it asks for this over stdin. Two halves, both required:
+            //   1. remember the request, because a page that is not ready drops the post silently
+            //      (`post-page-skip reason=not-ready`) and there is no acknowledgement to resend on;
+            //   2. try NOW, because the common case is a window that is already open and running.
+            // `DeliverPendingModMarket` (OnTick, gated on navDone) finishes a request that arrived too
+            // early. The Shim also holds the action until the settings island subscribes, so this is
+            // belt and braces at both ends of the same failure: "the message reached nobody".
+            else if (command == "open-mod-market")
+            {
+                SafeBeginInvoke(delegate
+                {
+                    if (closing) return;
+                    modMarketRequested = true;
+                    DeliverPendingModMarket();
+                    // Deliberately does NOT touch `settingsOverlayOpen`: the market is a sibling modal,
+                    // not the settings overlay (App.tsx renders two independent states), and claiming
+                    // the overlay is open here would pin the system cursor visible forever.
                 });
             }
             else if (command == "eval")

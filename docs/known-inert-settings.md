@@ -4,7 +4,7 @@
 
 - **「歌词样式」设置页** —— Folia 原组件，注入覆盖层内。它用 Folia 自己的设置树，受上游能力限制。
 - **SPW 配置页** —— `spw-folia/src/main/resources/preference_config.json` 声明的插件入口，
-  分「播放页 / 诊断与日志 / 支持与反馈」三组，见 [`docs/settings-ui-impl.md`](settings-ui-impl.md) §4.1。
+  分「播放页 / 模组 / 诊断与日志 / 支持与反馈」四组，见 [`docs/settings-ui-impl.md`](settings-ui-impl.md) §4.1。
 
 **原则：无法生效的控件不再展示**，不保留「有开关但永远不产生效果」的 UI。
 
@@ -19,6 +19,8 @@
 | 播放页 | 显示问题反馈按钮（`showProblemButton`） | **关** | 控制播放页右上角的救生圈按钮及其诊断面板。关闭时 **React 不挂载**（不是 CSS 隐藏），因此也不上报 hit region |
 | 播放页 | 保持屏幕唤醒（`keepScreenAwake`，issue #22 第 3 条） | **开** | 插件读 config → 设置树顶层布尔 → 宿主 `SetThreadExecutionState(ES_CONTINUOUS\|ES_DISPLAY_REQUIRED\|ES_SYSTEM_REQUIRED)`，播放页开着时阻止屏保与显示器休眠。关掉即恢复系统设置。宿主每 1 s 重断言一次（防别的进程改掉执行状态），关窗时清除；`--no-keep-awake` 是诊断用的逃生参数 |
 | 诊断与日志 | 详细日志（`verboseLog`） | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志。**下一次打开 Folia 生效** |
+| 模组 | 模组市场（`button`，`onOpenModMarket`） | — | 没开窗就开窗 → 宿主 `command open-mod-market` → 页面 `ui action` → 设置岛的模组市场模态。页面未就绪时宿主记住请求、`navDone` 后补发；Shim 另外在设置岛挂载前排队。见 [`docs/mod-system.md`](mod-system.md) §5.1.1 |
+| 模组 | 打开模组文件夹（`button`，`onOpenModsFolder`） | — | `explorer.exe` + `<pluginPath>/mods`（**两个 argv**，不拼字符串）。不依赖播放窗口，窗口打不开时照样能用 |
 | 支持与反馈 | 出现问题（`button`） | — | 环境自检 + 预填反馈页 + 打开日志文件夹 |
 
 逃生口：配置页「支持与反馈 → 出现问题」不依赖播放窗口，播放窗口打不开时照样能用 ——

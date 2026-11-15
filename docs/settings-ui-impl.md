@@ -219,11 +219,12 @@ pnpm build           # = vite build，产物在 dist/
 ### 4.1 SPW 配置页入口清单（`preference_config.json`）
 
 SPW「模组管理 → 配置」里的这一页由 `spw-folia/src/main/resources/preference_config.json` 声明，
-**三个组，每组一个 config 文件**（按「调观感 / 排查问题 / 求助」三个用途分开）：
+**四个组，每组一个 config 文件**（按「调观感 / 模组 / 排查问题 / 求助」四个用途分开）：
 
 | 组标题 | config 文件 | 用途 | 条目 |
 |---|---|---|---|
 | 播放页 | `config.json` | 调观感 | 打开过渡动画、歌词样式预览动画、显示问题反馈按钮 |
+| 模组 | `mods.json` | 第三方模组 | 模组市场、打开模组文件夹 |
 | 诊断与日志 | `diagnostics.json` | 排查问题 | 详细日志 |
 | 支持与反馈 | `support.json` | 求助 | 出现问题 |
 
@@ -233,6 +234,8 @@ SPW「模组管理 → 配置」里的这一页由 `spw-folia/src/main/resources
 | 播放页 | `switch` | `previewAnimation` | 歌词样式预览动画 | **开** | 设置树顶层 `previewAnimation` → 页面 `usePreviewAnimation()` → 为假时货架走 `ShelfStatic`（只画简约字形，**一个渲染器 chunk 都不加载**）；为真时走 `ShelfLiveView`（真实渲染器小图 + 磁盘缓存）。见 §4.1.4 |
 | 播放页 | `switch` | `showProblemButton` | 显示问题反馈按钮 | **关** | 设置树顶层 `showProblemButton` → 页面 `useShowProblemButton()` → 为假时右上角救生圈按钮与其面板**都不挂载** |
 | 诊断与日志 | `switch` | `verboseLog` | 详细日志 | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志 |
+| 模组 | `button` | `on_click: FoliaPlugin.onOpenModMarket` | 模组市场 | — | 开窗（未开时）→ 宿主 `command open-mod-market` → 页面 `ui action` → 市场模态。见 §4.1.5 |
+| 模组 | `button` | `on_click: FoliaPlugin.onOpenModsFolder` | 打开模组文件夹 | — | `explorer.exe` + `<pluginPath>/mods`（两个 argv） |
 | 支持与反馈 | `button` | `on_click: FoliaPlugin.onReportProblem` | 出现问题 | — | 环境自检 + 预填反馈 |
 
 配置页只使用 `switch` / `button` 两种控件。
@@ -286,7 +289,6 @@ SPW 的 `ConfigManager.getConfig(name)` 是**按 config 文件名分别存取**�
   **`showPlaybackBarLegacy`** 下发，页面只在「树里还没有该键」时用它播种一次，之后永远以树为准。
 
 #### 4.1.4 「歌词样式预览动画」+ 小图缓存
-
 货架那 17 格小图（`data-spw-shelf` 里每个 `[data-value]`）默认是**真实渲染器**画的：上游
 `LyricStylePicture` → `LivePicture` 逐格串行把样式画到一张窗口大小的舞台上，冻结成静态图，
 指针停留 280ms 才让那一格跑起来。这条路很贵（1920×1200、DSF 1、宽 7 列实测）：
@@ -346,6 +348,46 @@ IndexedDB，下次开窗口直接贴出来 —— 贴进的是**上游那只 Map
 验收：手工观察货架的三态（实时版 → 磁盘恢复图 → 造图中）与切换是否即时；原独立门禁
 `verify-preview-animation-switch.mjs` 已于 v0.4.18 删除（该开关自 v0.4.16 起未变动，
 门禁只留本次改动相关的范围，见 `packaging/tools/verify-all.mjs` 头部）。
+
+#### 4.1.5 「模组」分区：入口从播放页搬到配置页（issue #23 配置页入口）
+
+模组市场的入口原先在播放页右下角菜单（`data-spw-chrome="mod-market-row"`），现在移到配置页，
+原因只有一个：**它本来是插件级的事，不是播放页的一个状态**。同时新增同一个分区里的
+「打开模组文件夹」，那是播放窗口打不开时唯一的自助路径。
+
+链路（每个名字都得对，写错任何一处只会表现为「按钮没反应」，两端都不报错）：
+
+```
+preference_config.json  on_click: dev.spw.folia.FoliaPlugin.onOpenModMarket
+  → FoliaPlugin.onOpenModMarket()            @JvmStatic @JvmName，无参
+  → bridge.sendUiCommand("open-mod-market")  → stdin {"t":"command","command":"open-mod-market"}
+  → HostForm.HandleCommand → DeliverPendingModMarket()
+  → page ui action "open-mod-market" → Shim case 'ui' → App.tsx bridgeOn('ui') → setModMarketOpen(true)
+```
+
+**页面未就绪时消息不能丢，两端各有一道**（缺一不可，因为丢在不同位置）：
+
+1. **宿主侧**（页面还不存在）：`modMarketRequested` + `OnTick` 的 `DeliverPendingModMarket()`，
+   门控在 `webviewReady && navDone`。
+   ⚠️ **绝不能挂在 `bridgeReady` 分支上**：实测 2026-11-15 本机，设置岛只把 `bridgeReady` 当
+   **页面内本地事件**发出（`bridge.ts` 的 `emitLocally`），`chrome.webview.postMessage` 从来没发过它，
+   宿主日志里一条 `bridgeReady` 都没有 —— `HostForm.cs` 那个分支是死代码，`--open-settings` 实际靠
+   `OnTick` 的 2.5 s 兜底计时器。
+2. **页面侧**（设置岛还没挂载）：`Shim.js` 的 `pendingUiIntents`。`emitLocal` 在没有订阅者时是
+   空操作，而设置岛 bundle 是宿主后注入的（冷启动 0.5–2 s 才挂载）。`case 'ui'` 发现没人收且
+   action 是 `open-mod-market` 就排队，等 `__SPW_FOLIA__.on('ui', …)` 第一次被调用时补投。
+   **只排队幂等的一次性意图** —— `toggle-settings` 重放会把用户刚关掉的面板再弹开。
+
+**市场页是并列模态，不是设置浮层的一页**：`openModMarket` 只 `setModMarketOpen(true)`，不动 `open`。
+`bridge.ts` 的 `uiActionToCommand` 对 `open-mod-market` 返回 `'none'`（不落到 `default: toggle`），
+`registerSettingsUiController` 的监听器对 `'none'` 显式 no-op。把浮层一起打开会让两个各自抢 ESC 的
+window-capture 监听同时活着，一次 ESC 会关两层，破坏 `docs/protocol.md` §8 的「一次 ESC 只关一层」。
+
+**删掉的东西**：`PlayerBackgroundControl.tsx` 的入口行与其两个 prop、`App.tsx` 热区上报里的
+`mod-market-row`、`app.css` 的 `.spw-player-bg-row--fourth` / `.spw-player-bg-badge`、i18n 的
+`options.modMarket`。
+**保留**：`[data-spw-mod-market="true"]` 的热区上报（穿透模式下不给它上报，用户在穿透时打开市场会一张
+卡片都点不到）。
 
 ### 4.2 tuning 合并：默认值打底，持久化覆盖
 

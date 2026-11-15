@@ -1128,6 +1128,15 @@ class FoliaPlugin(
         /** v0.3.2: key-binding action id shown in SPW's shortcut settings. */
         private const val TOGGLE_ACTION_ID = "toggle-folia-visualizer"
 
+        /**
+         * issue #23 配置页入口: the host `command` that opens the mod market panel.
+         *
+         * Cross-language contract, and the third name in one chain (`preference_config.json`'s
+         * `on_click` → this constant → `HostForm.HandleCommand` → the `ui` action the page applies).
+         * A typo anywhere in it degrades to "the button does nothing", with no error on either side.
+         */
+        internal const val OPEN_MOD_MARKET_COMMAND = "open-mod-market"
+
         /** v0.4.0: player-page transparency shortcuts (see [FoliaTransparency]). */
         private const val TRANSPARENT_ACTION_ID = "toggle-transparent-player-background"
         private const val TRANSPARENT_PASSTHROUGH_ACTION_ID =
@@ -1305,6 +1314,101 @@ class FoliaPlugin(
                 pluginVersion = target.pluginContext.pluginVersion,
                 hostPid = hostPid,
             )
+        }
+
+        /**
+         * issue #23 配置页入口: `preference_config.json` 「模组 → 模组市场」button target.
+         *
+         * Replaces the 「模组市场（Beta）」 row that used to sit in the player page's bottom-right
+         * menu. The row is gone (the user asked for the entry to live in the plugin's 配置 page), so
+         * this is now the **only** way to reach the market from the app, and it has to work from both
+         * shapes of a session:
+         *
+         *  - no window running → open one first ([openFolia] spawns the helper, exactly like the 更多
+         *    menu entry does), then ask it to open the market;
+         *  - a window already running → just ask.
+         *
+         * **The ask is a HOST command, not a page message.** The plugin has no WebView2 object, and the
+         * host is the only party that can post to the page *and* replay the post once the page is
+         * ready. `open-mod-market` therefore travels as `{"t":"command",…}` and the host answers it
+         * with a `ui` action; the replay-on-`bridgeReady` in `HostForm.cs` is what makes this work in
+         * the "just spawned, page not ready yet" window (measured: the page needs ~1 s after spawn,
+         * and a post before that is dropped with `post-page-skip reason=not-ready`).
+         *
+         * No toast on purpose: a `WorkshopApi.ui.toast` issued from a 配置-page callback is silently
+         * dropped while SPW's own UI is starting (`docs/lessons.md` §4.2), and here it is not needed —
+         * the window opening (and then the market covering it) is the feedback.
+         *
+         * Never throws: the caller is SPW's config UI thread, and the workshop API resolves `on_click`
+         * without a try/catch.
+         */
+        @JvmStatic
+        @JvmName("onOpenModMarket")
+        fun onOpenModMarket() {
+            val target = instance
+            if (target == null) {
+                runCatching {
+                    WorkshopApi.ui.toast(
+                        "spw-folia 插件未启动，无法打开模组市场；请在 SPW 插件管理里启用后重启",
+                        WorkshopApi.Ui.ToastType.Warning,
+                    )
+                }
+                return
+            }
+            try {
+                // `bridge.isRunning()` true does NOT mean the page is ready (a freshly spawned helper
+                // accepts `command` lines immediately). No sleep/poll here: the host caches the action
+                // and replays it on `bridgeReady`, so one send is always enough.
+                if (!target.bridge.isRunning()) {
+                    target.log("mod market: no window, opening one first")
+                    target.openFolia()
+                }
+                target.bridge.sendUiCommand(OPEN_MOD_MARKET_COMMAND)
+                target.log("mod market: asked the host to open the market panel")
+            } catch (t: Throwable) {
+                target.log("mod market: open failed: ${t::class.java.name}: ${t.message}")
+            }
+        }
+
+        /**
+         * issue #23 配置页入口: `preference_config.json` 「模组 → 打开模组文件夹」button target.
+         *
+         * Sibling of the market page's own 「打开模组文件夹」 button, for the case where the window
+         * cannot be opened at all: the mods directory is a plain folder, so a user can drop a mod in
+         * by hand without ever starting WebView2.
+         *
+         * Same two-argv rule as [FoliaDiagnostics.logFolderCommand]: `explorer.exe` and the path are
+         * **separate** ProcessBuilder arguments. Joining them (or passing `"/select,<path>"`) makes
+         * ProcessBuilder quote the whole thing into one unrecognised argument and Explorer lands in
+         * Documents instead (`docs/lessons.md` §6).
+         */
+        @JvmStatic
+        @JvmName("onOpenModsFolder")
+        fun onOpenModsFolder() {
+            val target = instance
+            if (target == null) {
+                runCatching {
+                    WorkshopApi.ui.toast(
+                        "spw-folia 插件未启动，无法定位模组文件夹；请在 SPW 插件管理里启用后重启",
+                        WorkshopApi.Ui.ToastType.Warning,
+                    )
+                }
+                return
+            }
+            try {
+                val dir = FoliaModStore.modsRoot(File(target.pluginContext.pluginPath))
+                val ok = runCatching {
+                    // Two argv entries, never one joined string — see the KDoc above.
+                    ProcessBuilder(listOf("explorer.exe", dir.absolutePath)).start()
+                    true
+                }.getOrElse { failure ->
+                    target.log("mods: open folder failed: ${failure::class.java.name}: ${failure.message}")
+                    false
+                }
+                target.log("mods: open folder ${dir.absolutePath} ok=$ok")
+            } catch (t: Throwable) {
+                target.log("mods: open folder failed: ${t::class.java.name}: ${t.message}")
+            }
         }
     }
 }

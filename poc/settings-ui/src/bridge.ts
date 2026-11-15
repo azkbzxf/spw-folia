@@ -632,8 +632,13 @@ export const subscribeSettingsRoundTrip = (): (() => void) => {
  *
  *  The Shim in poc/webview/host/Shim.js emits the agreed contract as `ui` events with
  *  `action: 'toggle-settings' | 'open-settings' | 'close-settings'` (F1 / host `command`), and also
- *  calls `window.__SPW_FOLIA_SETTINGS_UI__` directly when it exists — both names are exposed here. */
-const uiActionToCommand = (action: string | undefined): 'open' | 'close' | 'toggle' => {
+ *  calls `window.__SPW_FOLIA_SETTINGS_UI__` directly when it exists — both names are exposed here.
+ *
+ *  issue #23 配置页入口: `open-mod-market` is a `ui` action too, but it is **not** an overlay command —
+ *  the market is a sibling modal with its own state (`modMarketOpen` in App.tsx). Without the explicit
+ *  `'none'` below it would fall into the `default: toggle` arm, i.e. pressing 「模组市场」 in SPW's 配置
+ *  page would open the market AND toggle the settings overlay underneath it. */
+const uiActionToCommand = (action: string | undefined): 'open' | 'close' | 'toggle' | 'none' => {
     switch (action) {
         case 'open':
         case 'open-settings':
@@ -643,6 +648,8 @@ const uiActionToCommand = (action: string | undefined): 'open' | 'close' | 'togg
         case 'close-settings':
         case 'settings-close':
             return 'close';
+        case 'open-mod-market':
+            return 'none';
         default:
             return 'toggle';
     }
@@ -689,13 +696,15 @@ export const registerSettingsUiController = (controls: { open: () => void; close
         const action = uiActionToCommand(payload?.action);
         if (action === 'open') controller.open();
         else if (action === 'close') controller.close();
-        else controller.toggle();
+        else if (action === 'toggle') controller.toggle();
     });
     const offShim = bridgeOn<{ action?: string }>('ui', payload => {
         const action = uiActionToCommand(payload?.action);
         if (action === 'open') controller.open();
         else if (action === 'close') controller.close();
-        else controller.toggle();
+        else if (action === 'toggle') controller.toggle();
+        // 'none' = an action this controller does not own (currently `open-mod-market`). Explicitly a
+        // no-op rather than falling through to toggle: see uiActionToCommand's KDoc.
     });
     return () => {
         offLocal();

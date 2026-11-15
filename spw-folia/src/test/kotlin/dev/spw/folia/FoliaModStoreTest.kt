@@ -498,6 +498,69 @@ class FoliaModStoreTest {
         assertEquals("mods: action=install -> 失败：\"C:\\Users\\x\"", Json.stringField(line, "msg"))
     }
 
+    /**
+     * issue #23 配置页入口: the `command` line (plugin -> host) that carries 「模组市场」.
+     *
+     * This is the **first** command the plugin ever sends the host, so the shape has to be pinned
+     * rather than reviewed: the host reads it with the same `JsonUtil.GetString(msg, "command")` it
+     * uses for its own commands, and a splice-instead-of-escape here would let a bad action inject a
+     * second member into the line. One string with a quote in it is the whole falsification.
+     */
+    @Test
+    fun `the command stdin line carries one escaped action name`() {
+        val line = FoliaHostBridge.commandLine(FoliaPlugin.OPEN_MOD_MARKET_COMMAND)
+        assertFalse("the protocol is line oriented: no newline may survive", line.contains('\n'))
+        assertFalse(line.contains('\r'))
+        assertEquals("command", Json.stringField(line, "t"))
+        assertEquals(
+            "the host resolves the action by this exact string",
+            "open-mod-market",
+            Json.stringField(line, "command"),
+        )
+        // A hostile/typo'd action must stay a VALUE, never become a second member of the envelope.
+        val hostile = FoliaHostBridge.commandLine("x\",\"command\":\"close")
+        assertEquals("x\",\"command\":\"close", Json.stringField(hostile, "command"))
+        assertEquals(
+            "the envelope keeps exactly the two members it declares: $hostile",
+            2,
+            Regex("\"(t|command)\"\\s*:").findAll(hostile).count(),
+        )
+    }
+
+    /**
+     * The name the 配置 page's `on_click` points at must be the one the constant feeds the host.
+     *
+     * `preference_config.json` is the contract SPW resolves by reflection; nothing at compile time
+     * connects `dev.spw.folia.FoliaPlugin.onOpenModMarket` to `OPEN_MOD_MARKET_COMMAND`. This test
+     * closes the loop from the DECLARATION side: the button exists, and the action it eventually
+     * produces is the string the page's `ui` handler answers to.
+     */
+    @Test
+    fun `the mods group is declared with the two buttons and its own config file`() {
+        val declaration = javaClass.classLoader
+            ?.getResourceAsStream("preference_config.json")
+            ?.use { it.readBytes().toString(Charsets.UTF_8) }
+        assertNotNull("preference_config.json must ship inside the jar", declaration)
+        val text = declaration!!
+        assertTrue("the 模组 group needs its own config file (换组 = 换存储文件)", text.contains("\"mods.json\""))
+        assertTrue(text.contains("\"title\": \"模组\""))
+        assertTrue(
+            "the market button must resolve to a real static method",
+            text.contains("dev.spw.folia.FoliaPlugin.onOpenModMarket"),
+        )
+        assertTrue(
+            "the folder button must resolve to a real static method",
+            text.contains("dev.spw.folia.FoliaPlugin.onOpenModsFolder"),
+        )
+        assertFalse(
+            "the mods group must not declare a switch: verify-all's contract only tracks switches",
+            text.contains("\"mods.json\"") && text.substringAfter("\"mods.json\"").substringBefore("]").contains("\"type\": \"switch\""),
+        )
+        // The plugin-to-page action the buttons produce, pinned here so a rename shows up as a test
+        // failure instead of a dead button.
+        assertEquals("open-mod-market", FoliaPlugin.OPEN_MOD_MARKET_COMMAND)
+    }
+
     // ------------------------------------------------------- injected settings member ----
 
     /**

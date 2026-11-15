@@ -36,6 +36,7 @@ import {
     RANGE_INPUT_CLASS,
 } from '~/model/theme';
 import {
+    bridgeOn,
     forceEmitSettings,
     getBridge,
     registerSettingsUiController,
@@ -118,12 +119,30 @@ const App: React.FC<AppProps> = ({ injected }) => {
     /**
      * issue #23: 打开市场页。先把右下角那张小面板收起来 —— 市场是整屏模态，它盖上去以后那张面板
      * 描述的还是「播放页设置」，两层面板同时活着会让 ESC 与热区的归属变得说不清。
-     * 市场页的入口只在这张菜单里，而那本来就是「设置浮层关着」的场景，所以不需要动 `open`。
+     *
+     * **不动 `open`（设置浮层）**：市场是并列模态，不是设置浮层里的一个页面（`ModMarketPanel` 与
+     * 浮层那个 div 是同级的两个节点）。把浮层一起打开会让两个各自抢 ESC 的 window-capture 监听同时
+     * 活着 —— `stopPropagation()` 拦得住别的节点，拦不住**挂在同一节点上的后注册监听**，一次 ESC
+     * 就会同时关掉市场和浮层，破坏「一次 ESC 只关一层」的契约（`docs/protocol.md` §8）。
      */
     const openModMarket = useCallback(() => {
         setPlayerPanelOpen(false);
         setModMarketOpen(true);
     }, []);
+
+    /* issue #23 配置页入口: 插件 → 宿主 → 页面 `ui` action `open-mod-market`。
+     * 订阅方式与 `bridge.ts` 里那两处 `ui` 监听一致（`bridgeOn`），但方向相反：那两处把 overlay
+     * 命令交给 controller，这里只认市场这一个 action —— 两者是**平级**的状态。
+     *
+     * 为什么不用 `registerSettingsUiController` 扩一个方法：那个对象是「设置浮层的控制面」
+     * （protocol §7.5），宿主只调 open/close/toggle；把市场塞进去会让宿主以为它是同一层。 */
+    useEffect(() => {
+        const off = bridgeOn<{ action?: string }>('ui', payload => {
+            if (payload?.action !== 'open-mod-market') return;
+            openModMarket();
+        });
+        return off;
+    }, [openModMarket]);
 
     useConfigPublisher();
 
@@ -222,10 +241,9 @@ const App: React.FC<AppProps> = ({ injected }) => {
              *  very control meant to help a broken setup would be unreachable in passthrough mode. */
             push(document.querySelector('[data-spw-chrome="problem-report"]'));
             push(document.querySelector('[data-spw-chrome="problem-report-panel"][data-open="true"]'));
-            /* issue #23: 市场页的入口行（在右下角菜单里）与市场页本身。前者与其它菜单行一样常驻；
-             * 后者是全屏模态 —— 穿透模式下不给它上报热区的话，用户在穿透时打开市场页就会点不到任何
-             * 一张卡片（每一次点击都会落到底下的桌面）。 */
-            push(document.querySelector('[data-spw-chrome="mod-market-row"]'));
+            /* issue #23 配置页入口: 市场页本身。它的**入口行**已经不在右下角菜单里了（用户要求搬去
+             *  SPW 配置页），所以这里只剩面板这一条 —— 但这条是必需的：市场是全屏模态，穿透模式下
+             *  不上报热区的话，用户打开市场页会点不到任何一张卡片（每一次点击都落到底下的桌面）。 */
             push(document.querySelector('[data-spw-mod-market="true"]'));
             push(document.querySelector('[data-spw-settings-overlay="true"]'));
             reportHitRegions(rects);
@@ -441,8 +459,6 @@ const App: React.FC<AppProps> = ({ injected }) => {
                 onToggleShowPlaybackBar={setShowPlaybackBar}
                 showPlaybackBarLabel={t('options.showPlaybackBar')}
                 panelLabel={t('options.playerPageSettings')}
-                modMarketLabel={t('options.modMarket')}
-                onOpenModMarket={openModMarket}
             />
             {/* v0.4.0: with the player page opaque the chrome otherwise offers no way out of the
              *  fullscreen window (ESC / the host hotkey work, but they are not discoverable), so the

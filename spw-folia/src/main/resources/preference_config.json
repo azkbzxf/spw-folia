@@ -35,6 +35,26 @@
       ]
     },
     {
+      "title": "模组",
+      "config": "mods.json",
+      "preferences": [
+        {
+          "type": "button",
+          "title": "模组市场",
+          "summary": "打开 Folia 窗口并直接进入模组市场：从官方市场安装社区模组（歌词动画样式、播放条按钮）。Beta：模组是第三方代码，行为与稳定性由模组作者负责，安装前请自行判断。",
+          "arrow_type": "none",
+          "on_click": "dev.spw.folia.FoliaPlugin.onOpenModMarket"
+        },
+        {
+          "type": "button",
+          "title": "打开模组文件夹",
+          "summary": "在资源管理器里打开插件的 mods 目录。手工把解包好的模组文件夹（含 mod.json）放进去同样生效，下次打开窗口会被扫描到。",
+          "arrow_type": "none",
+          "on_click": "dev.spw.folia.FoliaPlugin.onOpenModsFolder"
+        }
+      ]
+    },
+    {
       "title": "诊断与日志",
       "config": "diagnostics.json",
       "preferences": [

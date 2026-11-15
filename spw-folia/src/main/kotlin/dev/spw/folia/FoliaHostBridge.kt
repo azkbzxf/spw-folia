@@ -368,6 +368,31 @@ internal class FoliaHostBridge(
         sendLine(logLine(level, message))
     }
 
+    /**
+     * issue #23 配置页入口: asks the host to perform one of its own `command` actions (protocol §1
+     * `command`, the same envelope the plugin already receives from the tray/shortcut side).
+     *
+     * ## Why this exists at all
+     *
+     * Until now the plugin only ever *answered* the host; every `ui` action the page saw was issued
+     * by the host itself (`--open-settings` on first run, F1, ESC). Moving the mod-market entry into
+     * SPW's 配置 page inverts that direction: the button lives in the plugin process, so the plugin
+     * has to ask the HOST to tell the PAGE. The host's `HandleCommand` is already the place that owns
+     * "post this to the page, and replay it once the page is ready", so the plugin must not post to
+     * the page itself (it cannot — it has no WebView2 object).
+     *
+     * ## Discipline
+     *
+     * [action] is escaped rather than trusted: a caller with a typo must produce one invalid *value*
+     * the host ignores, never a second JSON member that changes the meaning of the line. There is no
+     * acknowledgement and no retry — the host replays the action on the next `bridgeReady`, so a
+     * message that arrives before the page exists is not lost: the plugin sends it once and the host
+     * owns delivery.
+     */
+    fun sendUiCommand(action: String) {
+        sendLine(commandLine(action))
+    }
+
     /** Optional mods provider; called on `ready` to replay the current list (never blocking there). */
     @Volatile
     var modsProvider: (() -> String?)? = null
@@ -865,6 +890,16 @@ internal class FoliaHostBridge(
         /** The complete `log` line (plugin -> host) for one message. Same idea as [modsLine]. */
         internal fun logLine(level: String, message: String): String =
             "{\"t\":\"log\",\"level\":${Json.str(level)},\"msg\":${Json.str(message)}}"
+
+        /**
+         * The complete `command` line (plugin -> host) for one host action.
+         *
+         * `internal` so a JVM test can pin the shape the same way [modsLine] / [logLine] do: one line,
+         * `command` as an escaped string member, and the action never spliced in raw. The host parses
+         * it with the same `JsonUtil.GetString(msg, "command")` it already uses for its own commands.
+         */
+        internal fun commandLine(command: String): String =
+            "{\"t\":\"command\",\"command\":${Json.str(command)}}"
 
         /** v0.3.0: queue is diffed every 500 ms; controls force an immediate push via queueDirty. */
         private const val QUEUE_CHECK_EVERY_TICKS = 5L

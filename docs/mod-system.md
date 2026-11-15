@@ -141,6 +141,56 @@ listFoliumHostRegistries().forEach(r => r.unregisterAll(modId));
 **不碰** `ISLAND_Z_INDEX`（必须 < 200，否则上游 body-portaled 的每个下拉都点不到，
 `docs/lessons.md` §4.1）。
 
+### 5.1.1 入口在 SPW 的配置页（`preference_config.json`），不在播放页
+
+`spw-folia/src/main/resources/preference_config.json` 新增一个 `configs[]` 分区
+**「模组」/ `mods.json`**（紧跟「播放页」，在「诊断与日志」之前），里面两个 `type:"button"`：
+
+| 按钮 | `on_click` | 做什么 |
+|---|---|---|
+| 模组市场 | `dev.spw.folia.FoliaPlugin.onOpenModMarket` | `openFolia()`（没开就开窗）→ 宿主 `command open-mod-market` |
+| 打开模组文件夹 | `dev.spw.folia.FoliaPlugin.onOpenModsFolder` | `ProcessBuilder(listOf("explorer.exe", modsRoot))` |
+
+**必须是新的 config 文件名**：SPW 的 `ConfigManager.getConfig(name)` 按文件名分别存取（换组 = 换存储
+文件，`docs/lessons.md` §3.1）。所以 `mods.json` 而不是塞进 `config.json`。
+
+**为什么是 `button` 而不是 `switch`**：`verify-all.mjs` 的双向契约检查只认 `type:"switch"`
+（`verify-all.mjs:115` + `FoliaDiagnostics.KNOWN_CONFIG_SWITCHES`），加一个 switch 就会要求同步那份
+集合、否则「存在问题」自检报 FAIL。这两个入口不存值，天然是 button。
+
+**整条链路（四个名字，每一处都得一致，写错任何一处只会表现为「按钮没反应」）**：
+
+```
+preference_config.json  on_click: …onOpenModMarket
+   → FoliaPlugin.onOpenModMarket()          @JvmStatic @JvmName，无参
+   → bridge.sendUiCommand("open-mod-market")  → stdin {"t":"command","command":"open-mod-market"}
+   → HostForm.HandleCommand → DeliverPendingModMarket()
+   → page ui action "open-mod-market" → Shim case 'ui' → App.tsx bridgeOn('ui') → setModMarketOpen(true)
+```
+
+**页面未就绪时不丢 message，靠两段各自成立的机制**：
+
+1. **宿主侧**：`modMarketRequested` 标记 + `OnTick` 里的 `DeliverPendingModMarket()`（门控在
+   `webviewReady && navDone`）。**⚠️ 不能挂在 `bridgeReady` 分支上** —— 实测（2026-11-15 本机）
+   设置岛只把 `bridgeReady` 当**页面内本地事件**发出（`bridge.ts` 的 `emitLocally`），它
+   `chrome.webview.postMessage` 从来没发出去，宿主日志里一条 `bridgeReady` 都没有。`HostForm.cs`
+   里那个分支是死代码，`--open-settings` 的打开实际靠的是 `OnTick` 的 2.5 s 兜底计时器。
+   `navDone` 才是本进程真正拥有的事实。
+2. **页面侧**：`Shim.js` 的 `pendingUiIntents`。`emitLocal` 在没有订阅者时是空操作 —— 设置岛 bundle
+   是宿主后注入的，冷启动要 0.5–2 s 才挂载。所以 `case 'ui'` 发现没人收且 action 是
+   `open-mod-market` 时就排队，等 `__SPW_FOLIA__.on('ui', …)` 第一次被调用时（宏任务里）补投。
+   **只排队幂等的一次性意图**：`toggle-settings` 绝不能重放，否则会把用户刚关掉的面板再弹开。
+
+**市场页打开时不动设置浮层**：它是并列模态，`openModMarket` 只 `setModMarketOpen(true)`；
+`bridge.ts` 的 `uiActionToCommand` 对 `open-mod-market` 返回 `'none'`（不落到 `default: toggle`），
+`registerSettingsUiController` 的监听器对 `'none'` 是显式 no-op。把浮层一起打开会让两个各自抢 ESC 的
+window-capture 监听同时活着，一次 ESC 会关掉两层，破坏 `docs/protocol.md` §8 的契约。
+
+**入口行已删除**：`PlayerBackgroundControl.tsx` 的 `mod-market-row` 那一行、`App.tsx` 里的热区上报项、
+`app.css` 的 `.spw-player-bg-row--fourth` / `.spw-player-bg-badge`、i18n 的 `options.modMarket`。
+**保留**的是 `[data-spw-mod-market="true"]` 的热区上报 —— 穿透模式下不给它上报，用户在穿透时打开市场
+会一张卡片都点不到。
+
 ### 5.2 货架上的模组格走「第二套清单」
 
 **一个字节都不许进** `STYLE_ENTRIES` / `STYLE_MODE_SHELF_ORDER` / `StyleMode` 联合 /

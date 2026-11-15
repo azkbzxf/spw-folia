@@ -51,6 +51,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `config` | `config: object` | 可选覆盖：插件强制推送完整 Folia `ObsBrowserSourceConfig`（调试/兼容用，正常不用） |
 | `mods` | `mods:[{id,name,version,author,permissions:[…],enabled,clientEntry,previewUrl,error?}]`, `dir?` | issue #23：已装模组的**全量**清单（变更即全量，不是增量）。`enabled` **必须**是布尔 `true`，宿主按 `=== true` 判定；`clientEntry` 是相对模组根的文件名（如 `client.mjs`）。宿主把 `mods` 数组**原样**转发给页面，只校验它是一个 JSON 数组。数组必须单行（§1 铁律） |
 | `audioMode` | `mode:"loopback"\|"host-fft"\|"off"` | 可选；默认 loopback |
+| `command` | `command:"close"\|"screenshot"\|"settings"\|"open-settings"\|"close-settings"\|"open-mod-market"\|"eval"`, `path?`, `script?` | issue #23 配置页入口新增：**插件 → 宿主的命令**。此前只有宿主发起 `ui` action，现在「模组 → 模组市场」按钮活在插件进程里，它没有 WebView2 对象，所以只能请宿主代发。宿主在页面就绪前收到的 `open-mod-market` 会**记住并在 `navDone` 后补发**（`DeliverPendingModMarket`）；插件侧**不重试、不等 ready**（`FoliaHostBridge.sendUiCommand`）。`command` 走 `Json.str` 转义，绝不是字符串拼接 |
 | `quit` | — | 请求优雅退出 |
 
 ### 1.1 封面字段兼容
@@ -108,7 +109,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `queue` | `{mode,random,index,items:[{id,title,artist,album}]}` | 记入 `inputs.queue` 并 `emit('queue')`，播放条与播放列表据此渲染 |
 | `audio` | `{power,bass,lowMid,mid,vocal,treble,spectrum:[…]}` | 转成 `audio` 事件，**已是 0..255 gamma 尺度**；spectrum 为 0..255 数组（1024 bins） |
 | `config` | `{config}` | 直接分发 `config` 事件（覆盖页面自算，调试用） |
-| `ui` | `{settingsOpen}` | 更新 `__SPW_FOLIA__.ui` 状态 |
+| `ui` | `{settingsOpen}` | 更新 `__SPW_FOLIA__.ui` 状态。**另外**还有 issue #23 配置页入口的 `action:"open-mod-market"`：设置岛据此打开「模组市场」并列模态（`modMarketOpen`），它**不是**设置浮层命令，`uiActionToCommand` 对它返回 `'none'`，不会顺便 toggle 浮层。Shim 在**还没有任何 `ui` 订阅者**时把这一条留在 `pendingUiIntents` 里，等设置岛第一次 `on('ui')` 时补投 —— 页面组件晚挂载时这条消息不会丢 |
 | `envReport` | 宿主环境自检对象（§3.5） | 记入 `inputs.envReport` 并 `emit('envReport')`；「出现问题」面板据此渲染 |
 | `beat` | `{beatImpact,downbeatImpact}` | **目前宿主不发送这条消息**，`beatImpact/downbeatImpact` 恒为 0。Shim 侧的接收路径与 `window.__SPW_FOLIA_BEAT__` 钩子已就绪，但宿主没有任何发 `beat` 的代码 —— 加节拍特效前必须先补宿主侧（见 [`docs/audio-timeline.md`](audio-timeline.md)） |
 | `mods` | `{mods:[…]}` | issue #23：插件的模组清单**原样转发**（数组不动、不重新序列化）。Shim 的处理顺序是**先存 `inputs.mods` 再激活**（激活中的模组代码会调 `listMods()`，先存才能答对），然后 `emitLocal('mods')` 并驱动激活。导航完成时宿主会**重放**最后一份 `mods`（页面可能晚于插件的首次推送） |
@@ -126,7 +127,7 @@ window.__SPW_FOLIA__ = {
   getSettings(), setSettings(partial),  // 内存 + 持久化（emit({type:'settings'})）
   requestClose(),
   inputs: { state, lyrics, track, queue, envReport },   // 只读快照
-  ui: { isSettingsOpen(), openSettings(), closeSettings() },
+  ui: { isSettingsOpen(), openSettings(), closeSettings(), openModMarket() },
   lastConfig()                          // 播放页收到的最后一版 config（预览子帧镜像用）
 }
 ```
@@ -353,6 +354,12 @@ unknown 绝不表述成「缺失」。
   右下角播放页设置按钮（透明背景 / 鼠标穿透 / 显示播放条）。
 - 宿主首次打开且无持久化设置时带 `--open-settings`；之后直接显示视觉器。菜单再次点击时窗口已存在
   则置前（不重复开窗）。宿主收到 `command close-settings` 时调 `ui.closeSettings()`，`open-settings` 相反。
+- **模组市场不再有播放页入口**（issue #23 配置页入口）：它曾经是右下角菜单里的 `mod-market-row`
+  一行，现在入口是 SPW 配置页「模组 → 模组市场」，链路是
+  `preference_config.json` 的 `on_click` → `FoliaPlugin.onOpenModMarket` → stdin `command open-mod-market`
+  → 宿主 `ui action open-mod-market` → 设置岛。市场页与设置浮层是**并列模态**（两个独立 state），
+  一次 ESC 只关市场，第二次才轮到宿主关窗。
+  「模组 → 打开模组文件夹」是同一分区的第二个按钮，纯插件侧动作（`explorer.exe` + 路径**两个 argv**）。
 - 鼠标侧键「返回」（XBUTTON1，DOM `button===3`）与 ESC 同义：Shim 在 window capture 阶段处理
   `mousedown`，overlay 打开时只关 overlay，否则发 `{"type":"action","name":"close"}`（`reason=user`）。
   透明模式下由宿主 `TransparencyInputCatcher` 转发 `WM_XBUTTONDOWN/UP`；侧键「前进」不退出。

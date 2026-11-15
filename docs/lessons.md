@@ -158,6 +158,15 @@
 - **改配置页后跑 `packaging/tools/verify-all.mjs`** 的静态契约 4 项：三处版本戳一致、
   声明的开关都有读取方（且读取方没有多余键）、每组指向独立 config 文件、被移动的开关仍保留
   迁移路径。
+- **`button` 型配置项不参与那份契约检查，但方法名是硬契约。** `on_click` 写成
+  `<类全名>.<方法>`，SPW 反射调用时**无参、无 try/catch**，所以：① 方法必须是 companion 里的
+  `@JvmStatic` + `@JvmName`；② `@JvmName` 的字符串与 json 里的 `on_click` 尾段**逐字一致**（改任一处
+  都必须同时改另一处，否则按钮永远没反应且两端都不报错）；③ 方法体自己吞掉一切异常、自己判
+  `instance == null`（插件被停用时按钮仍可点）。
+- **`bridgeReady` 不是宿主能依赖的信号。** 实测（2026-11-15）：设置岛只把它当**页面内本地事件**
+  发出（`emitLocally`），`chrome.webview.postMessage` 从未发过它 —— `HostForm.cs` 的 `bridgeReady`
+  分支是死代码，`--open-settings` 实际走 `OnTick` 的 2.5 s 兜底计时器。要「页面能收消息了」这个
+  事实，用本进程自己的 `navDone`（`OnNavigationCompleted` 里置的），别新往 `bridgeReady` 上挂东西。
 
 ### 3.2 给用户可调项之前
 

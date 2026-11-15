@@ -86,10 +86,29 @@
 
   function emitLocal(type, payload) {
     var list = listeners[type];
-    if (!list) return;
+    if (!list || list.length === 0) return false;
     for (var i = 0; i < list.length; i++) {
       try { list[i](payload); } catch (e) { console.error('[spw-folia] listener error', type, (e && e.stack) ? e.stack : e); }
     }
+    return true;
+  }
+
+  // ------------------------------------------------- issue #23: ui 意图的「一次交付」队列
+  //
+  // 宿主可以把一条 `ui` 消息在**任何**时刻 post 过来，包括设置岛还没挂载的时候。`emitLocal` 只是
+  // 遍历当前订阅者，订阅者为 0 时消息就静默消失 —— 这不是可以接受的失败方式：「模组 → 模组市场」
+  // 点下去什么都不发生，日志里也没有一行。
+  //
+  // Shim 在这里排队，并在设置岛**第一次注册 `ui` 监听器的那一刻**投递（见 on()）。选这个时刻而不是
+  // 定时器：设置岛 bundle 是宿主后注入的脚本，它的挂载时机取决于磁盘与 WebView2 的冷启动速度（实测
+  // 冷启 0.5–2 s 都出现过），而「注册了 ui 监听」正是「它有能力接收」的唯一定义。
+  //
+  // 只排队**幂等的一次性意图**。`toggle-settings` 绝不能走这条路 —— 重放一条 toggle 会在用户已经
+  // 关掉面板之后把它再弹开一次。
+  var pendingUiIntents = [];
+
+  function queueUiIntent(action) {
+    if (pendingUiIntents.indexOf(action) < 0) pendingUiIntents.push(action);
   }
 
   // ------------------------------------------------- v0.4.8: Folia 原版开屏 (splash) 接管
@@ -375,6 +394,12 @@
     if (action === 'open-settings') callSettingsUi('open');
     else if (action === 'close-settings') callSettingsUi('close');
     else if (action === 'toggle-settings') callSettingsUi('toggle');
+    // issue #23 配置页入口: the plugin's 「模组 → 模组市场」 button. The market is a sibling modal, not
+    // part of the settings overlay, so neither `open` nor `close` above is right — the settings island
+    // owns the flag (`modMarketOpen` in App.tsx) and answers to this action through its own `ui`
+    // listener (bridge.ts). Nothing to call on the controller here: `emitLocal('ui')` is the whole
+    // delivery path (the `case 'ui'` branch below does exactly that after calling this function).
+    else if (action === 'open-mod-market') { /* page-owned: see emitLocal('ui') */ }
   }
 
   window.addEventListener('error', function (e) {
@@ -639,7 +664,11 @@
       case 'ui':
         inputs.ui = msg;
         applyUiAction(msg.action);
-        emitLocal('ui', msg);
+        // issue #23: `open-mod-market` must survive a page that has not mounted the settings island
+        // yet. `emitLocal` is a no-op while nobody listens, so queue it and deliver on the first `ui`
+        // listener registration (see pendingUiIntents). Everything else is delivered as before and
+        // never queued: a replayed `toggle-settings` would reopen a panel the user just closed.
+        if (!emitLocal('ui', msg) && msg.action === 'open-mod-market') queueUiIntent(msg.action);
         break;
       case 'envReport':
         // issue #12: the host's half of the 「出现问题」 environment report. The settings panel
@@ -1282,6 +1311,18 @@
     on: function (type, fn) {
       var list = listeners[type] || (listeners[type] = []);
       if (list.indexOf(fn) < 0) list.push(fn);
+      // issue #23: the settings island has just become able to receive `ui` actions — deliver the one
+      // that arrived before it existed. Deferred by a task so the subscriber finished registering:
+      // `bridgeOn('ui', …)` returns only after this call, and a synchronous replay would run the
+      // listener before its own module finished wiring up.
+      if (type === 'ui' && pendingUiIntents.length > 0) {
+        window.setTimeout(function () {
+          while (pendingUiIntents.length > 0) {
+            var action = pendingUiIntents.shift();
+            emitLocal('ui', { action: action, replayed: true });
+          }
+        }, 0);
+      }
     },
     off: function (type, fn) {
       var list = listeners[type];
@@ -1320,11 +1361,15 @@
     openSettings: function () { applyUiAction('open-settings'); emitLocal('ui', { action: 'open-settings' }); },
     closeSettings: function () { applyUiAction('close-settings'); emitLocal('ui', { action: 'close-settings' }); },
     toggleSettings: function () { applyUiAction('toggle-settings'); emitLocal('ui', { action: 'toggle-settings' }); },
+    /* issue #23 配置页入口: lets a page-side caller (probe, mod, devtools) drive the market panel the
+     * same way the host command does. Not used by the plugin — that path goes through the host. */
+    openModMarket: function () { applyUiAction('open-mod-market'); emitLocal('ui', { action: 'open-mod-market' }); },
     ui: {
       isSettingsOpen: isSettingsOpen,
       openSettings: function () { applyUiAction('open-settings'); emitLocal('ui', { action: 'open-settings' }); },
       closeSettings: function () { applyUiAction('close-settings'); emitLocal('ui', { action: 'close-settings' }); },
-      toggleSettings: function () { applyUiAction('toggle-settings'); emitLocal('ui', { action: 'toggle-settings' }); }
+      toggleSettings: function () { applyUiAction('toggle-settings'); emitLocal('ui', { action: 'toggle-settings' }); },
+      openModMarket: function () { applyUiAction('open-mod-market'); emitLocal('ui', { action: 'open-mod-market' }); }
     },
     getStats: function () {
       return { fps: lastFps, longFrames: longFrames, atMs: Math.round(performance.now()), href: location.href };
