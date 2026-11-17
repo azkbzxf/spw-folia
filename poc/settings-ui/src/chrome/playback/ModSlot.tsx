@@ -19,6 +19,7 @@
  * 绝不能影响播放条本身（更不能让 React 的渲染抛出去）。所以每次调用都包 try/catch + `.catch()`。
  */
 import React, { useEffect, useRef } from 'react';
+import { bridgeOn } from '~/bridge';
 import {
     createModProgressContext,
     readModProgressButtons,
@@ -155,14 +156,25 @@ const ModSlot: React.FC<ModSlotProps> = ({ slot, rootRef, clockRef, durationMs, 
             });
         };
         const off = subscribeModProgress(refresh);
-        /* Shim 激活完模组会发 `modsReady`：它不携带按钮清单（清单在那份全局里），只当刷新信号 ——
-         * 激活发生在订阅之后是常态，没有这条就会一直空着。 */
+        /* v0.5.3: 也要订阅 `modsReady` 桥事件。
+         *
+         * 只订阅全局数组的 `subscribe` 是不够的：那个 `subscribe` 由 Shim 的 `makeSubscribable` 挂在
+         * 数组上，**数组被整体替换时**（`refreshModVisualizers` / `publishGlobal` 都会新建一个）订阅者
+         * 会被带到新数组上，但**激活过程中**的「按钮已经注册了」这一拍不一定有人通知到设置岛 —— 设置岛
+         * 是独立 bundle，激活发生在播放页那一侧。
+         *
+         * 实测症状：`__SPW_FOLIA_MOD_PROGRESS__` 里明明有一条 `{slot:'trailing', mount:function}`，
+         * 播放条上却一个 slot 都没有（`[data-spw-mod-slot]` 数 = 0），因为 ModSlot 只在挂载时读了一次、
+         * 之后 10 秒轮询窗口内没等到，而激活恰好发生在窗口关闭之后。`modsReady` 是 Shim 收敛完所有
+         * 激活后必发的那一条，是这里唯一可靠的「现在可以读了」信号。 */
+        const offReady = bridgeOn<unknown>('modsReady', refresh);
         refresh();
         const timer = window.setInterval(refresh, 250);
         const stop = window.setTimeout(() => window.clearInterval(timer), 10_000);
         return () => {
             alive = false;
             off();
+            offReady();
             window.clearInterval(timer);
             window.clearTimeout(stop);
         };
@@ -178,7 +190,26 @@ const ModSlot: React.FC<ModSlotProps> = ({ slot, rootRef, clockRef, durationMs, 
     }, []);
 
     const visible = buttons.filter(button => !failed.has(button.id));
-    if (visible.length === 0) return null;
+    /* 诊断锚点：**永远**渲染一个空 span，把「读到了几条 / 为什么没画」写进属性。
+     *
+     * 这条是为 v0.5.3 加的，起因是一个只在一半链路上复现的 bug：`__SPW_FOLIA_MOD_PROGRESS__` 里明明
+     * 有一条 `{slot:'trailing', mount:function}`（探针读得到），播放条上却一个 slot 都没有
+     * （`[data-spw-mod-slot]` 数 = 0）。返回 `null` 时页面上什么都不留，于是「没读到」和「读到了但被
+     * 过滤掉」在外部看起来完全一样 —— 那正是这类问题最难查的地方。
+     *
+     * 属性里不写函数或大对象，只写数字和 id，所以对 DOM 体积没有影响；`verify-click-zones` 数的是
+     * `.spw-playback-*` 那些 class，这个空 span 不会被它当成控件。 */
+    if (visible.length === 0) {
+        return (
+            <span
+                className="spw-playback-mod-slot"
+                data-spw-mod-slot={slot}
+                data-spw-mod-slot-count="0"
+                data-spw-mod-slot-seen={buttons.length}
+                data-spw-mod-slot-failed={failed.size}
+            />
+        );
+    }
 
     return (
         <span className="spw-playback-mod-slot" data-spw-mod-slot={slot} data-spw-mod-slot-count={visible.length}>

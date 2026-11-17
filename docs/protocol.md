@@ -71,6 +71,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `control` | `action:"toggle"\|"previous"\|"next"\|"seek"\|"shuffle"\|"queue-play"`, `positionMs?`, `index?`, `random?` | 播放条控制请求（由 §3.1 页面 `control` 转发），插件落到宿主播放器接口，见 §3.4 |
 | `modAction` | `action:"install"\|"uninstall"\|"setEnabled"\|"openFolder"`, `modId?`, `actionId?`, `enabled?`, `download?{url,sha256,fileName}` | issue #23：页面请求的模组动作（由 §3.1 页面 `modAction` 转发）。宿主**只做字段校验与转发**：`action` 白名单外丢弃 + warn；`modId` 必填（`openFolder` 除外）且必须匹配上游 manifest 的 id 模式 `^[a-z0-9][a-z0-9-]*$`；`install` 的 `download.url` 必须是 `https://`。**`download` 由宿主逐字段读出再转义追加，绝不内嵌页面给的子 JSON**（防注入插件 stdin）。`actionId` 原样回传，供页面配对结果 |
 | `log` | `level:"info"\|"warn"\|"error"`, `msg` | 插件诊断日志，宿主镜像进自己的日志流（不转发页面）。模组动作的结果走这条通道回报 |
+| `modProgress` | `phase:"download"\|"verify"\|"unpack"\|"done"`, `actionId?`, `modId?`, `received`, `total` | v0.5.3（issue #23 第二轮）：安装进度。**与 `log` 相反，这条是要转发给页面的** —— 下载百分比是用户正在看的状态，不是事后可查的结果。`total = -1` 表示分母未知（分块传输 / 解包），页面据此画不定长条。插件按 ≥200 ms 且百分比变化节流（这条通道队列满了会丢最旧的 `state` 时钟）。宿主白名单 `phase`、逐字段重拼后 post 给页面 |
 
 ## 3. 宿主 ↔ 页面
 
@@ -114,6 +115,7 @@ SPW (JVM) ── spawn ──> spw-folia-host.exe（C#/.NET，全屏窗口 + Web
 | `beat` | `{beatImpact,downbeatImpact}` | **目前宿主不发送这条消息**，`beatImpact/downbeatImpact` 恒为 0。Shim 侧的接收路径与 `window.__SPW_FOLIA_BEAT__` 钩子已就绪，但宿主没有任何发 `beat` 的代码 —— 加节拍特效前必须先补宿主侧（见 [`docs/audio-timeline.md`](audio-timeline.md)） |
 | `mods` | `{mods:[…]}` | issue #23：插件的模组清单**原样转发**（数组不动、不重新序列化）。Shim 的处理顺序是**先存 `inputs.mods` 再激活**（激活中的模组代码会调 `listMods()`，先存才能答对），然后 `emitLocal('mods')` 并驱动激活。导航完成时宿主会**重放**最后一份 `mods`（页面可能晚于插件的首次推送） |
 | `modsReady` | `{count,active,errors}` | Shim 在每次激活/停用收敛后发出的**页面 → 宿主**诊断消息。宿主只记日志，不消费 |
+| `modProgress` | `{phase,actionId?,modId?,received,total}` | v0.5.3：插件的安装进度经宿主转发到页面。Shim 存进 `inputs.modProgress` 再 `emitLocal`（晚挂载的面板能读到当前这一拍）。**市场专用窗口里 `case 'mods'` 会跳过 `modHost.reconcile`**（`__SPW_FOLIA_MARKET_ONLY__`），那个页面没有 Folia 的 visualizer 注册表 |
 
 ### 3.3 注入全局（Shim.js 暴露，设置岛使用）
 

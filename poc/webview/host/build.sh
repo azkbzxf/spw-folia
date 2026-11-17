@@ -23,6 +23,7 @@ console.log('DefaultConfig.json:', fs.statSync('DefaultConfig.json').size, 'byte
   -out:"$OUT\\spw-folia-host.exe" \
   -win32manifest:"$(cygpath -w "$(pwd)/app.manifest")" \
   -resource:"$(cygpath -w "$(pwd)/Shim.js")",Shim.js \
+  -resource:"$(cygpath -w "$(pwd)/ModHostActivator.js")",ModHostActivator.js \
   -resource:"$(cygpath -w "$(pwd)/Overlay.js")",Overlay.js \
   -resource:"$(cygpath -w "$(pwd)/DefaultConfig.json")",DefaultConfig.json \
   -r:System.dll \

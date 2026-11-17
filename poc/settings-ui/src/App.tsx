@@ -174,6 +174,22 @@ const App: React.FC<AppProps> = ({ injected }) => {
         }
     }, [state.transparentPlayerBackground, state.mousePassthrough]);
 
+    /* v0.5.4（用户报告：「开启鼠标穿透后应当默认关闭并不显示『显示播放条』」）：
+     * 进入穿透时把播放条关掉。
+     *
+     * 为什么必须落成一次**状态变更**而不是只在 `PlaybackBar` 里早退：那个组件已经有一道
+     * `if (… || mousePassthrough || …) return null`，所以「看不见」早就成立；用户的问题是**开关还亮着**
+     * —— 退出穿透的瞬间播放条会自己回来，而用户从没要求它回来。把 `showPlaybackBar` 也关掉，退出
+     * 穿透后它是关的，用户要就自己再打开。
+     *
+     * 这里**不**在退出穿透时自动打开：用户自己关掉的东西不该被我们打开（与「切样式不重置随机池」同一条
+     * 纪律）。同理也不碰 `showPlaybackBar` 的持久值以外的东西 —— 写进去就随设置树下发，下次开窗一致。 */
+    useEffect(() => {
+        if (state.mousePassthrough !== true) return;
+        const store = useSettingsStore.getState();
+        if (store.showPlaybackBar) store.setShowPlaybackBar(false);
+    }, [state.mousePassthrough]);
+
     // Folia's settings window tints all of its text from the global --text-primary the app shell
     // sets from the current theme; the injected bundle owns that variable for the overlay subtree.
     useEffect(() => {
@@ -336,7 +352,26 @@ const App: React.FC<AppProps> = ({ injected }) => {
         return () => window.removeEventListener('keydown', onKeyDown, true);
     }, [open, close]);
 
+    /* v0.5.4（用户报告：「开启鼠标穿透后右下角的按钮全部消失了」）：**穿透期间不许淡出**。
+     *
+     * 这条淡出靠页面自己的 `pointermove` 唤醒（2.5 s 无操作就 `opacity:0`）。而鼠标穿透的含义正是
+     * 「每一次点击都属于桌面」：捕获窗只在已上报的热区里接事件，页面**收不到**外面那些 pointermove。
+     * 于是进入穿透 → 等 2.5 秒 → `chromeVisible=false` → 齿轮淡成 `opacity:0`，
+     * 而唯一能把它唤醒的输入恰好到不了页面 —— **右上角齿轮就此永久消失**，用户只能靠
+     * `Ctrl+Alt+B` / `Ctrl+Alt+Shift+G` 这两个热键出来，而他多半不知道。
+     *
+     * 所以穿透期间把「空闲」这条路径整个停掉：`chromeVisible` 恒为 true，齿轮（以及启用时的
+     * 「出现问题」按钮）一直画在屏幕上、一直在热区里。透明确实不想要 chrome 时用户仍可用热键退出穿透
+     * （`docs/lessons.md` §4：任何限制输入的 UI 状态必须常驻「热键 + 可见控件」双通道）。
+     *
+     * 依赖里带 `state.mousePassthrough`：进出穿透都要重新起停这个计时器，否则退出后第一次淡出会用
+     * 穿透期间残留的旧状态。 */
     useEffect(() => {
+        if (state.mousePassthrough === true) {
+            // 穿透中：常显，不装任何计时器。
+            setChromeVisible(true);
+            return undefined;
+        }
         let timer = 0;
         const show = () => {
             setChromeVisible(true);
@@ -353,7 +388,7 @@ const App: React.FC<AppProps> = ({ injected }) => {
             window.removeEventListener('pointerdown', show);
             window.removeEventListener('keydown', show);
         };
-    }, []);
+    }, [state.mousePassthrough]);
 
     // 0.7.22 随机歌词样式: one style per song from the pool. Mounted once, at the shell level.
     useRandomSongMode();

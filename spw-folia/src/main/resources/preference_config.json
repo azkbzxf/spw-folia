@@ -55,7 +55,7 @@
         {
           "type": "button",
           "title": "模组市场",
-          "summary": "打开 Folia 窗口并直接进入模组市场，浏览官方与社区模组并一键安装（Beta：第三方代码，行为与稳定性由模组作者负责）。不想开窗口也可以：手工把解包好的模组文件夹（含 mod.json）放进 mods 目录同样生效，下次打开窗口会被扫描到。",
+          "summary": "单独弹出模组市场小窗口（不需要打开播放页），浏览官方与社区模组并一键安装（Beta：第三方代码，行为与稳定性由模组作者负责）。不想用市场也可以：把解包好的模组文件夹（含 mod.json）放进 mods 目录同样生效，下次打开播放窗口会被扫描到。",
           "arrow_type": "none",
           "on_click": "dev.spw.folia.FoliaPlugin.onOpenModMarket"
         }

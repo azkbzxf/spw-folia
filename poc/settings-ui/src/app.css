@@ -427,18 +427,37 @@ body.spw-injected {
  *
  * Folia draws the glyph at `left-3.5 top-[17px] w-3.5 h-3.5` inside a 96 px track that starts 48 px to
  * the LEFT of the circle, i.e. the glyph occupies roughly 14–28 px from the track's left edge. This
- * overlay covers that end plus the padding a pointer needs (~44x32 CSS px) and paints NOTHING, ever:
+ * overlay covers that end plus the padding a pointer needs and paints NOTHING, ever:
  * what the user sees is Folia's glyph on Folia's track, unmodified. A second icon here would render a
  * doubled mark, and a hover wash here was the first version's mistake — it drew a dark capsule around
  * the glyph that upstream never paints (the user: 「移除鼠标放上去的阴影」). Hover feedback on this end
- * is the track itself, which lights up on approach (`SlideActionButton`'s `opacity-0 → 100`). */
+ * is the track itself, which lights up on approach (`SlideActionButton`'s `opacity-0 → 100`).
+ *
+ * ## v0.5.3 (final): 48 px, and the circle keeps its whole half
+ *
+ * Two earlier attempts at this width both shipped a bug, and the numbers explain why:
+ *
+ *  - **44 px** left a 4 px dead column before the circle. The pointer crossing it fired the circle's
+ *    `mouseleave`, the track retracted, and the market end looked like it vanished (「移上去会消失」).
+ *  - **72 px** closed that gap by reaching the circle's left edge — but the circle's box is only 48 px
+ *    wide and this overlay has no z-index while the circle carries `z-10`, so in practice the overlay
+ *    covered `x=471..495` of the circle and **only the right half of the gear was clickable**. The
+ *    user's report was 「现在点不了这两行设置了」: the panel did not open at all, because the press
+ *    landed on this overlay instead of the circle.
+ *
+ * 48 px is the track's own left half (96 / 2), i.e. exactly the market end and nothing more. The
+ * remaining gap to the circle is covered by the `:hover`/`:focus-within` rule below instead of by
+ * geometry, which is the robust direction: keeping the track visible does not require making one
+ * control overlap another.
+ *
+ * `right: 0` (not a width) pins this to the wrapper's right edge, so it can never creep under the
+ * circle no matter what the idle `translate-x-1/2` does to the circle's own box. */
 .spw-player-capsule-mod {
     position: absolute;
-    /* The track is `right-0`, 96 px wide, in a 48 px wrapper: its left edge is 48 px left of the wrapper's
-     * left edge, hence `left: -48px`. `top: 8px` centres a 32 px target on the 48 px circle. */
+    /* The track is `right-0`, 96 px wide, in a 48 px wrapper: its left half is `left: -48px` … `left: 0`. */
     left: -48px;
+    right: 48px;
     top: 8px;
-    width: 44px;
     height: 32px;
     padding: 0;
     border: 0;
@@ -451,6 +470,28 @@ body.spw-injected {
 .spw-player-capsule-mod:focus-visible {
     outline: 2px solid rgba(255, 255, 255, 0.85);
     outline-offset: 2px;
+}
+
+/* v0.5.3 (user report: 「鼠标移上去后会消失」) · keep the track revealed across the WHOLE capsule.
+ *
+ * Upstream reveals the 96 px track on the CIRCLE's `onMouseEnter` and retracts it on `onMouseLeave`
+ * (`SlideActionButton.tsx:203-204`). Our market target is a sibling overlay positioned 48 px to the
+ * LEFT of that circle, i.e. **outside the circle's box** — so the natural gesture the user described
+ * (move onto the menu, then left onto the market end) fires `mouseleave` on the circle and the track +
+ * glyph fade to 0 while the overlay stays clickable. That is exactly "the button disappears but still
+ * works if you click it".
+ *
+ * `:hover`/`:focus-within` on the wrapper covers every descendant regardless of geometry (hover state
+ * follows the DOM chain, not the box), so hovering the overlay keeps the track up. `!important` is
+ * required because the track's opacity is a Tailwind class toggled by React (`opacity-0`/`opacity-100`)
+ * while the glyph's is an inline framer-motion value — a plain rule loses to the inline one.
+ *
+ * Only the track is forced; the glyph keeps its own 0.45 baseline, which is what upstream shows once
+ * the track is revealed. The market overlay was widened to 48 px (`left:-48px` → `0`) so there is no
+ * dead pixel column between it and the circle where the pointer would leave the wrapper entirely. */
+.spw-player-capsule:hover [data-spw-capsule-track],
+.spw-player-capsule:focus-within [data-spw-capsule-track] {
+    opacity: 1 !important;
 }
 
 

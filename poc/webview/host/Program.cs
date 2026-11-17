@@ -589,9 +589,33 @@ namespace SpwFolia
 
         public static string ShimScript()
         {
-            if (shimScript == null) shimScript = ResourceText("Shim.js");
+            if (shimScript == null)
+            {
+                // issue #23（第二轮）: the mod activator is its own resource now, because BOTH shims need
+                // it — this one in the top document and PreviewShim in the settings page's live-preview
+                // iframe. Prepending it here (rather than shipping a third script tag) keeps the host's
+                // "inject exactly one classic script before any page script" contract intact, and keeps
+                // the two shims from drifting apart.
+                shimScript = ModHostActivatorScript() + "\n" + ResourceText("Shim.js");
+            }
             return shimScript;
         }
+
+        /**
+         * issue #23（第二轮）: the shared Folium mod activator (`ModHostActivator.js`).
+         *
+         * Exposed as its own accessor because `PreviewShim.js` needs the same code inside the preview
+         * iframe: without it `window.__SPW_FOLIA_MOD_VISUALIZERS__` does not exist there, so a
+         * `mod:<id>:<viz>` visualizerMode silently falls back to the built-in style and the big preview
+         * shows the wrong style (「导入歌词样式的模组时，大的预览框没有适配」). One copy, two hosts.
+         */
+        public static string ModHostActivatorScript()
+        {
+            if (modHostActivatorScript == null) modHostActivatorScript = ResourceText("ModHostActivator.js");
+            return modHostActivatorScript;
+        }
+
+        private static string modHostActivatorScript;
 
         public static string OverlayScript()
         {

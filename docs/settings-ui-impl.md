@@ -355,17 +355,29 @@ IndexedDB，下次开窗口直接贴出来 —— 贴进的是**上游那只 Map
 原因只有一个：**它本来是插件级的事，不是播放页的一个状态**。同时新增同一个分区里的
 「打开模组文件夹」，那是播放窗口打不开时唯一的自助路径。
 
-链路（每个名字都得对，写错任何一处只会表现为「按钮没反应」，两端都不报错）：
+链路（v0.5.3 起：配置页那条**不再经过播放页**；每个名字都得对，写错任何一处只会表现为「按钮没反应」，
+两端都不报错）：
 
 ```
 preference_config.json  on_click: dev.spw.folia.FoliaPlugin.onOpenModMarket
-  → FoliaPlugin.onOpenModMarket()            @JvmStatic @JvmName，无参
-  → bridge.sendUiCommand("open-mod-market")  → stdin {"t":"command","command":"open-mod-market"}
-  → HostForm.HandleCommand → DeliverPendingModMarket()
-  → page ui action "open-mod-market" → Shim case 'ui' → App.tsx bridgeOn('ui') → setModMarketOpen(true)
+  → FoliaPlugin.onOpenModMarket()        @JvmStatic @JvmName，无参
+  → FoliaPlugin.openMarketWindow()       幂等：进程还在就只重推清单 + 设置树
+  → marketBridge.open()                  FoliaHostBridge(marketOnly = true) → 第二个 spw-folia-host.exe
+  → argv: --url https://spw-folia.local/settings/mod-market.html?market=1
+          --window 1200x860 --no-topmost --no-transparency --no-curtain --no-keep-awake
+          --user-data <pluginPath>/webview-market      （不传 --mods-dir）
+  → main.tsx 的 isMarketWindow() → mountMarketWindow() → 只渲染 ModMarketPanel
 ```
 
-**页面未就绪时消息不能丢，两端各有一道**（缺一不可，因为丢在不同位置）：
+**用户要求的就是这条**：「商店不再依赖 folia 的主界面，从配置中进入商店只弹出商店的小窗口」。
+旧实现是「没窗口就先 `openFolia()` 开全屏播放页，再让宿主把市场遮罩盖上去」—— 为了看一眼市场先起
+一个全屏播放器，正是要拆掉的耦合。
+
+`open-mod-market` 这条宿主命令**仍然存在**，但它现在只服务**播放页右下角胶囊**那个入口
+（`PlayerBackgroundControl` 左半）。两段链路各自成立，别把它们合成一条。
+
+**页面未就绪时消息不能丢，两端各有一道**（这一节描述的是**胶囊那条**链路；配置页那条由「第二个
+进程 + 页面自己的 `?market=1`」保证，不依赖补投）：
 
 1. **宿主侧**（页面还不存在）：`modMarketRequested` + `OnTick` 的 `DeliverPendingModMarket()`，
    门控在 `webviewReady && navDone`。
@@ -378,7 +390,7 @@ preference_config.json  on_click: dev.spw.folia.FoliaPlugin.onOpenModMarket
    action 是 `open-mod-market` 就排队，等 `__SPW_FOLIA__.on('ui', …)` 第一次被调用时补投。
    **只排队幂等的一次性意图** —— `toggle-settings` 重放会把用户刚关掉的面板再弹开。
 
-**市场页是并列模态，不是设置浮层的一页**：`openModMarket` 只 `setModMarketOpen(true)`，不动 `open`。
+**播放页里的市场仍是并列模态**：`openModMarket` 只 `setModMarketOpen(true)`，不动 `open`。
 `bridge.ts` 的 `uiActionToCommand` 对 `open-mod-market` 返回 `'none'`（不落到 `default: toggle`），
 `registerSettingsUiController` 的监听器对 `'none'` 显式 no-op。把浮层一起打开会让两个各自抢 ESC 的
 window-capture 监听同时活着，一次 ESC 会关两层，破坏 `docs/protocol.md` §8 的「一次 ESC 只关一层」。

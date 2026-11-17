@@ -45,6 +45,24 @@ for f in enabled.txt permissions.json; do
 done
 echo "backup: $BACKUP"
 
+# Preserve the user's mod directory across upgrades.
+#
+# `mods/` lives INSIDE the plugin directory (`<pluginPath>/mods`), so the naive
+# "rm -rf the old install" below would delete every mod the user installed from the market.
+# That is what happened on 2026-11-17: a reinstall wiped 4 installed mods and the only copies
+# left were whichever bundles happened to sit in a scratch dir. Mods are user data; the plugin
+# directory is ours. Carry them over.
+MODS_CARRY=""
+shopt -s nullglob
+for old in "$PLUGINS/${PLUGIN_ID}-"*; do
+  if [ "$old" = "$DEST" ]; then continue; fi
+  if [ -d "$old/mods" ] && [ -n "$(ls -A "$old/mods" 2>/dev/null)" ]; then
+    MODS_CARRY="$old/mods"
+    break
+  fi
+done
+shopt -u nullglob
+
 # drop previous installs of this plugin (id dir + workshop name dir + stray .spmod)
 # so the host cannot load two copies of dev.spw.folia at once
 shopt -s nullglob
@@ -64,6 +82,15 @@ else
   echo "keeping plugin settings data (pass --fresh to reset)"
 fi
 mkdir -p "$DEST"
+
+# Restore the carried mods BEFORE the package is extracted, so a package that ever ships a
+# `mods/` payload cannot clobber them (it does not today; this order keeps it that way).
+if [ -n "$MODS_CARRY" ]; then
+  mkdir -p "$DEST/mods"
+  cp -a "$MODS_CARRY/." "$DEST/mods/"
+  echo "carried over mods: $(ls "$DEST/mods" | tr '\n' ' ')"
+fi
+
 python - "$SPMOD" "$DEST" <<'PY'
 import sys, zipfile
 spmod, dest = sys.argv[1], sys.argv[2]

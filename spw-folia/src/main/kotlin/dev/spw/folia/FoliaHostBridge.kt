@@ -27,7 +27,21 @@ import java.util.concurrent.atomic.AtomicReference
  */
 internal class FoliaHostBridge(
     private val pluginPath: File,
-    private val log: (String) -> Unit
+    private val log: (String) -> Unit,
+    /**
+     * issue #23（第二轮）：这个桥开的是「只有市场」的窗口，不是播放页。
+     *
+     * 同一个宿主 exe、同一套协议，但**窗口形态完全不同**（见 [open] 的 argv）：不要全屏、不要
+     * 置顶、不要透明/色键、不要开屏动画、不要常亮屏幕，`--url` 直接指向市场页。用户的要求是
+     * 「从配置中进入商店只弹出商店的小窗口」，而播放页那边的一整套形态（全屏 + 色键 + 输入捕获窗）
+     * 在这里全是负担。
+     *
+     * 为什么是**第二个实例**而不是给现有实例加多会话：这个类的每个会话状态（`process`、
+     * `pendingLines`、`writerThread`、`stdinBroken`、`pid`、`stdoutLog`、`pump`）都是实例字段，
+     * `open()` 的 `@Synchronized` 也是实例级的。所以第二个实例天然隔离，而多会话改造要动每一个
+     * 字段的归属。
+     */
+    private val marketOnly: Boolean = false,
 ) {
 
     @Volatile private var process: Process? = null
@@ -169,23 +183,45 @@ internal class FoliaHostBridge(
         val command = mutableListOf(
             exe.absolutePath,
             "--bundle", web.absolutePath,
-            "--fullscreen",
             "--bundle-version", FoliaPlugin.PLUGIN_VERSION
         )
+        // cwd = plugin dir so every relative path inside the helper resolves against the install
+        // location; all paths we pass are absolute anyway (cwd is only a safety net). Resolved BEFORE
+        // the argv because the market window's `--user-data` lives under it.
+        val workDir = physicalFile(pluginPath.absoluteFile).also { it.mkdirs() }
+        if (marketOnly) {
+            command += marketArgs(File(workDir, MARKET_USER_DATA_DIR).absolutePath)
+        } else {
+            command += "--fullscreen"
+            // issue #23 (second round): the mods root MUST be handed to the helper.
+            //
+            // Without it the host takes the `mods-dir none (mod files are not served)` branch
+            // (`HostForm.MountModsInterceptor`) and mounts no `/__mods/` interceptor at all. The page
+            // then imports `https://spw-folia-mods.local/<id>/client.mjs` (the host `mod-host.json`
+            // names, an UNMAPPED virtual host answered only by that interceptor), the dynamic import
+            // rejects, the Shim records the error and deactivates the mod, and the lyric shelf shows
+            // no mod tile at all. The user-visible symptom was 「安装模组后没有变化」: everything looked
+            // installed because the list did arrive — only the files could never be fetched.
+            //
+            // `modsRoot` creates the directory on demand, so a first run with no mods still passes a
+            // usable path (and the host creates it too). Two argv entries, never one joined string:
+            // the same rule the `/select` argument follows (see FoliaDiagnostics.logFolderCommand).
+            command += listOf(
+                "--mods-dir",
+                FoliaModStore.modsRoot(physicalFile(pluginPath.absoluteFile)).absolutePath
+            )
+        }
         // v0.4.8: the 配置 page can turn the opening splash off; the helper then navigates with
         // `splash=0`, so the page never installs it (the host also skips its reveal timer).
-        if (!curtainEnabled) {
+        if (!curtainEnabled && !marketOnly) {
             command += "--no-curtain"
         }
         val settingsDir = resolveSettingsDir(web)?.let { physicalFile(it) }
         if (settingsDir != null) {
             command += listOf("--settings-dir", settingsDir.absolutePath, "--settings-entry", SETTINGS_ENTRY)
         }
-        // cwd = plugin dir so every relative path inside the helper resolves against the install
-        // location; all paths we pass are absolute anyway (cwd is only a safety net).
-        val workDir = physicalFile(pluginPath.absoluteFile).also { it.mkdirs() }
-        val stderrLog = File(workDir, "spw-folia-host.stderr.log")
-        val stdoutLogFile = File(workDir, "spw-folia-host.stdout.log")
+        val stderrLog = File(workDir, if (marketOnly) "spw-folia-host-market.stderr.log" else "spw-folia-host.stderr.log")
+        val stdoutLogFile = File(workDir, if (marketOnly) "spw-folia-host-market.stdout.log" else "spw-folia-host.stdout.log")
         // issue #12 增加日志功能: the helper reports its own environment through the settings UI's
         // 「出现问题」 flow, and that report names the log file the plugin mirrors its stdout into.
         command += listOf("--log-file", stdoutLogFile.absolutePath)
@@ -366,6 +402,16 @@ internal class FoliaHostBridge(
      */
     fun sendLog(level: String, message: String) {
         sendLine(logLine(level, message))
+    }
+
+    /**
+     * issue #23（第二轮）：推一条安装进度给宿主，宿主转给页面（协议 §2 `modProgress`）。
+     *
+     * 调用方负责节流（见 `FoliaPlugin.progress`）：这条通道的队列有界，满了会丢**最旧**的一条，
+     * 而最旧的那些是 100 ms 的 `state` 时钟。所以进度最多 ~5 Hz，且只在百分比真的变了时才发。
+     */
+    fun sendModProgress(actionId: String?, modId: String?, phase: String, received: Long, total: Long) {
+        sendLine(modProgressLine(actionId, modId, phase, received, total))
     }
 
     /**
@@ -901,9 +947,103 @@ internal class FoliaHostBridge(
         internal fun commandLine(command: String): String =
             "{\"t\":\"command\",\"command\":${Json.str(command)}}"
 
+        /**
+         * The complete `modProgress` line (plugin -> host -> page), issue #23 second round.
+         *
+         * ## Why a new message type instead of reusing `log`
+         *
+         * The host deliberately does **not** forward plugin `log` lines to the page
+         * (`HostForm.HandleStdinLine`: 「the page learns the outcome from the refreshed mods/settings
+         * push, not from log lines」), and that decision is right — log lines are for the file. But a
+         * download percentage is not an outcome, it is live state the user watches. So it gets its own
+         * type, forwarded to the page and nothing else.
+         *
+         * ## Shape
+         *
+         * `actionId` is the correlation key: the page mints it (`bridge.ts` `newModActionId`), the host
+         * echoes it verbatim into the plugin, and this line sends it back, so a panel that issued two
+         * installs can tell which bar is which. `total` is `-1` when the size is unknown (chunked
+         * response, or unpacking) and the page draws an indeterminate bar for that.
+         *
+         * Every value goes through [Json.str] / plain number formatting: one line, no splicing.
+         * `internal` so a JVM test can pin the shape without a host process.
+         */
+        internal fun modProgressLine(
+            actionId: String?,
+            modId: String?,
+            phase: String,
+            received: Long,
+            total: Long,
+        ): String = buildString {
+            append("{\"t\":\"modProgress\",\"phase\":").append(Json.str(phase))
+            append(",\"actionId\":").append(Json.str(actionId))
+            append(",\"modId\":").append(Json.str(modId))
+            append(",\"received\":").append(received.coerceAtLeast(0L))
+            append(",\"total\":").append(if (total < 0L) -1L else total)
+            append('}')
+        }
+
         /** v0.3.0: queue is diffed every 500 ms; controls force an immediate push via queueDirty. */
         private const val QUEUE_CHECK_EVERY_TICKS = 5L
         private const val SETTINGS_ENTRY = "settings-ui.js"
         private const val DEV_ROOT = "D:/输出目录/dsh2"
+
+        /**
+         * issue #23（第二轮）：市场专用窗口加载的页面。
+         *
+         * `?market=1` 不是装饰：`main.tsx` 靠它决定「只挂市场面板」还是「挂整个设置岛」
+         * （`src/market/mountMarketWindow.tsx` 的 `isMarketWindow()`）。页面本身是
+         * `poc/settings-ui/public/mod-market.html`，staging 会把它放到 `web/settings/` 下，而
+         * `--settings-dir` 把那个目录映射到 bundle 主机的 `settings/` 子路径上
+         * （`HostForm` 的 `settings-inject` 用同一个前缀），所以这个 URL 与注入脚本同源。
+         */
+        private const val MARKET_PAGE_URL = "https://spw-folia.local/settings/mod-market.html?market=1"
+        /** 市场窗口的物理像素尺寸（面板本身 max-w 900，`grid-cols-2 sm:grid-cols-3`）。 */
+        private const val MARKET_WINDOW_WIDTH = 1200
+        private const val MARKET_WINDOW_HEIGHT = 860
+
+        /** 市场窗口独立的 WebView2 profile 目录名（在插件目录下）。 */
+        private const val MARKET_USER_DATA_DIR = "webview-market"
+
+        /**
+         * issue #23（第二轮）：市场专用窗口的 argv 片段（**纯函数**，JVM 测试直接驱动它）。
+         *
+         * 逐条都是「播放页需要、市场不需要」的开关：
+         *   `--url`             直接指向 `public/mod-market.html`（`?market=1` 是页面与宿主之间唯一
+         *                       的约定，见 `src/market/mountMarketWindow.tsx`）；
+         *   `--window WxH`      窗口而不是全屏。宿主的 `--window` 解析会把 `Fullscreen` 置为
+         *                       **false**（`Program.cs` 的 `case "--window"`），所以这一个参数同时
+         *                       给出尺寸并关掉全屏 —— 不需要也不存在 `--no-fullscreen`；
+         *   `--no-topmost`      一个配置窗口压在播放页/桌面之上是错的；
+         *   `--no-transparency` 设置树里可能带着 `transparentPlayerBackground:true`，那会把窗口变成
+         *                       色键 + 输入捕获窗，只剩两个角可点；
+         *   `--no-curtain`      开屏动画是播放页的仪式感，这里只会让人多等一秒；
+         *   `--no-keep-awake`   市场不播放任何东西，没有理由按住显示器不睡；
+         *   `--user-data`       独立 profile：一个 user-data 目录对应一个 WebView2 profile，两个进程
+         *                       并发用同一个是未定义行为（`docs/host-app.md`）。
+         *
+         * **不传** `--mods-dir`：市场只列清单与预览图，`/__mods/…` 的文件服务是播放页导入
+         * `client.mjs` 才需要的。
+         *
+         * `internal` 而不是 private：`--mods-dir` 那次漏传（「装了没效果」的第一个根因）就是因为
+         * argv 没有任何测试钉住。这条形状现在由 `FoliaModStoreTest` 断言。
+         */
+        internal fun marketArgs(userDataDir: String): List<String> = listOf(
+            "--url", MARKET_PAGE_URL,
+            "--window", "${MARKET_WINDOW_WIDTH}x${MARKET_WINDOW_HEIGHT}",
+            "--title", "模组市场",
+            "--no-topmost",
+            "--no-transparency",
+            "--no-curtain",
+            "--no-keep-awake",
+            "--user-data", userDataDir,
+        )
+
+        /**
+         * 市场窗口加载的页面路径（相对 bundle 的 `settings/` 目录），`internal` 供测试断言它与
+         * `MARKET_PAGE_URL` 一致 —— 两者写岔的后果是「窗口开了但一片空白」，而那种失败没有任何
+         * 编译期信号。
+         */
+        internal const val MARKET_PAGE = "settings/mod-market.html?market=1"
     }
 }

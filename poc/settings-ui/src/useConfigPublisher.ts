@@ -9,7 +9,14 @@ import {
     DEMO_TRACK,
     type BridgeTrackMessage,
 } from '~/bridge';
-import { snapshotFromState, useSettingsStore, type FontColorMode } from '~/model/settings';
+import {
+    effectiveVisualizerMode,
+    snapshotFromState,
+    useSettingsStore,
+    type FontColorMode,
+    type SettingsSnapshot,
+    type StyleMode,
+} from '~/model/settings';
 import { onSystemSchemeChange, systemPrefersLight } from '~/model/theme';
 import {
     ConfigPublisher,
@@ -265,7 +272,31 @@ export const useConfigPublisher = (): void => {
                 });
             lastPublishedTheme = theme;
             lastPublishedSubtitleTheme = subtitleTheme;
-            return { settings: snapshotFromState(state), theme, subtitleTheme, isDaylight: derived.isDaylight };
+            /* issue #23 (second round): the SELECTED MOD STYLE has to reach `config.visualizerMode`.
+             *
+             * The store keeps two fields on purpose (`model/settings.ts:305-321`): `visualizerMode` is
+             * always a legal builtin id — it is the fallback the player drops back to when a mod is
+             * uninstalled or disabled — and `modVisualizerMode` is the open-string `mod:<id>:<viz>`
+             * choice. `effectiveVisualizerMode` composes them, and until now only `Stage.tsx` used it
+             * (to highlight the right shelf tile). The publisher consumed the raw snapshot, so
+             * clicking a mod tile moved the highlight and re-pushed the SAME builtin mode: the player
+             * stayed on `classic` and the mod appeared to do nothing — the user's 「启用后没有效果」.
+             *
+             * Projected HERE, not in `snapshotFromState`: that snapshot is also what the page persists
+             * through the plugin (`bridge.ts` → `setSettings`), and persisting a `mod:` styleId would
+             * destroy the fallback invariant above and resurrect a mode whose mod is gone. This is a
+             * read of the current intent at publish time, not a second writer.
+             *
+             * The cast is the field's own shape: `SettingsSnapshot.styleId` is the builtin union, while
+             * upstream's published `VisualizerMode` is `BuiltinVisualizerMode | (string & {})`
+             * (`work/folia/folia-major-main/src/types.ts`), so a `mod:` value is legal on the wire and
+             * nothing downstream needs a type change. Builtin tunings lookups keyed on `styleId` simply
+             * miss for a mod style, which is the correct conservative behaviour (`docs/mods.md`). */
+            const snapshot: SettingsSnapshot = {
+                ...snapshotFromState(state),
+                styleId: effectiveVisualizerMode(state) as StyleMode,
+            };
+            return { settings: snapshot, theme, subtitleTheme, isDaylight: derived.isDaylight };
         };
 
         const publisher = new ConfigPublisher({ pushConfig: config => {

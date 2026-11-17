@@ -3007,6 +3007,13 @@ namespace SpwFolia
                 // shape is validated here: it must be a JSON array.
                 SendModsToPage(line);
             }
+            else if (t == "modProgress")
+            {
+                // issue #23 (second round): one throttled install-progress tick. Unlike `log` (which is
+                // file-only by design, see the branch below) this one IS for the page: it is live state
+                // the user watches, not an outcome.
+                SendModProgressToPage(msg);
+            }
             else if (t == "config")
             {
                 string configRaw = JsonUtil.ExtractRawValue(line, "config");
@@ -3263,6 +3270,34 @@ namespace SpwFolia
             string payload = "{\"type\":\"mods\",\"mods\":" + mods + "}";
             log.Log("info", "mods-recv count=" + CountJsonArrayItems(mods) + " ids=[" + ModIdsFromArray(mods) + "]"
                 + " bytes=" + Encoding.UTF8.GetByteCount(payload));
+            PostToPage(payload);
+        }
+
+        /// <summary>
+        /// Relays one install-progress tick to the page (issue #23, second round).
+        ///
+        /// Rebuilt field by field, never spliced: the same rule <see cref="RelayModAction"/> follows in
+        /// the other direction. `phase` is whitelisted (an unknown phase is dropped, so a future plugin
+        /// cannot put arbitrary text on the page), the two counters go through the numeric reader, and
+        /// the two ids are escaped strings. No per-tick log line: at 5 Hz that would be a second file.
+        /// </summary>
+        private void SendModProgressToPage(Dictionary<string, object> msg)
+        {
+            string phase = JsonUtil.GetString(msg, "phase");
+            if (phase != "download" && phase != "verify" && phase != "unpack" && phase != "done")
+            {
+                log.Log("warn", "mod-progress-drop reason=unknown-phase phase=" + (phase ?? "null"));
+                return;
+            }
+            double received = JsonUtil.GetDouble(msg, "received", -1);
+            double total = JsonUtil.GetDouble(msg, "total", -1);
+            string actionId = JsonUtil.GetString(msg, "actionId");
+            string modId = JsonUtil.GetString(msg, "modId");
+            string payload = "{\"type\":\"modProgress\",\"phase\":\"" + JsonUtil.Escape(phase) + "\""
+                + (string.IsNullOrEmpty(actionId) ? "" : ",\"actionId\":\"" + JsonUtil.Escape(actionId) + "\"")
+                + (string.IsNullOrEmpty(modId) ? "" : ",\"modId\":\"" + JsonUtil.Escape(modId) + "\"")
+                + ",\"received\":" + JsonUtil.Num(received)
+                + ",\"total\":" + JsonUtil.Num(total) + "}";
             PostToPage(payload);
         }
 

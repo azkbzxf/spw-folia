@@ -21,7 +21,7 @@
 | 诊断与日志 | 详细日志（`verboseLog`） | 关 | 宿主 `--verbose-log`：页面导航 / console / 卡顿采样写进日志。**下一次打开 Folia 生效** |
 | 模组 | 导入模组…（`button`，`onImportModZip`） | — | `SwingUtilities.invokeLater` → `JFileChooser`（只筛 `.zip`）→ `FoliaModStore.install(zip, expectedSha256 = null)`，解包在 `modActions` 后台线程。取消 → 静默返回（不是错误）；非 `.zip` → 明确提示。**没有摘要可核对**，防护全在 `install` 内部（防穿越 / 条目与总字节上限 / `mod.json` 校验 / 原子替换）。装完重扫并推送，打开着的市场页会自己刷新 |
 | 模组 | 打开模组文件夹（`button`，`onOpenModsFolder`） | — | `explorer.exe` + `<pluginPath>/mods`（**两个 argv**，不拼字符串）。不依赖播放窗口，窗口打不开时照样能用 |
-| 模组 | 模组市场（`button`，`onOpenModMarket`） | — | 没开窗就开窗 → 宿主 `command open-mod-market` → 页面 `ui action` → 设置岛的模组市场模态。页面未就绪时宿主记住请求、`navDone` 后补发；Shim 另外在设置岛挂载前排队。见 [`docs/mod-system.md`](mod-system.md) §5.1.1 |
+| 模组 | 模组市场（`button`，`onOpenModMarket`） | — | v0.5.3 起**不再借播放页**：`openMarketWindow()` 开第二个宿主进程，`--url` 指向 `mod-market.html?market=1`，小窗、不置顶、不透明、独立 WebView2 profile，只渲染市场面板。播放页是否存在不影响它。见 [`docs/mod-system.md`](mod-system.md) §5.1.1 |
 | 支持与反馈 | 出现问题（`button`） | — | 环境自检 + 预填反馈页 + 打开日志文件夹 |
 
 **播放页右下角的入口**（不在本表里，因为它不在配置页）：那颗控制是 Folia 自己的

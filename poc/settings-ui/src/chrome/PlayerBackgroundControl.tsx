@@ -149,6 +149,16 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
         if (!node) return;
         const circle = node.querySelector<HTMLButtonElement>('button[type="button"]');
         if (circle) circle.setAttribute('data-spw-chrome', 'player-background');
+        /* v0.5.3: stamp the slide TRACK too, so `app.css` can keep it revealed while the pointer is
+         * anywhere on the capsule. See `.spw-player-capsule:hover [data-spw-capsule-track]`: upstream
+         * only reveals the track on the CIRCLE's `onMouseEnter`, so moving left onto the market end (a
+         * sibling overlay, outside the circle) fired `onMouseLeave` and faded the track — the market
+         * button visually vanished while staying clickable (the user's report). Found structurally
+         * (`SlideActionButton`'s root div holds the track div and then the circle button) rather than by
+         * Tailwind class name, which is not a contract. */
+        const slideRoot = node.firstElementChild;
+        const track = slideRoot instanceof HTMLElement ? slideRoot.querySelector('div') : null;
+        if (track) track.setAttribute('data-spw-capsule-track', 'true');
     }, []);
 
     // Clicking anywhere outside the control dismisses the panel (capture so it also works over canvas).
@@ -157,6 +167,20 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
         const onPointerDown = (event: PointerEvent) => {
             const root = rootRef.current;
             const target = event.target;
+            /* v0.5.3: the panel is NOT inside `rootRef` (that ref is stamped on the capsule, which is a
+             * sibling of the panel — see the markup below). Without this second check the capture
+             * listener treated **every** press inside the panel as "outside" and closed it on
+             * `pointerdown`, before the row's own `click` could run: the two switches became
+             * unclickable while the panel still looked open (「现在点不了这两行设置了」).
+             *
+             * Measured on the real host: pressing row 2 flipped `data-open` to `false` on
+             * `pointerdown`, and the switch's `aria-checked` never changed.
+             *
+             * Matching on the attribute instead of a second ref keeps this to one source of truth
+             * (`data-spw-chrome="player-background-panel"` is also what the hit-region reporter and
+             * `verify-click-zones.mjs` read). `closest` walks up from the real target, so a press on a
+             * label/knob inside the row counts as inside too. */
+            if (target instanceof Element && target.closest('[data-spw-chrome="player-background-panel"]')) return;
             if (root && target instanceof Node && root.contains(target)) return;
             close();
         };
@@ -209,25 +233,37 @@ const PlayerBackgroundControl: React.FC<PlayerBackgroundControlProps> = ({
                         </span>
                     </button>
                 ) : null}
-                {/* v0.4.17 (issue #18 item 2): 「显示播放条」 — always present, whatever the
-                 *  transparency switch above says. Switching it off unmounts the playback HUD; this
-                 *  panel (and the button that opens it) stays, which is the only way back. */}
-                <button
-                    type="button"
-                    className="spw-player-bg-row spw-player-bg-row--third"
-                    data-spw-chrome="playback-bar-row"
-                    role="switch"
-                    aria-checked={showPlaybackBar ? 'true' : 'false'}
-                    aria-label={showPlaybackBarLabel}
-                    onClick={() => onToggleShowPlaybackBar(!showPlaybackBar)}
-                >
-                    <span className="spw-player-bg-text">
-                        <span className="spw-player-bg-label">{showPlaybackBarLabel}</span>
-                    </span>
-                    <span className="spw-switch" data-on={showPlaybackBar ? 'true' : 'false'} aria-hidden="true">
-                        <span className="spw-switch-knob" />
-                    </span>
-                </button>
+                {/* v0.5.4（用户报告）：**鼠标穿透时这一行不该出现，也不该生效**。
+                 *
+                 * 用户原话：「开启鼠标穿透后应当默认关闭并不显示『显示播放条』的功能及其设置，但现在却
+                 * 显示了」。这是对的：穿透的含义是「每次点击都属于桌面」，而播放条的唯一用途就是被点
+                 * 击；把它留在屏幕上既点不到，又会让用户以为自己还能操作。
+                 *
+                 * 两条一起做，缺一不可：
+                 *  1. 不渲染这一行（否则用户仍能把它拨开，拨开以后照样点不到）；
+                 *  2. 进入穿透时把 `showPlaybackBar` 落到 **false**（`PlaybackBar` 自己也有一道
+                 *     `mousePassthrough` 守卫，那是运行期的第二道，不是这里可以省掉这一行的理由）。
+                 *
+                 * 退出穿透时**不**自动打开：用户自己关掉的东西不该被我们打开（与「切样式不重置随机池」
+                 * 同一条纪律）。 */}
+                {passthrough ? null : (
+                    <button
+                        type="button"
+                        className="spw-player-bg-row spw-player-bg-row--third"
+                        data-spw-chrome="playback-bar-row"
+                        role="switch"
+                        aria-checked={showPlaybackBar ? 'true' : 'false'}
+                        aria-label={showPlaybackBarLabel}
+                        onClick={() => onToggleShowPlaybackBar(!showPlaybackBar)}
+                    >
+                        <span className="spw-player-bg-text">
+                            <span className="spw-player-bg-label">{showPlaybackBarLabel}</span>
+                        </span>
+                        <span className="spw-switch" data-on={showPlaybackBar ? 'true' : 'false'} aria-hidden="true">
+                            <span className="spw-switch-knob" />
+                        </span>
+                    </button>
+                )}
                 {compatNote ? <p className="spw-player-bg-note spw-player-bg-note--compat">{compatNote}</p> : null}
             </div>
             {/* v0.5.2: Folia's own `SlideActionButton` — the exact component in the user's screenshot.

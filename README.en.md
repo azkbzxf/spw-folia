@@ -138,7 +138,8 @@ The full dependency matrix and crash troubleshooting live in
 
 ## Versions
 
-The current version is **v0.5.2** (2026-11-15, **pre-release**): the beta mod system. The `.spmod` and
+The current version is **v0.5.4** (2026-11-17, **pre-release**): the beta mod system — this release
+makes mods install, show up, and actually respond to clicks. The `.spmod` and
 its SHA-256 checksum for every
 release are on [GitHub Releases](https://github.com/azkbzxf/spw-folia/releases), together with that
 release's notes.
@@ -150,7 +151,7 @@ it. **Download only from versions that still exist on the
 [Releases](https://github.com/azkbzxf/spw-folia/releases) page.**
 
 Detailed notes for the current release live in
-[docs/release-notes-v0.5.2.md](docs/release-notes-v0.5.2.md).
+[docs/release-notes-v0.5.4.md](docs/release-notes-v0.5.4.md).
 
 ## Build from source
 

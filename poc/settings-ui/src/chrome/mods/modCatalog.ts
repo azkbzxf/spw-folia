@@ -36,6 +36,25 @@ export const MOD_MARKET_BASE = 'https://folium-compound.cielaniska.top';
 /** catalog 的绝对地址（由 `MOD_MARKET_BASE` 派生，不要再写字面量）。 */
 export const MOD_CATALOG_URL = `${MOD_MARKET_BASE}/catalog.json`;
 
+/**
+ * 市场网站的根地址。
+ *
+ * 实测（2026-11-15，`GET /` → 200）：站点是**一页**，`catalog.json` 就在根下，没有 `/mods`、`/store`
+ * 之类的子路由，每个模组是同一页里的一个锚点 `#mod-<id>`（首页 HTML 里 `id="mod-visualizer52hz"`、
+ * `<a class="preview" href="#mod-visualizer52hz">` 都能读到）。所以「模组官网」就是 `根 + #mod-<id>`，
+ * 而 `catalog.json` 里**没有** `homepage`/`website` 字段（59 条条目的字段集合逐个核对过）。
+ *
+ * 和 `MOD_CATALOG_URL` 一样由 `MOD_MARKET_BASE` 派生：市场域名**全仓只能在这一处出现**
+ * （`verify-mod-market.mjs` 的静态检查按这个前提工作）。
+ */
+export const MOD_MARKET_URL = `${MOD_MARKET_BASE}/`;
+
+/** 给按钮标签用的裸主机名（`folium-compound.cielaniska.top`），派生而不是另写一份。 */
+export const MOD_MARKET_HOST = MOD_MARKET_BASE.replace(/^https?:\/\//i, '');
+
+/** 一个模组在市场网站上的锚点地址：`https://…/#mod-<id>`。 */
+export const modMarketEntryUrl = (id: string): string => `${MOD_MARKET_URL}#mod-${id}`;
+
 /** catalog 的 `format` 标记：不是这个值就当整份响应无效。 */
 export const MOD_CATALOG_FORMAT = 'folium-market-catalog';
 
@@ -73,6 +92,20 @@ export interface ModCatalogEntry {
     channel: string | null;
     hasClient: boolean;
     experimental: string[];
+    /**
+     * 该模组在市场网站上的地址（`根 + #mod-<id>`）—— 卡片点击「打开官网」的目标。
+     *
+     * catalog 里**没有** homepage 字段（59 条实测），所以只能由 `id` 派生；它一定存在，且一定是
+     * 同一个站点内的锚点，不需要 CORS 也不需要联网校验。
+     */
+    marketUrl: string;
+    /**
+     * catalog 的 `source`（社区/Beta 条目才有的 GitHub 仓库地址，官方条目没有）。
+     *
+     * 「打开官网」优先用它：那是作者自己的仓库，比市场锚点更接近「模组的网站」。它不是 http(s)
+     * 就当作没给 —— 一个 `javascript:` 或相对路径绝不能进浏览器启动器。
+     */
+    sourceUrl: string | null;
 }
 
 export interface ModCatalog {
@@ -177,6 +210,10 @@ const normalizeEntry = (raw: unknown, base: string): ModCatalogEntry | null => {
         channel: strOrNull(source.channel),
         hasClient: source.hasClient === true,
         experimental,
+        marketUrl: modMarketEntryUrl(id),
+        // `source` 只在社区/Beta 条目上出现，而且是绝对 https 仓库地址。只有 http(s) 才认：
+        // 这个值会被交给宿主的浏览器启动器（`openUrl`），别的 scheme 一律当没给。
+        sourceUrl: /^https?:\/\//i.test(str(source.source)) ? str(source.source) : null,
     };
 };
 

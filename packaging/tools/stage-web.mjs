@@ -325,6 +325,24 @@ if (existsSync(previewShimSrc)) {
   console.warn(`[stage-web] WARNING missing ${relative(ROOT, previewShimSrc)} — preview.html would break`);
 }
 
+// issue #23（第二轮）: the Folium mod activator, shared by BOTH shims.
+//
+// It has to be a separate file served next to preview-shim.js, because the big live preview is a
+// same-origin iframe whose document only ever loads PreviewShim — `Shim.js` bails out of iframes on
+// its first line. Without this the iframe has no `__SPW_FOLIA_MOD_VISUALIZERS__`, so a
+// `mod:<id>:<viz>` visualizerMode falls back to the built-in style and the preview shows the wrong
+// style while the player shows the right one (「大的预览框没有适配」).
+const modActivatorSrc = join(hostSrc, 'ModHostActivator.js');
+let modActivatorCopied = false;
+if (existsSync(modActivatorSrc)) {
+  copyFileSync(modActivatorSrc, join(hostOut, 'mod-host-activator.js'));
+  modActivatorCopied = true;
+} else {
+  // Not fatal for the player page (the host injects the same file from its own resource), but the
+  // preview iframe would silently lose mod support — exactly the regression this file guards.
+  console.warn(`[stage-web] WARNING missing ${relative(ROOT, modActivatorSrc)} — the live preview would not render mod styles`);
+}
+
 // preview.html = the stripped index.html plus one classic script tag in <head>, placed before the
 // first <script> so it runs before the deferred module entry (classic scripts execute immediately).
 //
@@ -339,7 +357,11 @@ if (existsSync(previewShimSrc)) {
 // independent of the query string LivePreview.tsx builds — which is also why LivePreview.tsx needs no
 // change here. The strip keeps the `html,body{background-color:#09090b}` base rule so the child does
 // not flash white before React sets the page background.
-const PREVIEW_SHIM_TAG = '<script src="/_host/preview-shim.js"></script>';
+// issue #23（第二轮）: the activator must run BEFORE preview-shim.js, because the shim installs it
+// with its own `getMods`/`emit`/`post`. Both are classic scripts in <head>, so document order is the
+// contract (a classic script has already executed when the next one starts).
+const PREVIEW_SHIM_TAG = '<script src="/_host/mod-host-activator.js"></script>'
+  + '<script src="/_host/preview-shim.js"></script>';
 let previewHtml = false;
 const indexHtml = readFileSync(join(out, 'index.html'), 'utf8');
 const stripped = stripSplashFromHtml(indexHtml);

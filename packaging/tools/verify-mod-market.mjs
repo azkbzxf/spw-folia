@@ -174,6 +174,53 @@ function stageSampleMod(modsRoot) {
     return true;
 }
 
+/**
+ * issue #23（第二轮）: 一个**只**通过 Folium 1.5 旧名注册播放条按钮的模组。
+ *
+ * 它同时钉住两个断点，两个都只表现为「按钮不出现」：
+ *   - `folium.registries.controlButtons`（旧名，别名指向 progressButtons）；
+ *   - `ctx.subscribe` / `ctx.currentTime`（旧 ctx 名，我们的 ctx 曾经没有）。
+ *
+ * 写成真文件走 `--mods-dir` + `mods` 推送，是为了让它经过 Shim 的**真实激活器** —— 那两个包装
+ * 都在激活器里，自己 `createFoliumClientApi` 会正好绕过它们。
+ */
+const PROGRESS_MOD_ID = 'gate-progress-bar';
+function stageProgressButtonMod(modsRoot) {
+    const dir = join(modsRoot, PROGRESS_MOD_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'client.mjs'), `// Gate fixture: a Folium 1.5 progress-bar button mod.
+export default function activate(folium) {
+    folium.registries.controlButtons.register({
+        id: 'gate-bookmark',
+        slot: 'progress.trailing',
+        order: 10,
+        mount(container, ctx) {
+            // Both old names the official sample uses; either one missing throws TypeError and the
+            // button silently disappears (that is the bug this fixture guards).
+            const off = ctx.subscribe(function () {});
+            const now = ctx.currentTime.get();
+            const ratio = ctx.timeToRatio(now);
+            const el = document.createElement('span');
+            el.setAttribute('data-gate-progress-button', 'true');
+            el.textContent = String(Math.round(ratio * 100));
+            container.appendChild(el);
+            return function () { off(); };
+        },
+    });
+}
+`);
+    writeFileSync(join(dir, 'mod.json'), JSON.stringify({
+        folium: 1,
+        id: PROGRESS_MOD_ID,
+        name: 'Gate progress button',
+        version: '1.0.0',
+        author: 'gate',
+        client: 'client.mjs',
+        permissions: [],
+    }, null, 2));
+    return true;
+}
+
 /** The polling helper stages a JSON string; unwrap it, and surface a failed poll as a marked object. */
 const unwrap2 = (result) => {
     if (!result || !result.ok) return { pollFailed: (result && result.error) || 'unknown' };
@@ -305,6 +352,8 @@ async function checkHost(manifest) {
     rmSync(OUT, { recursive: true, force: true });
     mkdirSync(modsRoot, { recursive: true });
     const haveSample = stageSampleMod(modsRoot);
+    // issue #23（第二轮）: the progress-bar fixture is independent of the visualizer sample.
+    stageProgressButtonMod(modsRoot);
 
     const host = await runHost(modsRoot);
     try {
@@ -398,8 +447,213 @@ async function checkHost(manifest) {
         record('mod style mounts', rendered.shells >= 1, JSON.stringify(rendered).slice(0, 200));
         record('mod style paints glyphs (old-name compat applied)',
             (rendered.spans || 0) > 0, `spans=${rendered.spans} text=${JSON.stringify(rendered.text)}`);
+
+        // C3. issue #23（第二轮）: the settings page's BIG LIVE PREVIEW must render mod styles too.
+        //
+        // The user's report was 「导入歌词样式的模组时，大的预览框没有适配」: the shelf tile and the player
+        // showed the mod, the big preview kept drawing the built-in style. Root cause: the preview is a
+        // same-origin iframe running `preview.html` + `PreviewShim.js`, and `Shim.js` returns on its
+        // first line in any frame — so the activator never ran there and
+        // `__SPW_FOLIA_MOD_VISUALIZERS__` did not exist. Folia's renderer then fell back silently.
+        //
+        // This check builds the REAL topology (an iframe of preview.html inside this page), pushes the
+        // mod list the way the settings island does (`settings` postMessage), and asserts the child's
+        // own registry ends up with the mod's mode. A static check cannot catch this: the failure is a
+        // silent fallback inside Folia's renderer, not a missing file.
+        const previewProbe = unwrap2(await host.evalAsync(`(async () => {
+            const old = document.getElementById('gate-preview-frame');
+            if (old) old.remove();
+            const frame = document.createElement('iframe');
+            frame.id = 'gate-preview-frame';
+            frame.src = '/preview.html?obs=1&preview=1';
+            frame.style.cssText = 'position:fixed;left:0;top:0;width:640px;height:360px;border:0;visibility:hidden';
+            document.body.appendChild(frame);
+            await new Promise((r) => setTimeout(r, 2500));
+            const child = frame.contentWindow;
+            const before = (child.__SPW_FOLIA_MOD_VISUALIZERS__ || []).length;
+            // Exactly the envelope LivePreview.tsx sends.
+            child.postMessage({
+                __spwFoliaPreview: 1,
+                kind: 'settings',
+                payload: { mods: [{
+                    id: ${JSON.stringify(SAMPLE_ID)}, name: 'Sample aurora', version: '1.0.1', author: 'gate',
+                    permissions: [], enabled: true, clientEntry: 'client.mjs', previewEntry: null, error: null,
+                }] },
+            }, location.origin);
+            await new Promise((r) => setTimeout(r, 5000));
+            const list = child.__SPW_FOLIA_MOD_VISUALIZERS__ || [];
+            const summary = child.__SPW_FOLIA_PREVIEW__ || {};
+            return JSON.stringify({
+                hasActivator: typeof child.installFoliaModHost === 'function',
+                before,
+                count: list.length,
+                modes: list.map((v) => v.mode),
+                modHost: summary.modHost,
+                modCount: summary.modCount,
+            });
+        })()`));
+        record('the live preview iframe has the mod activator',
+            previewProbe.hasActivator === true, JSON.stringify(previewProbe).slice(0, 200));
+        record('the live preview activates a mod style (big preview matches the player)',
+            (previewProbe.count || 0) > 0
+            && (previewProbe.modes || []).some((m) => String(m).startsWith('mod:')),
+            JSON.stringify(previewProbe).slice(0, 300));
+        await host.evaluate(`(function(){ const f=document.getElementById('gate-preview-frame'); if (f) f.remove(); return 1; })()`);
+
+        /* C4. issue #23（第二轮）: 播放条上的模组按钮必须真的画出来。
+         *
+         * 用户的报告是「目前只适配了歌词样式，播放条还没适配」。两个彼此独立的断点，都只表现为
+         * 「按钮不出现」，所以只能用**真模组走真激活路径**验：
+         *   1. 官方样例用的是 **`registries.controlButtons`**（Folium 1.5 旧名，`addOldClientNames`
+         *      把它挂成 `progressButtons` 的别名）。激活器只包装了 `progressButtons`，于是通过旧名
+         *      注册的按钮镜像不进 `__SPW_FOLIA_MOD_PROGRESS__` —— 清单里一条都没有。
+         *   2. 即使镜像进去了，我们的 ctx 缺 `ctx.subscribe` / `ctx.currentTime` 两个旧名，模组的
+         *      `mount` 抛 `TypeError`，`ModSlot` 把按钮标成 failed，DOM 里依然什么都没有。
+         *
+         * ⚠️ 这一段**必须**让 Shim 的激活器去 import 那个 client（`--mods-dir` + `mods` 推送），
+         * 不能在这里自己 `createFoliumClientApi` 然后手动调模组 —— 那样正好绕过被修的那层包装，
+         * 门禁会绿在一个产品里并不存在的路径上（第一版就是这么写的，`registry: 0`）。
+         */
+        // Push BOTH fixtures: the list is a full snapshot, so pushing only the progress mod would
+        // deactivate the visualizer sample C1/C2 just asserted. Re-push the same shape C1 used, plus
+        // the progress-bar one, so neither assertion steals the other's activation.
+        host.pushMods([{
+            id: SAMPLE_ID, name: 'Sample aurora', version: '1.0.1', author: 'gate',
+            permissions: [], enabled: true, clientEntry: 'client.mjs', previewEntry: null, error: null,
+        }, {
+            id: PROGRESS_MOD_ID, name: 'Gate progress button', version: '1.0.0', author: 'gate',
+            permissions: [], enabled: true, clientEntry: 'client.mjs', previewEntry: null, error: null,
+        }]);
+        await new Promise((done) => setTimeout(done, 6000));
+        const progressProbe = unwrap2(await host.evalAsync(`(async () => {
+            // The bar must be expanded for the trailing slot to be laid out visibly.
+            const bar = document.querySelector('.spw-playback');
+            if (bar) {
+                const r = bar.getBoundingClientRect();
+                bar.dispatchEvent(new PointerEvent('pointerenter', {
+                    bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerType: 'mouse',
+                }));
+            }
+            await new Promise((r) => setTimeout(r, 2500));
+            const reg = window.__SPW_FOLIA_MOD_PROGRESS__ || [];
+            const slot = document.querySelector('[data-spw-mod-slot="trailing"]');
+            return JSON.stringify({
+                registry: reg.length,
+                ids: reg.map((b) => b.id),
+                slotSeen: slot ? slot.getAttribute('data-spw-mod-slot-count') : null,
+                slotFailed: slot ? slot.getAttribute('data-spw-mod-slot-failed') : null,
+                mounted: document.querySelectorAll('[data-gate-progress-button]').length,
+            });
+        })()`));
+        record('a mod registering through the OLD `controlButtons` name is mirrored into the bar',
+            (progressProbe.registry || 0) > 0, JSON.stringify(progressProbe).slice(0, 260));
+        record('…and its button actually mounts into the playback bar DOM',
+            (progressProbe.mounted || 0) > 0, JSON.stringify(progressProbe).slice(0, 260));
+
     } finally {
         host.finish();
+        await new Promise((done) => setTimeout(done, 1200));
+    }
+}
+
+async function checkMarketWindow() {
+    // issue #23（第二轮）: 「从配置中进入商店只弹出商店的小窗口」.
+    //
+    // Two halves, because they fail independently:
+    //   A. the shell must SHIP (`public/mod-market.html` is copied by vite into `dist/` and by
+    //      stage-web into `web/settings/`), and the panel must still be the thing it mounts;
+    //   B. the host must actually render the market **in a window that never loaded the player page**.
+    //      That is the requirement itself: if this only works on top of the visualizer, the user gets
+    //      back the coupling they asked to remove.
+    //
+    // The URL comes from the plugin's own constant (`FoliaHostBridge.MARKET_PAGE`), read out of the
+    // Kotlin source, so the gate cannot drift from what the plugin passes.
+    const marketShell = join(STAGED_BUNDLE, 'settings', 'mod-market.html');
+    record('the market-only shell is staged', existsSync(marketShell), marketShell.replace(ROOT, ''));
+    if (existsSync(marketShell)) {
+        const shell = readFileSync(marketShell, 'utf8');
+        record('the shell carries the #root the mount needs', shell.includes('id="root"'),
+            'mount.tsx only appends a container on the injected path; without #root the window is blank');
+        record('the shell does not hard-code a module tag', !/<script\b/i.test(shell),
+            'a second entry would emit a second settings-ui.js (entryFileNames is a fixed string)');
+    }
+    const bridgeSrc = readFileSync(join(ROOT, 'spw-folia/src/main/kotlin/dev/spw/folia/FoliaHostBridge.kt'), 'utf8');
+    const pageConst = /MARKET_PAGE\s*=\s*"([^"]+)"/.exec(bridgeSrc);
+    record('the plugin declares the market page path', Boolean(pageConst),
+        pageConst ? pageConst[1] : 'MARKET_PAGE constant not found — update this matcher');
+    if (!pageConst) return;
+    const marketUrl = 'https://spw-folia.local/' + pageConst[1];
+    // The Kotlin argv and the URL constant must agree; a mismatch opens a window on a 404.
+    record('the market URL is built from that same path',
+        bridgeSrc.includes('"https://spw-folia.local/settings/mod-market.html?market=1"'),
+        'MARKET_PAGE_URL and MARKET_PAGE must describe the same page');
+
+    if (!existsSync(HOST_EXE)) { skip('market window renders without the player page', 'host exe not built'); return; }
+    if (!existsSync(STAGED_BUNDLE)) { skip('market window renders without the player page', 'staged bundle missing'); return; }
+
+    const userData = join(OUT, 'profile-market');
+    // Deliberately NOT `--mods-dir`: the market window never imports a mod entry (the plugin omits the
+    // flag too), and passing it here would hide a regression in that decision.
+    const child = spawn(HOST_EXE, [
+        '--bundle', STAGED_BUNDLE,
+        '--url', marketUrl,
+        '--window', '1200x860',
+        '--user-data', userData,
+        '--title', 'verify-mod-market-window',
+        '--duration', '60000',
+        '--no-topmost', '--no-transparency', '--no-curtain', '--no-keep-awake',
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+
+    let buffer = '';
+    const pending = [];
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+        buffer += chunk;
+        let nl;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            if (!line) continue;
+            let msg;
+            try { msg = JSON.parse(line); } catch { continue; }
+            if (msg.t === 'eval-result') { const waiter = pending.shift(); if (waiter) waiter(String(msg.value)); }
+        }
+    });
+    if (VERBOSE) child.stderr.pipe(process.stderr);
+    const evaluate = (script, timeoutMs = 20000) => new Promise((done) => {
+        pending.push(done);
+        child.stdin.write(JSON.stringify({ t: 'command', command: 'eval', script }) + '\n');
+        setTimeout(() => done('<<timeout>>'), timeoutMs);
+    });
+    try {
+        await new Promise((done) => setTimeout(done, 7000));
+        // `evaluate` resolves with the raw ExecuteScriptAsync string (a JSON-encoded value), so it is
+        // parsed here — NOT through `unwrap2`, which expects the `{ok,value}` envelope of `evalAsync`.
+        const raw = await evaluate(`JSON.stringify({
+            market: document.querySelectorAll('[data-spw-mod-market="true"]').length,
+            installButtons: document.querySelectorAll('[data-spw-market-install]').length,
+            player: document.querySelectorAll('canvas').length,
+            overlay: document.querySelectorAll('[data-spw-settings-overlay="true"]').length,
+            marketOnly: window.__SPW_FOLIA_MARKET_ONLY__ === true,
+        })`);
+        let got = raw;
+        for (let i = 0; i < 3 && typeof got === 'string'; i += 1) {
+            const trimmed = got.trim();
+            if (!/^[[{"0-9tfn-]/.test(trimmed)) break;
+            try { got = JSON.parse(trimmed); } catch { break; }
+        }
+        if (!got || typeof got !== 'object') {
+            record('market window renders the market panel', false, `eval returned ${JSON.stringify(raw).slice(0, 160)}`);
+            return;
+        }
+        record('market window renders the market panel', got.market === 1, JSON.stringify(got).slice(0, 200));
+        record('…and nothing else: no player canvas, no settings overlay',
+            got.player === 0 && got.overlay === 0, JSON.stringify(got).slice(0, 200));
+        record('…with the market-only mount flag set (so no mod activation runs here)',
+            got.marketOnly === true, JSON.stringify(got).slice(0, 120));
+    } finally {
+        try { child.stdin.write(JSON.stringify({ type: 'command', command: 'close' }) + '\n'); } catch { /* gone */ }
+        setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 800);
         await new Promise((done) => setTimeout(done, 1200));
     }
 }
@@ -411,6 +665,7 @@ const main = async () => {
     const manifest = checkModHostManifest();
     checkStatics();
     await checkHost(manifest);
+    await checkMarketWindow();
 
     const failed = results.filter((r) => !r.ok && !r.skipped);
     const skipped = results.filter((r) => r.skipped);

@@ -579,8 +579,90 @@ class FoliaModStoreTest {
         assertEquals("open-mod-market", FoliaPlugin.OPEN_MOD_MARKET_COMMAND)
     }
 
-    // ------------------------------------------------------- injected settings member ----
+    /**
+     * issue #23（第二轮）: the two argv shapes that decide whether mods work at all.
+     *
+     * 「安装模组后没有变化」 had a root cause that no test could see: the plugin spawned the helper
+     * **without** `--mods-dir`, so the host mounted no `/__mods/` interceptor, every mod import
+     * rejected, and the shelf stayed empty while everything looked installed. Nothing at compile time
+     * connects a flag in an argv list to a behaviour on the other side of a process boundary, so the
+     * only defence is pinning the shape here.
+     *
+     * Two halves:
+     *  - the **player** argv must carry `--mods-dir` + an absolute path as two separate entries (a
+     *    joined `"--mods-dir <path>"` would be one unrecognised argument — the same failure the
+     *    `/select` argv test guards against);
+     *  - the **market** argv must NOT: it opens `mod-market.html` in a small window and never imports a
+     *    mod entry. It must also not be fullscreen (the host's default is true and there is no
+     *    `--no-fullscreen`), must not be topmost, must not be colour-keyed, and must use its own
+     *    WebView2 profile (two processes on one profile is undefined behaviour).
+     */
+    @Test
+    fun `the market window argv is small, opaque, and does not serve mod files`() {
+        val args = FoliaHostBridge.marketArgs("""C:\plugin\webview-market""")
+        assertTrue("the page is the market-only shell", args.contains("--url"))
+        assertEquals(
+            "the market page URL and the constant must agree: a mismatch is a blank window",
+            "settings/mod-market.html?market=1",
+            FoliaHostBridge.MARKET_PAGE,
+        )
+        val url = args[args.indexOf("--url") + 1]
+        assertTrue("the URL must point at the market-only page: $url", url.endsWith(FoliaHostBridge.MARKET_PAGE))
+        assertTrue("a small window, not the fullscreen player", args.contains("--window"))
+        assertFalse(
+            "`--window WxH` already sets Fullscreen=false in Program.cs; passing --fullscreen too would " +
+                "make the market window fill the screen",
+            args.contains("--fullscreen"),
+        )
+        assertTrue("a config window must not sit on top of everything", args.contains("--no-topmost"))
+        assertTrue("the settings tree may ask for transparency; this window must refuse it", args.contains("--no-transparency"))
+        assertTrue("no opening splash in a config window", args.contains("--no-curtain"))
+        assertTrue("nothing plays here, so the display may sleep", args.contains("--no-keep-awake"))
+        assertFalse(
+            "the market never imports a mod entry, so it must not mount the /__mods/ interceptor",
+            args.contains("--mods-dir"),
+        )
+        assertEquals(
+            "a second process needs its own WebView2 profile (docs/host-app.md)",
+            """C:\plugin\webview-market""",
+            args[args.indexOf("--user-data") + 1],
+        )
+    }
 
+    /**
+     * issue #23（第二轮）: the `modProgress` line the page's progress bar is built from.
+     *
+     * The page pairs a bar with the install it started by `actionId`, so the shape is a contract:
+     * one line, `phase` whitelisted by the host, `total = -1` when the denominator is unknown (the
+     * page draws an indeterminate bar for exactly that). A `null` id must stay JSON `null`, never the
+     * string `"null"` — `Json.str` is the one place that distinction lives.
+     */
+    @Test
+    fun `the modProgress line is one line with a numeric total and a real null id`() {
+        val line = FoliaHostBridge.modProgressLine("mod-abc", "visualizer52hz", "download", 1234, 5678)
+        assertFalse("line oriented protocol", line.contains('\n'))
+        assertFalse(line.contains('\r'))
+        assertEquals("modProgress", Json.stringField(line, "t"))
+        assertEquals("download", Json.stringField(line, "phase"))
+        assertEquals("mod-abc", Json.stringField(line, "actionId"))
+        assertEquals("visualizer52hz", Json.stringField(line, "modId"))
+        assertTrue("received must be a number, not a string: $line", line.contains("\"received\":1234"))
+        assertTrue("total must be a number: $line", line.contains("\"total\":5678"))
+
+        // Unknown denominator: -1 reaches the page as a number, which is what draws the indeterminate bar.
+        val unknown = FoliaHostBridge.modProgressLine(null, "m", "unpack", 0, -1)
+        assertTrue("an unknown total stays -1: $unknown", unknown.contains("\"total\":-1"))
+        assertEquals(
+            "a missing actionId is JSON null, not the four-letter string",
+            "null",
+            Json.rawField(unknown, "actionId"),
+        )
+        // A hostile phase must stay a VALUE inside the string, never become a second member.
+        val hostile = FoliaHostBridge.modProgressLine("x\",\"phase\":\"done", "m", "download", 1, 2)
+        assertEquals("x\",\"phase\":\"done", Json.stringField(hostile, "actionId"))
+    }
+
+    // ------------------------------------------------------- injected settings member ----
     /**
      * `mods` goes into the settings tree as a top-level member and is replaced in place, so the island
      * reads the current list and the rest of the tree survives byte for byte.
@@ -934,6 +1016,63 @@ class FoliaModStoreTest {
         } finally {
             downloaded.delete()
         }
+    }
+
+    /**
+     * issue #23（第二轮）: 安装进度回调 —— 进度条唯一的数据来源。
+     *
+     * 用户的抱怨是「点击下载后没有进度条」。这条测试钉的是**回调真的被调用、且分母说得清**：
+     *  - `verify` 的分母必须是文件长度（真百分比）；
+     *  - `unpack` 的分母是 `-1`（没有可数的总量，界面画不定长条）；
+     *  - 进度必须单调不减，且最后一拍 `done >= total`（否则进度条永远停在 99%）。
+     *
+     * 用本地 fixture 而不是真网：真网测的是网络，这条测的是**回调契约**，两者失败原因不同，
+     * 混在一起会让「网络抖动」看起来像「进度条坏了」。
+     */
+    @Test
+    fun `install reports verify and unpack progress with a usable denominator`() {
+        val (store, _) = store()
+        val events = Collections.synchronizedList(ArrayList<Triple<String, Long, Long>>())
+        val zip = sampleZip()
+        val installed = store.install(zip, AURORA_SHA256) { phase, done, total ->
+            events.add(Triple(phase, done, total))
+        }.getOrThrow()
+        assertEquals("sample-aurora-visualizer", installed.id)
+
+        assertTrue("the progress callback must fire at all — an empty list is the dead progress bar", events.isNotEmpty())
+
+        val verify = events.filter { it.first == "verify" }
+        assertTrue("verify must report progress (it is the determinate phase)", verify.isNotEmpty())
+        val verifyTotal = verify.last().third
+        assertEquals("verify's denominator is the file length on disk", zip.length(), verifyTotal)
+        assertTrue("verify must finish at 100%, not stall short of it", verify.last().second >= verifyTotal)
+
+        val unpack = events.filter { it.first == "unpack" }
+        assertTrue("unpack must report at least start and finish", unpack.size >= 2)
+        assertTrue(
+            "unpack has no countable total, so it must report -1 (the page draws an indeterminate bar for that)",
+            unpack.all { it.third == -1L },
+        )
+
+        // Monotonic within a phase: a progress bar that can go backwards is worse than none.
+        for (phase in listOf("verify", "unpack")) {
+            val done = events.filter { it.first == phase }.map { it.second }
+            assertEquals("$phase progress must be monotonic: $done", done.sorted(), done)
+        }
+    }
+
+    /** The refusal path must not report a bogus 100%: a digest mismatch ends the install, no `done`. */
+    @Test
+    fun `a refused install reports no completed progress`() {
+        val (store, _) = store()
+        val events = Collections.synchronizedList(ArrayList<Triple<String, Long, Long>>())
+        val wrong = "0".repeat(64)
+        val result = store.install(sampleZip(), wrong) { phase, done, total -> events.add(Triple(phase, done, total)) }
+        assertTrue("a mismatched digest must refuse", result.isFailure)
+        assertTrue(
+            "verify may report partial progress, but unpack must never start for a rejected archive",
+            events.none { it.first == "unpack" },
+        )
     }
 
     // --------------------------------------------------------------------- helpers ----

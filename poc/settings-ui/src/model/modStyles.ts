@@ -105,6 +105,36 @@ interface RawModEntry {
 
 const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
+/**
+ * issue #23（第二轮）：把模组的预览图文件名变成**能加载的绝对地址**。
+ *
+ * `FoliaModStore.toJson` 给的是 `previewEntry`，即**相对模组目录的文件名**（`preview.jpg`）。
+ * 直接塞进 `<img src>` 会被当成站内相对路径，解析成 `https://spw-folia.local/preview.jpg` → 404，
+ * 货架上就是一个破图格子。模组文件真正的来源是 `mod-host.json` 的 `modsBase`
+ * （`https://spw-folia-mods.local/`，由 `packaging/tools/stage-web.mjs` 写入、Shim 挂在
+ * `window.__SPW_FOLIA_MODS__.host.modsBase` 上），拼法必须与 Shim 激活时一致：
+ * `modsBase + <modId>/ + <file>`（`Shim.js` 的 `modsBase() + mod.id + '/' + mod.clientEntry`）。
+ *
+ * 绝对 URL（`http(s)://` / `data:`）原样返回：将来的 CDN 变体不用改这里。拿不到 base 时返回 null，
+ * 让格子退回图标 + 名字 —— **绝不猜一个地址**（猜错就是一个必然 404 的破图）。
+ */
+const absolutiseModAsset = (raw: string, modId: string): string | null => {
+    if (raw === '') return null;
+    if (/^(?:https?:|data:)/i.test(raw)) return raw;
+    const base = modsBase();
+    if (base === null || modId === '') return null;
+    const root = base.endsWith('/') ? base : `${base}/`;
+    return `${root}${modId}/${raw.replace(/^\.?\//, '')}`;
+};
+
+/** `modsBase` 从 Shim 的全局读；读不到返回 null（dev.html / 模组运行时没起来的页面）。 */
+const modsBase = (): string | null => {
+    if (typeof window === 'undefined') return null;
+    const host = window as Window & { __SPW_FOLIA_MODS__?: { host?: { modsBase?: unknown } } };
+    const value = host.__SPW_FOLIA_MODS__?.host?.modsBase;
+    return typeof value === 'string' && value !== '' ? value : null;
+};
+
 /** 一条原始条目 → `ModStyleEntry`；认不出返回 null（绝不猜 mode）。 */
 const normalizeOne = (raw: RawVisualizerEntry, owner: RawModEntry | null): ModStyleEntry | null => {
     const ownerId = str(raw.modId) || str(owner?.id);
@@ -119,7 +149,11 @@ const normalizeOne = (raw: RawVisualizerEntry, owner: RawModEntry | null): ModSt
     const ids = parsed ?? parseModStyleMode(mode);
     if (!ids) return null;
     const label = str(raw.label) || str(raw.name) || str(raw.id) || str(raw.vizId) || ids.vizId;
-    const previewUrl = str(raw.previewUrl) || str(raw.preview) || str(owner?.previewUrl) || str(owner?.previewEntry) || null;
+    // 优先条目自己给的绝对地址；否则拿模组的 previewEntry（裸文件名）拼成 modsBase 下的绝对地址。
+    const declaredPreview = str(raw.previewUrl) || str(raw.preview) || str(owner?.previewUrl);
+    const previewUrl = declaredPreview !== ''
+        ? absolutiseModAsset(declaredPreview, ids.modId)
+        : absolutiseModAsset(str(owner?.previewEntry), ids.modId);
     return {
         mode,
         modId: ids.modId,

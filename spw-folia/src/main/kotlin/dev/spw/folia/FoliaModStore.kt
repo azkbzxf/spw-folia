@@ -193,14 +193,26 @@ internal class FoliaModStore(
      *  4. An existing `<mods>/<id>/` is renamed into `.trash-<nano>` (atomic on NTFS) *before* the new
      *     copy is renamed in; if that rename fails, the old copy is renamed back.
      */
-    fun install(zipFile: File, expectedSha256: String?): Result<InstalledMod> = try {
+    fun install(
+        zipFile: File,
+        expectedSha256: String?,
+        /**
+         * issue #23（第二轮）：安装进度回调，`(phase, done, total)`。
+         *
+         * `phase` 是 `"verify"` / `"unpack"`；`total` 为 `-1` 表示**分母未知**（解包时 zip 条目数就是
+         * 唯一已知量，而解压后的字节数要读完才知道）—— 界面据此画不定长进度条，而不是假装 0%。
+         *
+         * 默认值是空实现，所以 `importArchive` 与既有 JVM 测试的调用点一行都不用改。
+         */
+        onProgress: (phase: String, done: Long, total: Long) -> Unit = { _, _, _ -> },
+    ): Result<InstalledMod> = try {
         if (expectedSha256 != null) {
             val expected = normalizeSha256(expectedSha256)
             if (expected == null) {
                 zipFile.delete()
                 return refuse("sha256 值不合法（需要 64 位十六进制）：$expectedSha256")
             }
-            val actual = sha256Of(zipFile)
+            val actual = sha256Of(zipFile, onProgress)
             if (actual == null) {
                 zipFile.delete()
                 return refuse("无法读取下载的模组包：${zipFile.name}")
@@ -216,8 +228,13 @@ internal class FoliaModStore(
         val staging = File(root, ".staging-" + System.nanoTime())
         if (!staging.mkdirs()) return refuse("无法创建暂存目录 ${staging.name}")
         try {
+            onProgress("unpack", 0L, -1L)
             val refusal = extract(zipFile, staging)
             if (refusal != null) return refuse(refusal)
+            // 结束那一拍同样用 `-1`：解包没有可数的总量（zip 条目数不等于工作量），换成一个假的
+            // 「100%」会让界面在最后一步从「不定长」突然跳成「满格」，看起来像卡住后闪了一下。
+            // 页面靠 `phase` 变化和随后的 `done` 收尾，不靠这里的数字。
+            onProgress("unpack", 1L, -1L)
             val stagedRoot = resolveModRoot(staging)
             if (!File(stagedRoot, MANIFEST).isFile) {
                 return refuse("模组包里没有 mod.json（根目录与唯一子目录都不是模组根）")
@@ -632,16 +649,29 @@ internal class FoliaModStore(
         }
 
         /** SHA-256 of [file] as lowercase hex, or null when it cannot be read. */
-        internal fun sha256Of(file: File): String? = runCatching {
+        internal fun sha256Of(
+            file: File,
+            onProgress: (phase: String, done: Long, total: Long) -> Unit = { _, _, _ -> },
+        ): String? = runCatching {
             val digest = MessageDigest.getInstance("SHA-256")
+            // 分母是确定的（文件已经在磁盘上），所以校验这一段能画真正的百分比。
+            val total = file.length()
+            var done = 0L
+            var lastReported = 0L
             file.inputStream().use { input ->
                 val buffer = ByteArray(COPY_BUFFER)
                 while (true) {
                     val read = input.read(buffer)
                     if (read < 0) break
                     digest.update(buffer, 0, read)
+                    done += read
+                    if (done - lastReported >= PROGRESS_STEP_BYTES) {
+                        lastReported = done
+                        onProgress("verify", done, total)
+                    }
                 }
             }
+            onProgress("verify", done, total)
             digest.digest().joinToString("") { String.format(Locale.ROOT, "%02x", it) }
         }.getOrNull()
 
@@ -848,6 +878,13 @@ internal class FoliaModStore(
         /** The only archive type the 配置 page's 导入模组 accepts (matched case-insensitively). */
         internal const val ZIP_EXTENSION = ".zip"
 
+        /**
+         * 进度回调的节流粒度（字节）。真实模组是几百 KB，所以在 256 KiB 的步长下最多也就几十条
+         * 消息；而这条通道的队列是有界的、满了会丢**最旧**的一条（也就是 100 ms 的 `state` 时钟），
+         * 所以绝不能每读一个 64 KiB 缓冲就发一条。
+         */
+        internal const val PROGRESS_STEP_BYTES = 256L * 1024
+
         private val CLIENT_PATTERN = Regex("\\.m?js$", RegexOption.IGNORE_CASE)
         private const val MACOSX_PREFIX = "__MACOSX"
         private const val COPY_BUFFER = 64 * 1024
@@ -924,6 +961,14 @@ internal object FoliaModDownloads {
         maxBytes: Long = MAX_BYTES,
         deadlineMs: Long = DEADLINE_MS,
         log: (String) -> Unit = {},
+        /**
+         * issue #23（第二轮）：下载进度 `(received, total)`；`total` 为 `-1` 表示服务器没给
+         * `Content-Length`（分块传输），界面据此画不定长进度条。
+         *
+         * 节流在 [copyLimited] 里做（每 [PROGRESS_STEP_BYTES] 一次 + 结束时一次）：这条通道的队列
+         * 满了会丢最旧的 `state` 时钟，所以「每读一个缓冲就发一条」是不允许的。
+         */
+        onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
     ): Result<File> {
         // Refuse before touching the filesystem: a rejected address must leave nothing behind, not
         // even the temp file that would have held the bytes.
@@ -957,8 +1002,9 @@ internal object FoliaModDownloads {
                     if (status == HttpURLConnection.HTTP_OK) {
                         val declared = connection.contentLengthLong
                         if (declared > maxBytes) throw IOException("模组包过大：$declared 字节（上限 $maxBytes）")
+                        onProgress(0L, declared)
                         connection.inputStream.use { input ->
-                            val written = copyLimited(input, temp, deadline, maxBytes)
+                            val written = copyLimited(input, temp, deadline, maxBytes, declared, onProgress)
                             if (written == 0L) throw IOException("下载内容为空")
                             log("mods: downloaded ${temp.length()} bytes from $current")
                         }
@@ -993,8 +1039,17 @@ internal object FoliaModDownloads {
     private fun resolveRedirect(current: String, location: String): String =
         URI(current).resolve(location.trim()).toString()
 
-    private fun copyLimited(input: InputStream, target: File, deadline: Long, maxBytes: Long): Long {
+    private fun copyLimited(
+        input: InputStream,
+        target: File,
+        deadline: Long,
+        maxBytes: Long,
+        /** `Content-Length`，或 -1（服务器没给）。只用于进度分母，绝不用于「够不够」的判断。 */
+        declaredTotal: Long = -1L,
+        onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
+    ): Long {
         var total = 0L
+        var lastReported = 0L
         FileOutputStream(target).use { out ->
             val buffer = ByteArray(COPY_BUFFER)
             while (true) {
@@ -1008,8 +1063,14 @@ internal object FoliaModDownloads {
                 total += read
                 if (total > maxBytes) throw IOException("模组包过大：已超过 $maxBytes 字节")
                 out.write(buffer, 0, read)
+                if (total - lastReported >= FoliaModStore.PROGRESS_STEP_BYTES) {
+                    lastReported = total
+                    onProgress(total, declaredTotal)
+                }
             }
         }
+        // 结束那一拍无条件发：否则最后一段（通常不到一个步长）永远不会被报告，进度条停在 90% 上。
+        onProgress(total, declaredTotal)
         return total
     }
 }

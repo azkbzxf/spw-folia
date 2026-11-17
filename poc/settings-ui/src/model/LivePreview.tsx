@@ -20,9 +20,10 @@
  * at page load. */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ObsBrowserSourceConfig } from '@/types/obsBrowserSource';
-import { bridgeOn } from '~/bridge';
+import { bridgeOn, getBridge } from '~/bridge';
 import type { UploadedFontDescriptor } from '~/model/settings';
 import { loadUploadedFontFile } from '~/model/uploadedFonts';
+import { extractInjectedMods } from '~/model/useInjectedMods';
 
 /** Size of the virtual screen inside the iframe; must stay 1920x1080 for the OBS layout. */
 const PREVIEW_WIDTH = 1920;
@@ -131,6 +132,8 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
     const statsRef = useRef<{ canvases: number; frames: number } | null>(null);
     /** Families already pushed into the child document (the ready path and the later-effects path can race). */
     const injectedFontsRef = useRef<Set<string>>(new Set());
+    /** 上一次转给子帧的模组清单签名（JSON），避免每次设置树变动都重新激活全部模组。 */
+    const lastModsSentRef = useRef<string | null>(null);
 
     const send = useCallback((kind: string, payload: unknown) => {
         const target = iframeRef.current?.contentWindow;
@@ -338,6 +341,42 @@ const LivePreview: React.FC<LivePreviewProps> = ({ paused, config, uploadedFonts
             offAudio();
         };
     }, [send]);
+
+    /* issue #23（第二轮）: 把**已装模组清单**转给预览 iframe。
+     *
+     * 为什么大预览需要它：这个 iframe 不是播放页，`Shim.js` 在子帧里第一行就 return，所以模组从来
+     * 没在预览框里激活过。Folia 的渲染器拿到 `visualizerMode = "mod:<id>:<viz>"` 在注册表里找不到，
+     * 就**静默回落**成内置样式 —— 货架上是模组、播放页是模组，只有大预览画的是 `classic`。
+     *
+     * 清单在**设置树**里（`mods` 是顶层注入成员），不在 `config` 里，所以单独发一条 `settings`。
+     * 变化才发（JSON 比对），因为设置树每次交互都会变，而激活全部模组不便宜。 */
+    useEffect(() => {
+        const pushMods = () => {
+            if (!readyRef.current) return;
+            let tree: unknown = null;
+            try {
+                tree = getBridge().getSettings?.() ?? null;
+            } catch {
+                tree = null;
+            }
+            const mods = extractInjectedMods(tree);
+            // `null` = 这份 payload 没带该键：保留子帧里已有的激活，绝不能当成「模组全没了」。
+            if (mods === null) return;
+            const signature = JSON.stringify(mods);
+            if (signature === lastModsSentRef.current) return;
+            lastModsSentRef.current = signature;
+            send('settings', { mods });
+        };
+        // The first push waits for `ready` (the child's activator is installed at document start, but
+        // its config pipeline is not up until then); later pushes follow every settings event.
+        const offSettings = bridgeOn<unknown>('settings', () => pushMods());
+        const offReady = bridgeOn<unknown>('modsReady', () => pushMods());
+        if (ready) pushMods();
+        return () => {
+            offSettings();
+            offReady();
+        };
+    }, [ready, send]);
 
     // The overlay is display:none while closed: freeze the child instead of paying for a hidden 1080p
     // renderer. The pause button freezes it too.

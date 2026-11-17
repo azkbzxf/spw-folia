@@ -150,7 +150,7 @@ listFoliumHostRegistries().forEach(r => r.unregisterAll(modId));
 |---|---|---|---|
 | 1 | **导入模组…** | `dev.spw.folia.FoliaPlugin.onImportModZip` | `SwingUtilities.invokeLater` → `JFileChooser`（只筛 `.zip`）→ `FoliaModStore.install(zip, expectedSha256 = null)` 在 `modActions` 线程 |
 | 2 | 打开模组文件夹 | `dev.spw.folia.FoliaPlugin.onOpenModsFolder` | `ProcessBuilder(listOf("explorer.exe", modsRoot))` |
-| 3 | 模组市场 | `dev.spw.folia.FoliaPlugin.onOpenModMarket` | `openFolia()`（没开就开窗）→ 宿主 `command open-mod-market` |
+| 3 | 模组市场 | `dev.spw.folia.FoliaPlugin.onOpenModMarket` | `openMarketWindow()` → 第二个宿主进程，`--url` 指向 `mod-market.html?market=1`（**不再需要播放页**） |
 
 **顺序是用户定的**（原话：「模组市场在配置中的主要功能是能手动导入模组」）：手动导入是**第一项**，
 市场降到第三项。JVM 测试钉住了顺序（按 json 文本里的偏移量比较），所以有人调换会被测出来。
@@ -171,15 +171,42 @@ listFoliumHostRegistries().forEach(r => r.unregisterAll(modId));
 - **这条路径没有摘要**：`install(zip, null)` 跳过 SHA-256 那一步，于是 `install` 内部其余全部规则
   （逐个条目 canonicalize 防穿越、条目数/总字节上限、`mod.json` 校验、原子替换）成为**唯一**防护。
 
-**整条链路（四个名字，每一处都得一致，写错任何一处只会表现为「按钮没反应」）**：
+**整条链路（v0.5.3 起是「第二个进程」，不再是「借播放页的一层遮罩」）**：
 
 ```
 preference_config.json  on_click: …onOpenModMarket
-   → FoliaPlugin.onOpenModMarket()          @JvmStatic @JvmName，无参
-   → bridge.sendUiCommand("open-mod-market")  → stdin {"t":"command","command":"open-mod-market"}
-   → HostForm.HandleCommand → DeliverPendingModMarket()
-   → page ui action "open-mod-market" → Shim case 'ui' → App.tsx bridgeOn('ui') → setModMarketOpen(true)
+   → FoliaPlugin.onOpenModMarket()      @JvmStatic @JvmName，无参
+   → FoliaPlugin.openMarketWindow()     幂等：进程还活着就只重推清单/设置树
+   → marketBridge.open()                FoliaHostBridge(marketOnly = true) → 第二个 spw-folia-host.exe
+   → argv: --url https://spw-folia.local/settings/mod-market.html?market=1
+           --window 1200x860 --no-topmost --no-transparency --no-curtain --no-keep-awake
+           --user-data <pluginPath>/webview-market
+   → main.tsx 的 isMarketWindow() 为真 → mountMarketWindow() → 只渲染 ModMarketPanel
 ```
+
+**为什么是第二个进程而不是「给现有实例加多会话」**：`FoliaHostBridge` 的每个会话状态
+（`process`/`pendingLines`/`writerThread`/`stdinBroken`/`pid`/`stdoutLog`/`pump`）都是**实例字段**，
+`open()` 的 `@Synchronized` 也是实例级的，所以第二个实例天然隔离；多会话改造要动每一个字段的归属。
+
+**三条必须分开的东西**（分开写在 `open()` 里，不是装饰）：
+
+| 项 | 播放页 | 市场窗口 | 不分开会怎样 |
+|---|---|---|---|
+| `--user-data` | 默认 `%LOCALAPPDATA%\spw-folia\webview` | `<pluginPath>/webview-market` | 两个进程共用一个 WebView2 profile = 未定义行为（`docs/host-app.md`） |
+| stdout/stderr 日志 | `spw-folia-host.stdout.log` | `spw-folia-host-market.stdout.log` | `bufferedWriter` 是**截断**写，后开的会把播放页的日志清空 |
+| `onSettingsFromPage` | 接 | **不接** | 设置树会出现第二个写者（`docs/lessons.md` §3.1） |
+| 窗口形态 | `--fullscreen` | `--window 1200x860`（`Program.cs` 的 `--window` 解析会把 `Fullscreen` 置 false） | 市场会变成一个全屏窗 |
+| `/__mods/` | `--mods-dir` | 不传 | 市场不需要导入 `client.mjs`，传了等于多开一条攻击面 |
+
+**市场窗口不接的东西，以及为什么安全**：`__SPW_FOLIA_MOD_VISUALIZERS__`（货架用，市场不读）、
+`setSettingsUiOpenState`（没有浮层）、热区上报（没有穿透）、`--mods-dir`（市场只列清单与预览图，
+导入 `client.mjs` 是播放页的事）。`Shim.js` 的 `case 'mods'` 在
+`window.__SPW_FOLIA_MARKET_ONLY__` 为真时**跳过** `modHost.reconcile`：那个页面没有 Folia 的
+visualizer 注册表，激活只会往 errors 里塞一堆假故障。
+
+**`open-mod-market` 这条宿主命令仍然存在**（`HostForm.HandleCommand` + `DeliverPendingModMarket`
++ `Shim.pendingUiIntents`），但它不再是配置页按钮的路径 —— 它服务的是**播放页右下角胶囊**那个入口
+（`PlayerBackgroundControl` 的左半，见下）。两段链路各自成立，不要把它们合成一条。
 
 **页面未就绪时不丢 message，靠两段各自成立的机制**：
 
@@ -246,6 +273,59 @@ window-capture 监听同时活着，一次 ESC 会关掉两层，破坏 `docs/pr
 上游用它提示「存着的样式但模组没登记」。这是「选了模组样式 → 模组被卸/禁用 → 页面静默回落成
 内置样式」这条路径的**唯一出口**。桩（恒空）会让这次回落完全无声。
 
+### 5.4 v0.5.3 修掉的三个「装了没效果」断点（改之前先读）
+
+这三个断点都**不会报错**，症状都是「装好、启用、看不到效果」，而 `verify-mod-market.mjs` 当时把前两条都绕开了（它自己传 `--mods-dir`、自己 `pushConfig`），所以门禁全绿。
+
+| 断点 | 现象 | 修法 | 现在的守卫 |
+|---|---|---|---|
+| **插件不给宿主传 `--mods-dir`** | `HostForm.MountModsInterceptor` 走 `mods-dir none` 分支，不注册 `/__mods/` 拦截器；页面 `import('https://spw-folia-mods.local/<id>/client.mjs')` 必然失败，Shim 记错误后 `deactivate`，货架上**一格都没有** | `FoliaHostBridge.open()` 的 argv 里加 `--mods-dir <绝对路径>`（两个 argv 元素，不是一个拼接串） | `FoliaModStoreTest` 的 argv 形状断言 + 门禁 B 段 |
+| **模组样式从未进入 `config.visualizerMode`** | `modVisualizerMode` 存在独立字段里，而 `snapshotFromState` 只带内置的 `styleId`；点模组格只移动了货架高亮，推出去的还是 `classic` | `useConfigPublisher.ts` 的 `themedInputs()` 在**发布时**投影 `effectiveVisualizerMode(state)` 进 `styleId` | 门禁 C 段 + `Stage.tsx` 的高亮用的是同一个函数 |
+| **大预览框没有模组激活器** | 设置页左侧的大预览是**同源 iframe**（`preview.html` + `PreviewShim.js`），而 `Shim.js` 在子帧里第一行就 `return` —— 激活器从来不在那个文档里。Folia 渲染器拿到 `mod:<id>:<viz>` 在注册表里找不到，**静默回落**成内置样式：货架是模组、播放页是模组，只有大预览画的是 `classic` | 激活器抽成 `poc/webview/host/ModHostActivator.js`，**两个 shim 共用**（宿主把它前置进 `Shim.js` 资源，stage-web 把它作为 `_host/mod-host-activator.js` 放在 `preview.html` 的 `preview-shim.js` 之前）；`PreviewShim` 用 `getMods/emit/post` 三个注入点安装它，`LivePreview.tsx` 把设置树里的 `mods` 以 `settings` 消息转给子帧 | 门禁 C3（真 iframe + 真 `settings` 消息，断言子帧 `__SPW_FOLIA_MOD_VISUALIZERS__` 里有 `mod:` 模式） |
+
+**为什么激活器是「一份代码、两个宿主」而不是复制一份**：`addOldClientNames` 的包装与 `onRelease` 的收集各对应一次实测失败（§3.1-3.2）。第二份稍旧一点的副本会让「模组加载了但画不出字」只在**一个窗口**里复现，那是最难发现的一类 bug。
+
+### 5.5 播放条模组的两个断点（v0.5.3，改之前先读）
+
+用户报告：「目前只适配了歌词样式，播放条还没适配」。官方样例「进度条增强（样例）」装好、启用、
+不报错，播放条上就是没有按钮。两个断点叠在一起，**都只表现为「按钮不出现」**：
+
+| 断点 | 现象 | 修法 |
+|---|---|---|
+| 模组用 **`registries.controlButtons`**（Folium 1.5 旧名）注册 | 激活器只包装了 `progressButtons`。`addOldClientNames` 把 `controlButtons` 挂成别名，但那个别名闭包指向**未包装**的 `progressButtons.register`，于是镜像数组里一条都没有 | `ModHostActivator.js` 的 `buildApi` 同时包装两个名字（`progressButtons` + `controlButtons`），同一份 `wrapProgressRegistry` |
+| 我们的 ctx 缺 **`ctx.subscribe` / `ctx.currentTime`** | `mount` 抛 `TypeError: ctx.subscribe is not a function`，`ModSlot` 把按钮标成 failed。实测诊断属性：`data-spw-mod-slot-seen="1" data-spw-mod-slot-failed="1"` | `modProgress.ts` 的 `createModProgressContext` 补齐两个旧名（照上游 `deprecated/oldNames.ts`：`subscribe`→`onChange`、`currentTime`→`playbackTime`），指向同一批实现 |
+
+**为什么 `addOldClientNames` 救不了第二个断点**：它重写的是**上游** `createFoliumClientApi` 交给模组的
+ctx 对象。而播放条的 ctx 是我们自己造的（上游的 `progressButtons` 注册表在这个 OBS surface 上根本
+没人求值，见 `modProgress.ts` 文件头），包装器碰不到它。
+
+**诊断锚点**：`ModSlot` 现在**永远**渲染一个 `data-spw-mod-slot` 的 span，把「读到了几条 / 失败几条」
+写进 `data-spw-mod-slot-seen` / `-failed`。返回 `null` 时页面上什么都不留，「没读到」和「读到了但被
+过滤」在外部看起来完全一样 —— 这个 bug 就是靠这两个属性在两次探针内定位的。
+
+**为什么投影在 publisher 而不是 `snapshotFromState`**：后者同时喂持久化（`bridge.ts` 的 `setSettings`），把 `mod:` 写进持久化的 `styleId` 会破坏「`visualizerMode` 永远是合法内置 id」这个回落前提 —— 模组被卸掉以后页面就再也回不到内置样式了。
+
+**顺带修掉的**：模组格的预览图曾是破图（`previewEntry` 是裸文件名，被当成站内相对路径解析成
+`https://spw-folia.local/preview.jpg`）。现在 `modStyles.ts` 用 Shim 挂在
+`window.__SPW_FOLIA_MODS__.host.modsBase` 上的基址拼绝对地址，拼不出来就退回「图标 + 名字」，
+**绝不猜地址**。
+
+### 5.6 市场面板的三个交互（v0.5.3）
+
+- **安装进度**：新协议消息 `modProgress`（`download`/`verify`/`unpack`/`done`，`total = -1` 表示分母
+  未知 → 不定长条）。**不复用 `log`**：宿主刻意不把插件的 `log` 转给页面（那条通道是给文件的）。
+  节流在 `FoliaPlugin.ModProgressThrottle`（≥200 ms 且百分比变了才发）—— `sendLine` 的队列满了会
+  丢**最旧**的一条，而最旧的是 100 ms 的 `state` 时钟。
+- **点卡片打开模组网站**：catalog 里**没有** homepage 字段（59 条实测），所以优先用社区/Beta 条目
+  的 `source`（GitHub 仓库），否则用市场自己的锚点 `根 + #mod-<id>`（站点首页里 `id="mod-<id>"` 真实
+  存在）。卡片本体可点，但 `closest('button, a, input, [role="switch"]')` 命中时放行给按钮；另有
+  一个显式外链按钮给键盘用户。`cursor` 用**内联 style** 而不是 Tailwind `cursor-pointer` ——
+  `verify-click-zones.mjs` 按 classList 找 monet 的竖排挂件，多一个候选会破坏那个门禁。
+- **市场清单缓存**：`localStorage`（`spw-folia.modCatalog.v1`），首帧直接画缓存、后台再取新的。
+  存的是**市场自己那份 catalog 的副本**，不是「装了哪些模组」（后者只有插件知道）。读回来的字节
+  必须重新过 `parseModCatalog`；`offline` 只在手上什么都没有时才成为状态，有缓存时它只是 `reason`
+  —— 断网打开市场应该看到「缓存 + 离线提示」，而不是清单突然变空。
+
 ## 6. 打包
 
 `packaging/tools/stage-web.mjs` 在 staging 时生成 `mod-host.json`：
@@ -271,6 +351,15 @@ window-capture 监听同时活着，一次 ESC 会关掉两层，破坏 `docs/pr
 - **C. 激活**：真机上推一条 `{"t":"mods"}`，选中模组样式后断言**画出了字**（`spans > 0`）——
   这一条就是 `addOldClientNames` 回归的捕手。
 - **D. 静态**：`mod:` 前缀不许出现在那三份内置样式清单里；市场域名只许写一处。
+- **E. 市场窗口**（v0.5.3）：`mod-market.html` 必须进 staging、必须带 `#root`、不许自带模块标签
+  （第二个入口会产出第二个 `settings-ui.js`）；`MARKET_PAGE` 与 `MARKET_PAGE_URL` 必须指同一页；
+  真 exe 用**不带** `--mods-dir` 的 argv 开那个 URL，断言 `[data-spw-mod-market]` 存在、
+  `canvas` 数为 0、设置浮层数为 0、`__SPW_FOLIA_MARKET_ONLY__` 为真。这一段就是「商店不再依赖
+  folia 的主界面」的可执行定义。
+- **C3. 大预览的模组激活**（v0.5.3）：在真页面里造一个 `preview.html` iframe，按
+  `LivePreview.tsx` 的信封发 `settings` 消息，断言**子帧自己的** `__SPW_FOLIA_MOD_VISUALIZERS__`
+  里出现 `mod:` 模式。这条只能用真 iframe 测 —— 失败形态是 Folia 渲染器内部的静默回落，静态检查
+  看不到。
 
 ## 8. 已知边界（v1）
 
@@ -293,3 +382,5 @@ window-capture 监听同时活着，一次 ESC 会关掉两层，破坏 `docs/pr
 - `mods` 是**全量**推送（变更即全量），单行 JSON。
 - `modAction` 是**平铺信封**（与 `control` 一致），白名单外丢弃 + warn。
 - 页面 → 宿主那一段，宿主**逐个字段读出来再拼**，绝不内嵌未消毒的子 JSON。
+- `modProgress`（v0.5.3）方向相反：插件 → 宿主 → 页面。宿主白名单 `phase`，逐字段重拼，**不**转发
+  `log`（那条通道只进文件）。`total = -1` 是合法的「分母未知」。

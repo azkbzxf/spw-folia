@@ -543,8 +543,85 @@ async function machiFlow(ui) {
     record('E4 the menu button sends no playback control', eMenu.added.length === 0, eMenu.added);
     s = await snapshot();
     record('E5 the menu panel opened (so the click really reached the control)', s.menuBtn === true, s.menuBtn);
+
+    /* E5b. v0.5.3: 面板里的开关必须点得动。
+     *
+     * 用户报告「现在点不了这两行设置了」。根因是「点击外部关闭」那条 capture 监听用的 `rootRef` 只包住
+     * **胶囊**，而面板是胶囊的兄弟节点 —— 于是面板内任意一次 pointerdown 都被判成「外部」，在行的
+     * `click` 跑起来之前就把面板关了。面板看起来还开着（截图里就是），但开关永远不响应。
+     *
+     * 这条断言必须在 **pointerdown** 之后立刻读 `data-open`：用 `.click()` 测不出来，因为 `.click()`
+     * 不派发 pointerdown，而那正是 bug 的触发点（第一版 E5 只点按钮，所以一直是绿的）。 */
+    const rowPress = await act(async () => evaluate(`
+        const panel = document.querySelector('[data-spw-chrome="player-background-panel"]');
+        if (!panel) return JSON.stringify({ error: 'no panel' });
+        const row = panel.querySelectorAll('button')[1] || panel.querySelectorAll('button')[0];
+        if (!row) return JSON.stringify({ error: 'no row' });
+        const b = row.getBoundingClientRect();
+        const target = row.querySelector('.spw-player-bg-label') || row;
+        const before = panel.getAttribute('data-open');
+        target.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, clientX: b.left + b.width/2, clientY: b.top + b.height/2,
+          pointerId: 11, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1
+        }));
+        return JSON.stringify({ before, afterPointerDown: panel.getAttribute('data-open') });
+    `), 600);
+    // `evaluate` wraps the body in a function and the host double-encodes the return value: unwrap first.
+    const rowState = asObject(unwrap(rowPress.detail));
+    record('E5b a press inside the open menu panel does NOT close it (the switches are clickable)',
+        rowState.before === 'true' && rowState.afterPointerDown === 'true',
+        rowState);
+
     await clickOutside();
     await sleep(600);
+
+    /* E5c. v0.5.4（用户报告：「开启鼠标穿透后右下角的按钮全部消失了」）。
+     *
+     * 穿透的含义是「每次点击都属于桌面」：捕获窗只在**已上报的热区**里接事件，页面收不到外面那些
+     * pointermove。而 chrome 的空闲淡出靠 `pointermove` 唤醒（2.5 s 无输入 → `opacity:0`）——
+     * 于是进入穿透、等 2.5 s，齿轮淡成 0，唯一能唤醒它的输入又到不了页面：**右上角齿轮永久消失**，
+     * 用户只剩两个他多半不知道的热键。
+     *
+     * 这条断言读的是「穿透期间齿轮仍然可见且不透明」，也就是逃生通道真的还在。
+     * 它不需要真的开穿透：状态由页面的 store 驱动，直接开那一行再读即可。 */
+    /* E5c. v0.5.4（用户报告：「开启鼠标穿透后右下角的按钮全部消失了」）。
+     *
+     * 穿透的含义是「每次点击都属于桌面」：捕获窗只在**已上报的热区**里接事件，页面收不到外面那些
+     * pointermove。而 chrome 的空闲淡出靠 `pointermove` 唤醒（2.5 s 无输入 → `opacity:0`）——
+     * 于是进入穿透、等 2.5 s，齿轮淡成 0，唯一能唤醒它的输入又到不了页面：**右上角齿轮永久消失**。
+     *
+     * ⚠️ 这条**不在真机上跑**：要进入穿透必须先打开透明背景，而本门禁把样式切成 machi / monet
+     * 这些**不支持透明**的样式（`setVisualizerMode` 会拒绝），所以在它里面「点透明背景」是空操作
+     * （实测 `data-flat` 仍是 `'false'`，`穿透` 那一行也就不存在）。硬测只会得到与产品无关的红。
+     *
+     * 改成**静态契约断言**：淡出那段 effect 必须在 `mousePassthrough` 为真时提前返回、不装计时器。
+     * 这守的正是那条回归 —— 有人把依赖数组改回去、或把 early-return 删掉，这条就会红。 */
+    const appSource = readFileSync(join(ROOT, 'poc/settings-ui/src/App.tsx'), 'utf8');
+    /* Find the FADE effect specifically: App.tsx has two effects keyed on `[state.mousePassthrough]`
+     * (this one and the "turn the bar off" one), so anchor on the effect that also installs the
+     * `pointermove` listener — that is the idle-fade by definition. */
+    let fadeBlockText = null;
+    for (let from = 0; ;) {
+        const dep = appSource.indexOf('[state.mousePassthrough]', from);
+        if (dep < 0) break;
+        const start = appSource.lastIndexOf('useEffect(', dep);
+        const block = appSource.slice(start, dep);
+        if (block.includes("addEventListener('pointermove'")) fadeBlockText = block;
+        from = dep + 1;
+    }
+    const hasGuard = Boolean(fadeBlockText) && /mousePassthrough\s*===\s*true/.test(fadeBlockText);
+    record('E5c the chrome idle-fade backs off under 鼠标穿透 (the gear cannot be woken by pointermove there)',
+        hasGuard && /setChromeVisible\(true\)/.test(fadeBlockText),
+        fadeBlockText ? `fade effect found, guard=${hasGuard}` : 'fade effect (mousePassthrough + pointermove) not found');
+
+    /* E5d. 同一条报告的第二个要求：「开启鼠标穿透后应当默认关闭并不显示『显示播放条』」。 */
+    const panelSource = readFileSync(join(ROOT, 'poc/settings-ui/src/chrome/PlayerBackgroundControl.tsx'), 'utf8');
+    record('E5d the 「显示播放条」 row is not rendered while 鼠标穿透 is on',
+        /\{passthrough \? null : \(/.test(panelSource),
+        'PlayerBackgroundControl must gate the playback-bar row on `passthrough`');
+    record('E5d …and entering 鼠标穿透 turns the playback bar off',
+        /store\.setShowPlaybackBar\(false\)/.test(appSource),
+        'App.tsx must drop showPlaybackBar to false when passthrough turns on');
 
     // ---- E6–E9: the HUD's own drag/seek rail and the queue panel still own their gestures.
     // They sit above the picture, so this is the "a press that starts on a control is not a picture

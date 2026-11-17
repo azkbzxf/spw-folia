@@ -25,9 +25,19 @@ internal class FoliaSettingsStore(
     private val log: (String) -> Unit
 ) {
 
-    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
-        Thread(r, "spw-folia-settings").apply { isDaemon = true }
-    }
+    /**
+     * The debounce thread.
+     *
+     * `var` because PF4J can call `stop()` and then `start()` on the **same** instance: a `val`
+     * holding a `shutdownNow()`-ed executor stays terminated, so every later [persist] would arm a
+     * flusher that can never run (settings silently stop saving). [reopen] revives it from [start].
+     */
+    private var executor: ScheduledExecutorService = newExecutor()
+
+    private fun newExecutor(): ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "spw-folia-settings").apply { isDaemon = true }
+        }
 
     @Volatile private var lastSaved: String? = null
     @Volatile private var pending: String? = null
@@ -162,6 +172,32 @@ internal class FoliaSettingsStore(
         closed = true
         executor.shutdownNow()
     }
+
+    /**
+     * Revives the store for a second [FoliaPlugin.start] on the same instance.
+     *
+     * PF4J's lifecycle allows `stop()` → `start()`, and [shutdown] terminates the debounce executor.
+     * Without this the replacement session would look healthy (settings load fine) while every later
+     * write was armed on a dead pool and silently dropped. Idempotent: a live executor is left alone.
+     */
+    fun reopen() {
+        if (!executor.isShutdown && !closed) return
+        executor = newExecutor()
+        closed = false
+        flusherArmed = false
+        pending = null
+        pendingSince = 0L
+        log("settings store reopened (stop→start on the same plugin instance)")
+    }
+
+    /**
+     * Test seam: whether this store currently refuses writes.
+     *
+     * `closed` is what `persist()` consults, and "the store came back after stop→start" is only
+     * observable through it — the executor being alive is an implementation detail. `internal` so a
+     * JVM test can pin the lifecycle without reaching into private state by reflection.
+     */
+    internal val isClosedForTest: Boolean get() = closed
 
     private fun defaultTree(): String {
         val candidates = listOf(

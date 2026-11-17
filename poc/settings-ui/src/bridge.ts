@@ -7,7 +7,9 @@ import { useSettingsStore, snapshotFromState, applySnapshot, type SettingsSnapsh
 
 export type BridgeEventType = 'hello' | 'settings' | 'state' | 'lyrics' | 'track' | 'audio' | 'config' | 'beat' | 'settingsUI' | 'queue' | 'envReport'
     /* issue #23: 模组清单（`settings` 里也带一份，这条是独立推送通道的备用名）与「激活完了」。 */
-    | 'mods' | 'modsReady';
+    | 'mods' | 'modsReady'
+    /* issue #23 第二轮: 安装进度（下载/校验/解包），由插件节流后经宿主转发。 */
+    | 'modProgress';
 
 export interface BridgeStateMessage {
     currentTime: number;
@@ -488,6 +490,32 @@ export interface ModActionRequest {
 /** 一次动作的 `actionId`；页面自己生成，宿主原样回传。 */
 export const newModActionId = (): string =>
     `mod-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/* ---------------------------------------------------------------------------------------------
+ * issue #23 第二轮 · 安装进度（`modProgress`，协议 §2）
+ *
+ * 一次安装有三个阶段，**分母是否已知并不一样**，界面必须能分辨：
+ *   - `download` —— 服务器给了 `Content-Length` 才有分母；分块传输时 `total` 为 `-1`；
+ *   - `verify`   —— 文件已经在磁盘上，分母恒等于文件长度（真正的百分比）；
+ *   - `unpack`   —— 只有「开始了 / 完成了」两个有意义的点，`total` 为 `-1`；
+ *   - `done`     —— 一次安装的终点（成功或失败都会发），界面据此收掉进度条。
+ *
+ * `actionId` 是配对键：面板一次只装一个，但仍然按它认领，避免把上一次的残留画到这一张卡上。
+ * ------------------------------------------------------------------------------------------- */
+
+/** 一个进度阶段；`done` 是终点标记而不是「某个阶段完成了」。 */
+export type ModProgressPhase = 'download' | 'verify' | 'unpack' | 'done';
+
+export interface ModProgressMessage {
+    phase: ModProgressPhase;
+    /** 页面的 `newModActionId()` 原样回来；老版本插件可能没有。 */
+    actionId?: string;
+    modId?: string;
+    /** 已完成的量（字节）；`done` 阶段无意义。 */
+    received: number;
+    /** 总量；`-1` = 分母未知（画不定长条）。 */
+    total: number;
+}
 
 /**
  * 发一条模组动作。

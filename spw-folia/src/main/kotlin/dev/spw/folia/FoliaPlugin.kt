@@ -25,7 +25,9 @@ import java.time.LocalDateTime
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import javax.swing.JComponent
 import javax.swing.JFileChooser
 import javax.swing.JFrame
@@ -121,6 +123,19 @@ class FoliaPlugin(
     private val appendedLists = Collections.synchronizedMap(WeakHashMap<Any, Boolean>())
 
     private val bridge = FoliaHostBridge(File(pluginContext.pluginPath), ::log)
+
+    /**
+     * issue #23（第二轮）：**只有市场**的那个窗口的桥。
+     *
+     * 用户要求「商店不再依赖 folia 的主界面，从配置中进入商店只弹出商店的小窗口」。实现上是第二个
+     * `FoliaHostBridge` 实例（见它的 `marketOnly` KDoc）：同一个宿主 exe、同一套协议，但窗口形态
+     * 换成小窗、`--url` 指向 `mod-market.html?market=1`、独立的 WebView2 profile 与日志文件。
+     *
+     * **它刻意不接 `onSettingsFromPage`**：设置树只有播放页那一份写者（`docs/lessons.md` §3.1 的
+     * 单写者铁律）。市场窗口只读设置树里的 `mods`，从不回写 —— 而且从结构上它就写不了：回写通路
+     * 由 `subscribeSettingsRoundTrip()` 武装，那个 hook 挂在 `App.tsx` 上，市场窗口根本不挂它。
+     */
+    private val marketBridge = FoliaHostBridge(File(pluginContext.pluginPath), ::log, marketOnly = true)
     private val settingsStore = FoliaSettingsStore(::log)
 
     /**
@@ -136,8 +151,23 @@ class FoliaPlugin(
      * `mod-system.json` — two of those racing would produce exactly the states the individual methods
      * go out of their way to avoid (a half-replaced directory, a state file written from a stale
      * read). One worker thread, in arrival order.
+     *
+     * ## Why it is a `var` re-created in [start] instead of a `val`
+     *
+     * **PF4J can call `stop()` and then `start()` on the SAME plugin instance.** Field initialisers
+     * run once per instance, so a `val` holding a `shutdownNow()`-ed executor stays terminated
+     * forever, and every later `execute()` throws `RejectedExecutionException`. That is exactly what
+     * happened on a real machine: SPW started two instances during one launch, the first `stop()`ed,
+     * and from then on every 「安装」 in the market was dropped with
+     * `mods: install dropped (java.util.concurrent.RejectedExecutionException)` — no download, no
+     * progress bar, nothing. The user saw a dead 安装 button.
+     *
+     * So the lifecycle owns this: [stop]/[delete] shut it down, [start] makes a fresh one. Same for
+     * [settingsStore], whose own executor has the identical problem.
      */
-    private val modActions = Executors.newSingleThreadExecutor { r ->
+    private var modActions: ExecutorService = newModActions()
+
+    private fun newModActions(): ExecutorService = Executors.newSingleThreadExecutor { r ->
         Thread(r, "spw-folia-mods").apply { isDaemon = true }
     }
 
@@ -162,6 +192,11 @@ class FoliaPlugin(
             "start: id=${pluginContext.pluginId} version=${pluginContext.pluginVersion} " +
                 "spw=${pluginContext.spwVersion} channel=${pluginContext.spwChannel} path=${pluginContext.pluginPath}"
         )
+        /* PF4J may start the SAME instance again after [stop]. Everything [stop] shut down has to be
+         * brought back here, or the second session runs on dead executors — see [modActions]'s KDoc for
+         * the real failure that caused (every 安装 silently dropped, no download, no progress bar). */
+        if (modActions.isShutdown) modActions = newModActions()
+        settingsStore.reopen()
         // v0.3.2 (issue #9): the "loaded" success toast is gone — a notification on every start is
         // pure noise. Only failures toast (see the class-transform and hook paths below); normal
         // startup is proven by the log line above.
@@ -207,6 +242,18 @@ class FoliaPlugin(
             log("host exit reason: $text")
             toast("Folia 窗口已关闭：$text", WorkshopApi.Ui.ToastType.Error)
         }
+        /* issue #23（第二轮）：市场窗口那第二个进程的三条回调。
+         *
+         * 与播放页**共享**的是「动作」与「清单」：两个窗口里的市场面板都能装/卸/启停，磁盘工作全部
+         * 落在同一个串行 worker（[modActions]）上，所以两个窗口同时点也不会互相踩。
+         *
+         * 刻意**不接** `onSettingsFromPage`：市场窗口不拥有设置树（见 [marketBridge] 的 KDoc）。 */
+        marketBridge.onModAction = { line -> runModAction(line) }
+        marketBridge.modsProvider = { modsJson }
+        marketBridge.onClosed = { reason -> log("mod market window closed (reason=$reason); plugin stays loaded") }
+        // 不弹 toast：用户自己关掉的那个小窗口不该被告知「出错了」。真正的失败（exe 缺失/崩溃）已经在
+        // 播放页那条路径上有了提示，这里只留日志。
+        marketBridge.onHostExitReason = { text -> log("mod market host exit reason: $text") }
         startExtensionWatch()
         // Registered before the hook checks: the shortcuts are independent of the 更多 menu injection
         // and should keep working even when a host build's flyout target cannot be resolved.
@@ -373,6 +420,9 @@ class FoliaPlugin(
         methodHook = null
         runCatching { trayMenu.uninstall() }.onFailure { log("tray unhook failed: $it") }
         runCatching { bridge.stop() }.onFailure { log("bridge stop failed: $it") }
+        // issue #23（第二轮）：市场窗口是**独立的进程**，插件停/重载时必须一起收掉，否则它会带着
+        // 一个已经不存在的插件继续跑（用户再点「模组市场」也唤不回它 —— 新插件实例的 marketBridge 是空的）。
+        runCatching { marketBridge.stop() }.onFailure { log("market bridge stop failed: $it") }
         runCatching { settingsStore.shutdown() }
         runCatching { FoliaPlaybackExtension.get()?.shutdown() }
         SwingUtilities.invokeLater { swingFallbackWindow?.dispose() }
@@ -382,6 +432,9 @@ class FoliaPlugin(
     override fun delete() {
         log("delete")
         runCatching { bridge.stop() }.onFailure { log("bridge stop failed: $it") }
+        // issue #23（第二轮）：市场窗口是**独立的进程**，插件停/重载时必须一起收掉，否则它会带着
+        // 一个已经不存在的插件继续跑（用户再点「模组市场」也唤不回它 —— 新插件实例的 marketBridge 是空的）。
+        runCatching { marketBridge.stop() }.onFailure { log("market bridge stop failed: $it") }
         runCatching { settingsStore.shutdown() }
         // A reload re-creates the plugin in place, so the old worker must not outlive it: a daemon
         // thread stuck in a download would keep writing into a mod directory nobody watches any more.
@@ -680,11 +733,25 @@ class FoliaPlugin(
      */
     private fun pushMods(reason: String) {
         val json = refreshMods(reason)
+        // issue #23（第二轮）：两个窗口都要拿到新清单。市场窗口自己就是那个面板，它没有别的刷新
+        // 通路（它不挂 `App.tsx`，所以也没有 `settings` 事件以外的输入），漏推一次就等于「装完了
+        // 但列表还是旧的」。两个 bridge 各自独立，谁没在跑就跳过。
+        //
+        // 三条推送**逐个写出来**而不是抽一个「对两个桥各跑一次」的 helper：这里要的不只是「跑两次」，
+        // 而是**每条推送都有自己的失败日志**（哪个窗口没收到、为什么），抽成 helper 以后错误串就只剩
+        // 一个标签，排查「一个窗口刷新了另一个没有」时正好丢掉最有用的那一半。
         runCatching { bridge.sendMods(json) }
-            .onFailure { log("mods: send failed ($reason): ${it::class.java.name}: ${it.message}") }
+            .onFailure { log("mods: send failed ($reason, player): ${it::class.java.name}: ${it.message}") }
+        runCatching { marketBridge.sendMods(json) }
+            .onFailure { log("mods: send failed ($reason, market): ${it::class.java.name}: ${it.message}") }
         if (bridge.isRunning()) {
             runCatching { bridge.sendSettings(withInjectedMembers(settingsTree)) }
                 .onFailure { log("mods: settings re-push failed ($reason): ${it::class.java.name}: ${it.message}") }
+        }
+        if (marketBridge.isRunning()) {
+            // 市场窗口同样只读设置树里的 `mods`（`useInjectedMods`），所以那份树也得推给它。
+            runCatching { marketBridge.sendSettings(withInjectedMembers(settingsTree)) }
+                .onFailure { log("mods: market settings re-push failed ($reason): ${it::class.java.name}: ${it.message}") }
         }
     }
 
@@ -707,11 +774,39 @@ class FoliaPlugin(
         }
         val actionId = Json.stringField(line, "actionId")
         try {
-            modActions.execute { executeModAction(action, actionId, line) }
+            dispatchModAction(action, actionId, line)
+        } catch (t: RejectedExecutionException) {
+            /* v0.5.3: 这条 catch 以前把**永久性故障**当成「插件正在退出」吞掉了。
+             *
+             * 实测症状：SPW 一次启动里起了两个实例，第一个 `stop()` 之后 PF4J 又对同一个实例调了
+             * `start()`，而 `modActions` 当时是 `val`（初始化器只跑一次）——线程池永久终止，于是
+             * 每一次安装都在这里抛 `RejectedExecutionException`，日志只有一行
+             * `mods: install dropped (...)`，页面上**没有下载、没有进度条、没有任何提示**。
+             *
+             * 现在先自愈一次再重试；仍失败才当作真的在退出，并且**让用户看见**（report 走 log
+             * 通道 + 进度条发 done 收尾），绝不再静默。 */
+            log("mods: ${action} rejected by a stopped worker; re-creating it once")
+            modActions = newModActions()
+            try {
+                dispatchModAction(action, actionId, line)
+                return
+            } catch (again: Throwable) {
+                log("mods: ${action} still rejected after re-creating the worker (${again::class.java.name}); plugin is stopping")
+                // 收尾那一拍也发给两个窗口：进度条在市场窗口上，只发播放页等于永远不停。
+                val failedModId = Json.stringField(line, "modId")
+                for (target in arrayOf(bridge, marketBridge)) {
+                    runCatching { target.sendModProgress(actionId, failedModId, "done", 0L, 0L) }
+                }
+                return
+            }
         } catch (t: Throwable) {
-            // RejectedExecutionException after shutdown: the plugin is going away, nothing to do.
-            log("mods: ${action} dropped (${t::class.java.name})")
+            log("mods: ${action} dropped (${t::class.java.name}: ${t.message})")
         }
+    }
+
+    /** One `modActions.execute`, factored out so the retry path cannot drift from the first attempt. */
+    private fun dispatchModAction(action: String, actionId: String?, line: String) {
+        modActions.execute { executeModAction(action, actionId, line) }
     }
 
     /** One action, already on the worker thread. Catches everything: this thread has no supervisor. */
@@ -721,7 +816,7 @@ class FoliaPlugin(
             (actionId?.let { " id=$it" } ?: "")
         try {
             when (action) {
-                "install" -> reportInstall(line, label)
+                "install" -> reportInstall(line, label, actionId, modId)
                 "uninstall" -> reportUnit(label, modStore.uninstall(requireModId(modId)))
                 "setEnabled" -> {
                     val enabled = Json.boolField(line, "enabled")
@@ -758,7 +853,7 @@ class FoliaPlugin(
      * requires one: the market publishes `download.sha256`, so a missing one means we cannot tell
      * whether we got the file the catalog described.
      */
-    private fun reportInstall(line: String, label: String) {
+    private fun reportInstall(line: String, label: String, actionId: String?, modId: String?) {
         val download = Json.rawField(line, "download")
         // Two shapes are accepted because the host forwards what the page sent, and the page's own
         // vocabulary is the nested `download` object (PLAN §2.3). The flat spelling is what a
@@ -784,15 +879,29 @@ class FoliaPlugin(
             return
         }
         report(label, "info", "开始下载 " + (name ?: url))
-        val downloaded = FoliaModDownloads.fetch(url, log = ::log).getOrElse { failure ->
+        // issue #23（第二轮）：进度是**用户正在看的状态**，不是日志。用一个节流器把 5 Hz 上限与
+        // 「百分比没变就不发」两件事收在一处（这条通道满了会丢最旧的 state 时钟）。
+        val progress = newProgressThrottle(actionId, modId)
+        val downloaded = FoliaModDownloads.fetch(
+            url,
+            log = ::log,
+            onProgress = { received, total -> progress.emit("download", received, total) },
+        ).getOrElse { failure ->
+            progress.emit("done", 0L, 0L)
             report(label, "error", "下载失败：${failure.message}")
             return
         }
         try {
-            val installed = modStore.install(downloaded, sha).getOrElse { failure ->
+            val installed = modStore.install(
+                downloaded,
+                sha,
+                onProgress = { phase, done, total -> progress.emit(phase, done, total) },
+            ).getOrElse { failure ->
+                progress.emit("done", 0L, 0L)
                 report(label, "error", "安装失败：${failure.message}")
                 return
             }
+            progress.emit("done", 1L, 1L)
             report(
                 label, if (installed.error == null) "info" else "warn",
                 "已安装 ${installed.name} ${installed.version}" +
@@ -804,6 +913,25 @@ class FoliaPlugin(
             runCatching { downloaded.delete() }
         }
     }
+
+    /**
+     * issue #23（第二轮）：把「一次安装」的进度节流成最多 5 Hz、且只在百分比真的变了时发。
+     *
+     * 节流规则本身住在 [ModProgressThrottle]（独立类 + 假时钟可测）；这里只负责**出口**。
+     *
+     * v0.5.3：推给**两个**窗口，不只是播放页。用户是从**市场小窗**点「安装」的
+     * （`onOpenModMarket` 现在开的是独立进程），进度条长在那个窗口的卡片上。只发 `bridge`
+     * （播放页）时，市场窗口一条都收不到 —— 症状正是「点了下载，没有进度条」（下载其实成功了，
+     * 只是没有任何反馈）。两个桥各自独立，没在跑的那个 `sendLine` 直接返回，所以这里不需要判断
+     * 窗口是否开着。
+     */
+    private fun newProgressThrottle(actionId: String?, modId: String?): ModProgressThrottle =
+        ModProgressThrottle(actionId, modId) { phase, done, total ->
+            for (target in arrayOf(bridge, marketBridge)) {
+                runCatching { target.sendModProgress(actionId, modId, phase, done, total) }
+                    .onFailure { log("mods: progress line failed: ${it::class.java.name}: ${it.message}") }
+            }
+        }
 
     private fun reportUnit(label: String, result: Result<Unit>) {
         result.fold(
@@ -1127,6 +1255,41 @@ class FoliaPlugin(
         }
     }
 
+    /**
+     * issue #23（第二轮）：开（或唤起）只有市场的小窗口。
+     *
+     * 与 [openFolia] 的差别是刻意的，不只是「少开一个全屏窗」：
+     *
+     *  - **没有 Swing 回退**。播放页回退成一块黑底占位是「比什么都没有强」，而一个装着空 JFrame 的
+     *    「模组市场」是骗人的：用户会以为市场加载失败。打不开就只记日志。
+     *  - **幂等**。进程还活着就把请求交给它（宿主自己把窗口提到前面）；再 spawn 一个会得到两个市场窗。
+     *  - **先塞设置树再 open**。宿主在 `navDone` 时会 `SendSettingsToPage`，而市场面板第一帧就要读
+     *    已装清单；晚一步的推送会让「已安装」先闪一个空列表。
+     */
+    private fun openMarketWindow() {
+        marketBridge.settingsTree = withInjectedMembers(settingsTree)
+        if (marketBridge.isRunning()) {
+            log("mod market: window already open (pid=${marketBridge.pidOrNull()}), asking the host to re-deliver")
+            // 已开着的窗口不重新 spawn：直接重推清单 + 设置树，页面那边的面板自己会跟上。
+            runCatching { marketBridge.sendMods(modsJson) }
+                .onFailure { log("mod market: mods re-push failed: ${it::class.java.name}: ${it.message}") }
+            runCatching { marketBridge.sendSettings(withInjectedMembers(settingsTree)) }
+                .onFailure { log("mod market: settings re-push failed: ${it::class.java.name}: ${it.message}") }
+            return
+        }
+        val started = try {
+            marketBridge.open()
+        } catch (t: Throwable) {
+            log("mod market: bridge open failed: ${t::class.java.name}: ${t.message}")
+            false
+        }
+        if (started) {
+            log("mod market: window requested (helper pid=${marketBridge.pidOrNull()})")
+        } else {
+            log("mod market: helper unavailable; the market window cannot open")
+        }
+    }
+
     private fun openSwingFallbackWindow() {
         SwingUtilities.invokeLater {
             try {
@@ -1198,7 +1361,7 @@ class FoliaPlugin(
     companion object {
         /** Shown in the helper handshake until [start] forwards the real host version. */
         const val SPW_VERSION = "1.19.0"
-        const val PLUGIN_VERSION = "0.5.2"
+        const val PLUGIN_VERSION = "0.5.4"
 
         /** How long the start-up watcher waits for PF4J to instantiate the playback extension. */
         private const val EXTENSION_WATCH_MS = 20_000L
@@ -1415,28 +1578,22 @@ class FoliaPlugin(
         /**
          * issue #23 配置页入口: `preference_config.json` 「模组 → 模组市场」button target.
          *
-         * Replaces the 「模组市场（Beta）」 row that used to sit in the player page's bottom-right
-         * menu. The row is gone (the user asked for the entry to live in the plugin's 配置 page), so
-         * this is now the **only** way to reach the market from the app, and it has to work from both
-         * shapes of a session:
+         * ## v0.5.3（第二轮）：不再借用播放页，直接开一个只有市场的小窗口
          *
-         *  - no window running → open one first ([openFolia] spawns the helper, exactly like the 更多
-         *    menu entry does), then ask it to open the market;
-         *  - a window already running → just ask.
+         * 用户的原话是「商店不再依赖 folia 的主界面，从配置中进入商店只弹出商店的小窗口」。旧实现
+         * 是「没窗口就先 `openFolia()` 开全屏播放页，再让宿主把市场面板盖上去」—— 那正是用户不想要
+         * 的：为了看一眼市场要先起一个全屏播放器，市场还只是它上面的一层遮罩。
          *
-         * **The ask is a HOST command, not a page message.** The plugin has no WebView2 object, and the
-         * host is the only party that can post to the page *and* replay the post once the page is
-         * ready. `open-mod-market` therefore travels as `{"t":"command",…}` and the host answers it
-         * with a `ui` action; the replay-on-`bridgeReady` in `HostForm.cs` is what makes this work in
-         * the "just spawned, page not ready yet" window (measured: the page needs ~1 s after spawn,
-         * and a post before that is dropped with `post-page-skip reason=not-ready`).
+         * 现在走 [marketBridge]：第二个宿主进程，`--url` 指向 `mod-market.html?market=1`，小窗、
+         * 不置顶、不透明、无开屏动画、独立 WebView2 profile。播放页是否存在完全不影响它，两者可以
+         * 同时开着（各自的 `modAction` 都落到同一个串行 worker）。
          *
-         * No toast on purpose: a `WorkshopApi.ui.toast` issued from a 配置-page callback is silently
-         * dropped while SPW's own UI is starting (`docs/lessons.md` §4.2), and here it is not needed —
-         * the window opening (and then the market covering it) is the feedback.
-         *
-         * Never throws: the caller is SPW's config UI thread, and the workshop API resolves `on_click`
-         * without a try/catch.
+         * 三个细节：
+         *  - **幂等**：窗口已经开着就只是把它叫到前面（宿主进程还在 = 用户还没关它）。再 spawn 一个
+         *    会得到两个市场窗，而用户点的是同一个按钮。
+         *  - **不弹 toast**：`WorkshopApi.ui.toast` 从配置页回调里发出时，SPW 自己的 UI 还在启动，
+         *    会被静默丢掉（`docs/lessons.md` §4.2）；窗口本身出现就是反馈。
+         *  - **绝不抛**：调用方是 SPW 的配置 UI 线程，`on_click` 的解析没有 try/catch。
          */
         @JvmStatic
         @JvmName("onOpenModMarket")
@@ -1452,15 +1609,7 @@ class FoliaPlugin(
                 return
             }
             try {
-                // `bridge.isRunning()` true does NOT mean the page is ready (a freshly spawned helper
-                // accepts `command` lines immediately). No sleep/poll here: the host caches the action
-                // and replays it on `bridgeReady`, so one send is always enough.
-                if (!target.bridge.isRunning()) {
-                    target.log("mod market: no window, opening one first")
-                    target.openFolia()
-                }
-                target.bridge.sendUiCommand(OPEN_MOD_MARKET_COMMAND)
-                target.log("mod market: asked the host to open the market panel")
+                target.openMarketWindow()
             } catch (t: Throwable) {
                 target.log("mod market: open failed: ${t::class.java.name}: ${t.message}")
             }

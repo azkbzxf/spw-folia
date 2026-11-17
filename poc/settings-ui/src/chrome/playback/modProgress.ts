@@ -50,6 +50,28 @@ export interface ModProgressContext {
     seek: (seconds: number) => void;
     /** 播放条当前的颜色（从真实 DOM 算出来，不是硬编码）。 */
     getColors: () => { fill: string; track: string; text: string };
+
+    /* ---------------------------------------------------------------------------------------
+     * Folium 1.5 旧名（v0.5.3 补上）。
+     *
+     * **这两个字段曾经是「播放条没适配」的真正原因。** 官方样例模组
+     * 「进度条增强（样例）」的 `mount` 里写的是 `ctx.subscribe(...)` 与 `ctx.currentTime`，
+     * 而我们的 ctx 只给了 Folium 2 的新名字 —— 于是 `mount` 抛
+     * `TypeError: ctx.subscribe is not a function`，`ModSlot` 把那个按钮标成 failed，
+     * 播放条上一个 slot 都不出现（`data-spw-mod-slot-seen=1, failed=1`）。
+     *
+     * 为什么 `addOldClientNames` 救不了它：那个包装只重写**上游** `createFoliumClientApi` 交给模组的
+     * 那个 ctx 对象。而播放条的 ctx 是我们**自己造**的（上游的 progressButtons 注册表在我们这个
+     * surface 上根本没人求值，见文件头），包装器碰不到它。
+     *
+     * 映射照上游 `deprecated/oldNames.ts` 逐字：
+     *   `ctx.subscribe`    → `ctx.onChange`（这里就是 onPlaybackTime）
+     *   `ctx.currentTime`  → `ctx.playbackTime`（progress buttons / layers 用播放时间）
+     * 所以旧名指向同一批实现，不是第二套逻辑。 */
+    /** @deprecated Folium 1.5 名：`onChange`。 */
+    subscribe: (listener: (seconds: number) => void) => () => void;
+    /** @deprecated Folium 1.5 名：`playbackTime`。 */
+    currentTime: { get: () => number; on: (listener: (seconds: number) => void) => () => void };
 }
 
 /** 一条模组注册的进度按钮。 */
@@ -256,6 +278,10 @@ export const createModProgressContext = (sources: ModProgressContextSources): {
             sources.seekMs(Math.max(0, seconds_ * 1000));
         },
         getColors: () => readPlaybackColors(sources.root()),
+        /* 旧名指向同一批实现（不是第二套逻辑）：见接口上的 KDoc。这两个字段缺席时，Folium 1.5 写法的
+         * 模组 `mount` 会抛 `TypeError`，而失败只表现为「按钮不出现」。 */
+        subscribe: on,
+        currentTime: playbackTime,
     };
 
     return {

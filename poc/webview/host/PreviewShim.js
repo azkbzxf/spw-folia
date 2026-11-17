@@ -134,6 +134,75 @@
     for (var i = 0; i < sources.length; i++) dispatch(sources[i], name, data);
   }
 
+  // ---------------------------------------------------------------- issue #23: mod activator
+  //
+  // Why the big preview needs this (the bug: 「导入歌词样式的模组时，大的预览框没有适配」):
+  //
+  // This document is NOT Folia's player page — `Shim.js` returns immediately in any frame
+  // (`window.top !== window`), so nothing here ever imported a mod's `client.mjs`. Folia's renderer
+  // then asked its registry for `visualizerMode = "mod:<id>:<viz>"`, found nothing, and silently fell
+  // back to the built-in default: the shelf tile and the player showed the mod, the big preview kept
+  // drawing `classic`.
+  //
+  // The activator itself is the SAME file the player uses (`ModHostActivator.js`, staged next to this
+  // one as `_host/mod-host-activator.js` and loaded before us), so the `addOldClientNames` wrap and
+  // the `onRelease` collection cannot drift between the two windows.
+  //
+  // Three things this frame provides that the top document gets from the host instead:
+  //   - `getMods()`: the installed list arrives in the parent's `settings` message (the same tree the
+  //     settings island reads), NOT in a `mods` push — the preview never sees host stdin;
+  //   - `emit()`: this shim's own `deliver()`, so `modsReady` reaches Folia's page if it listens;
+  //   - `post()`: `postToParent`, so a broken third-party mod is diagnosable from the host log.
+  var modHost = null;
+  var installedMods = [];
+  try {
+    if (typeof window.installFoliaModHost === 'function') {
+      modHost = window.installFoliaModHost({
+        getMods: function () { return installedMods; },
+        emit: function (type, payload) { deliver(type, payload); },
+        post: function (msg) { postToParent('mods', msg); }
+      });
+      summary.modHost = true;
+    } else {
+      // The staged `_host/mod-host-activator.js` is missing or failed to parse: the preview then shows
+      // built-in styles only. Reported rather than silent — that is the regression this guards.
+      summary.modHost = false;
+      postToParent('error', { message: 'mod-host-activator.js missing: the preview cannot render mod styles' });
+    }
+  } catch (e) {
+    summary.modHost = false;
+    postToParent('error', { message: 'mod activator install failed: ' + String((e && e.message) || e) });
+  }
+
+  /**
+   * Extracts the installed-mod list out of a settings tree and re-activates when it changed.
+   *
+   * The parent forwards the SAME tree the player page gets, so `mods` sits at the top level (and, for
+   * tolerance, one level down under `settings`). A payload without the key must NOT be read as "no
+   * mods": that would tear down every activation on a settings echo that happens to omit it.
+   */
+  function applyModsFromSettings(payload) {
+    if (!modHost || !payload || typeof payload !== 'object') return;
+    var source = payload;
+    var candidates = [source.mods];
+    if (source.settings && typeof source.settings === 'object') candidates.push(source.settings.mods);
+    var list = null;
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] === undefined) continue;
+      list = Object.prototype.toString.call(candidates[i]) === '[object Array]' ? candidates[i] : [];
+      break;
+    }
+    if (list === null) return;                 // key absent: keep whatever is active
+    var signature;
+    try { signature = JSON.stringify(list); } catch (e) { signature = String(list.length); }
+    if (signature === lastModsSignature) return; // an unchanged tree must not re-activate everything
+    lastModsSignature = signature;
+    installedMods = list;
+    summary.modCount = list.length;
+    modHost.reconcile(list);
+  }
+  var lastModsSignature = null;
+
   function replayTo(entry) {
     if (!Object.prototype.hasOwnProperty.call(lastEvents, entry.name)) return;
     var source = entry.source;
@@ -400,7 +469,14 @@
     var data = event && event.data;
     if (!data || typeof data !== 'object' || data.__spwFoliaPreview !== 1) return;
     var payload = data.payload !== undefined ? data.payload : data.value;
-    if (data.kind === 'config') applyConfig(payload);
+    if (data.kind === 'config') {
+      applyConfig(payload);
+      // The config the parent forwards is the one it published, and the settings tree rides on it
+      // (`mods` is a top-level member there too). Reading mods from the config keeps the iframe in
+      // step with the player even before any separate `settings` message arrives.
+      applyModsFromSettings(payload);
+    }
+    else if (data.kind === 'settings') applyModsFromSettings(payload);
     else if (data.kind === 'live') applyLive();
     else if (data.kind === 'state') applyLiveState(payload);
     else if (data.kind === 'audio') applyLiveAudio(payload);
